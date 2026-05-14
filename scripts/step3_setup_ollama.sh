@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# scripts/setup_ollama.sh
+# scripts/step3_setup_ollama.sh
 # ----------------------------------------------------------------------------
 # LinkMind 의 Ollama 서비스를 처음 띄울 때 사용하는 셋업 스크립트.
 #
@@ -13,9 +13,9 @@
 #   5) 간단한 프롬프트로 동작 검증
 #
 # 사용:
-#   bash scripts/setup_ollama.sh                  # OLLAMA_MODEL 기본값 사용
-#   bash scripts/setup_ollama.sh qwen2.5:14b      # 모델 직접 지정
-#   bash scripts/setup_ollama.sh --no-pull        # 컨테이너만 띄우고 모델 pull 안 함
+#   bash scripts/step3_setup_ollama.sh                  # OLLAMA_MODEL 기본값 사용
+#   bash scripts/step3_setup_ollama.sh qwen2.5:14b      # 모델 직접 지정
+#   bash scripts/step3_setup_ollama.sh --no-pull        # 컨테이너만 띄우고 모델 pull 안 함
 #
 # 이미 떠 있는 컨테이너에 추가 모델만 받고 싶으면:
 #   bash scripts/ollama_pull.sh qwen2.5:14b
@@ -158,6 +158,8 @@ echo "현재 컨테이너에 받아져 있는 모델:"
 docker exec "${CONTAINER_NAME}" ollama list 2>/dev/null | sed 's/^/    /'
 echo ""
 echo "다음 단계:"
+echo "  • Ollama 검증:              bash scripts/step3_check_ollama.sh"
+echo "  • Qdrant 컬렉션 생성:       python scripts/step4_init_qdrant.py"
 echo "  • LinkMind 백엔드 띄우기:  uvicorn backend.main:app --reload"
 echo "  • 다른 모델 추가 받기:     bash scripts/ollama_pull.sh <model>"
 echo "  • Ollama 채팅 UI:           http://localhost:3000  (OpenWebUI)"

@@ -41,7 +41,7 @@ Postgres   Qdrant    Storage             OpenClaw extension 이
 ### 0. 사전 요구사항
 
 - Ubuntu (또는 WSL2), Docker 24+, NVIDIA Container Toolkit (RTX 4090 권장)
-- Python 3.11+
+- Python 3.11+ (검증 환경: 3.13.12 + torch 2.6.0+cu124 / NVIDIA driver 580.x)
 - `git`, `make` (optional)
 
 ### 1. 저장소 clone & 환경 파일
@@ -54,39 +54,61 @@ cp env/dev.env.example env/dev.env
 $EDITOR env/dev.env   # POSTGRES_PASSWORD, OPENAI_API_KEY 등 채우기
 ```
 
-### 2. 인프라 컨테이너 띄우기
+셋업은 단계별 `stepN_setup_*` / `stepN_check_*` 쌍으로 구성된다. 각 step 의 setup 직후 같은 번호의 check 를 돌려 sanity 확인 후 다음 step 으로 넘어가는 흐름.
 
-Postgres / Qdrant / Ollama / OpenWebUI 를 한 번에:
+### 2. Python 베이스 환경 (step1)
 
-```bash
-docker compose --env-file env/dev.env -f compose/docker-compose.dev.yml up -d
-```
-
-상태 확인:
+`scripts/step1_install_base_env.sh` 가 venv 생성 → torch CUDA wheel → requirements 를 한 번에 처리한다. torch 를 **먼저** 받아서 PyPI 의 CPU torch 를 받았다가 폐기하는 낭비를 피한다.
 
 ```bash
-docker compose -f compose/docker-compose.dev.yml ps
+bash scripts/step1_install_base_env.sh   # 기본: cu124 + requirements
+source .venv/bin/activate                # 현재 셸에 활성화
+bash scripts/step1_check_base_env.sh     # 설치 결과 sanity check (Python/torch/CUDA/패키지)
 ```
 
-### 3. Python 가상환경 + 의존성
+옵션:
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install --upgrade pip
-pip install -r requirements.txt
-
-# torch 는 CUDA 빌드를 따로:
-pip install --index-url https://download.pytorch.org/whl/cu124 torch
+bash scripts/step1_install_base_env.sh --recreate          # 기존 .venv 삭제 후 재설치
+bash scripts/step1_install_base_env.sh --cpu               # GPU 없는 환경
+bash scripts/step1_install_base_env.sh --cuda-version=126  # cu126 wheel 사용
 ```
 
-### 4. Qdrant 컬렉션 사전 생성 (옵션)
+### 3. 인프라 컨테이너 (step2)
+
+Postgres / Qdrant / Ollama / OpenWebUI 를 한 번에 띄우고 healthcheck 통과까지 대기:
 
 ```bash
-python scripts/init_qdrant.py
+bash scripts/step2_setup_infra.sh        # docker compose up -d + healthy 대기
+bash scripts/step2_check_infra.sh        # 4개 서비스 연결성 + 포트 검증
 ```
 
-### 5. FastAPI 백엔드 띄우기
+옵션:
+
+```bash
+bash scripts/step2_setup_infra.sh --phase2     # + TEI / MinIO
+bash scripts/step2_setup_infra.sh --recreate   # 컨테이너 강제 재생성
+```
+
+### 4. Ollama 모델 (step3)
+
+env/dev.env 의 `OLLAMA_MODEL` 을 컨테이너로 pull + 동작 검증:
+
+```bash
+bash scripts/step3_setup_ollama.sh       # 기본 모델 pull
+bash scripts/step3_check_ollama.sh       # 컨테이너/API/모델 존재/generate dry run
+```
+
+### 5. Qdrant 컬렉션 (step4)
+
+bge-m3 모델 첫 로드(약 1.4GB) 후 컬렉션 생성:
+
+```bash
+python scripts/step4_init_qdrant.py      # 컬렉션 생성
+bash scripts/step4_check_qdrant.sh       # 컬렉션 존재 + vector dim 일치 확인
+```
+
+### 6. FastAPI 백엔드 띄우기
 
 ```bash
 uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
@@ -98,14 +120,14 @@ uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
 curl http://localhost:8000/health | jq
 ```
 
-### 6. Streamlit UI
+### 7. Streamlit UI
 
 ```bash
 streamlit run frontend/app.py
 # 기본: http://localhost:8501
 ```
 
-### 7. 첫 자료 수집 (URL 한 건)
+### 8. 첫 자료 수집 (URL 한 건)
 
 ```bash
 python -m backend.ingest.url https://arxiv.org/abs/2401.01234
@@ -113,7 +135,7 @@ python -m backend.ingest.url https://arxiv.org/abs/2401.01234
 
 또는 Streamlit `➕ 자료 추가` 탭에서 텍스트 직접 붙여넣기.
 
-### 8. (선택) OpenClaw 설치
+### 9. (선택) OpenClaw 설치
 
 OpenClaw 를 frontend agent 로 쓰면 Telegram/Slack 입력을 OpenClaw 가 받아서 LinkMind 로 forward 한다.
 
@@ -125,7 +147,7 @@ bash scripts/install_openclaw.sh              # 기본: 공식 install.sh (Node 
 
 자세한 통합은 [docs/openclaw_integration.md](docs/openclaw_integration.md) 참고.
 
-### 9. (선택) Slack 데이터 import
+### 10. (선택) Slack 데이터 import
 
 비공개 채널 / DM 까지 받고 싶다면 slackdump 사용. 토큰 / 쿠키 추출 + export 절차는 [docs/slack_setup.md](docs/slack_setup.md) 참고.
 
@@ -151,7 +173,7 @@ LinkMind/
 ├─ compose/                 # docker-compose.dev.yml (+ prod, phase2 profile)
 ├─ docker/                  # 서비스별 Dockerfile / 설정 (필요 시)
 ├─ env/                     # dev.env (gitignored) / dev.env.example
-├─ scripts/                 # init_qdrant.py, install_openclaw.sh, ...
+├─ scripts/                 # stepN_setup_*.sh / stepN_check_*.sh + install_openclaw.sh, ollama_pull.sh, ...
 ├─ docs/                    # openclaw_integration.md, training_data_design.md
 ├─ archive/                 # raw 자료 저장 (gitignored)
 ├─ volumes/                 # 컨테이너 영속 볼륨 (gitignored)

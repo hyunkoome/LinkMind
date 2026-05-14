@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# scripts/install_base_env.sh
+# scripts/step1_install_base_env.sh
 # ----------------------------------------------------------------------------
 # LinkMind 의 Python 베이스 환경(venv + torch + requirements) 을 한 번에 셋업.
 #
@@ -11,10 +11,10 @@
 #   - 기본 CUDA 버전: cu124 (RTX 4090 권장)
 #
 # 사용:
-#   bash scripts/install_base_env.sh                    # 기본: cu124 + requirements
-#   bash scripts/install_base_env.sh --recreate         # 기존 .venv 삭제 후 처음부터
-#   bash scripts/install_base_env.sh --cpu              # CPU torch (GPU 없는 환경)
-#   bash scripts/install_base_env.sh --cuda-version=126 # cu126 wheel 사용
+#   bash scripts/step1_install_base_env.sh                    # 기본: cu124 + requirements
+#   bash scripts/step1_install_base_env.sh --recreate         # 기존 .venv 삭제 후 처음부터
+#   bash scripts/step1_install_base_env.sh --cpu              # CPU torch (GPU 없는 환경)
+#   bash scripts/step1_install_base_env.sh --cuda-version=126 # cu126 wheel 사용
 #
 # 종료 후 활성화 (이 스크립트는 부모 쉘의 환경을 못 바꿈):
 #   source .venv/bin/activate
@@ -177,8 +177,9 @@ echo "🎉 베이스 환경 셋업 완료"
 echo ""
 echo "다음 단계:"
 echo "  source ${VENV_DIR}/bin/activate                # 현재 셸에 활성화"
-echo "  docker compose --env-file env/dev.env -f compose/docker-compose.dev.yml up -d"
-echo "  bash scripts/setup_ollama.sh                   # Ollama 컨테이너 + 모델 pull"
-echo "  python scripts/init_qdrant.py                  # bge-m3 1.4GB 첫 다운로드"
+echo "  bash scripts/step1_check_base_env.sh           # 설치 결과 sanity check"
+echo "  bash scripts/step2_setup_infra.sh              # docker compose 인프라"
+echo "  bash scripts/step3_setup_ollama.sh             # Ollama 컨테이너 + 모델 pull"
+echo "  python scripts/step4_init_qdrant.py            # bge-m3 1.4GB 첫 다운로드"
 echo "  uvicorn backend.main:app --reload              # 백엔드"
 echo "  streamlit run frontend/app.py                  # 프론트"

@@ -29,7 +29,7 @@ MODEL="$1"
 
 if ! docker ps --format '{{.Names}}' | grep -qx "${CONTAINER_NAME}"; then
     echo "❌ ${CONTAINER_NAME} 컨테이너가 실행 중이 아닙니다."
-    echo "   먼저: bash scripts/setup_ollama.sh"
+    echo "   먼저: bash scripts/step3_setup_ollama.sh"
     exit 1
 fi
 

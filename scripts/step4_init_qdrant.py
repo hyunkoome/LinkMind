@@ -5,7 +5,10 @@ Qdrant 컬렉션 사전 생성 스크립트.
 개발 환경에서 미리 생성해두면 디버깅이 편하다.
 
 실행:
-    python scripts/init_qdrant.py
+    python scripts/step4_init_qdrant.py
+
+검증:
+    bash scripts/step4_check_qdrant.sh
 """
 
 from __future__ import annotations
