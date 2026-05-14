@@ -1,0 +1,139 @@
+# ============================================================================
+# LinkMind .gitignore
+# ============================================================================
+
+# ---------- Secrets / Environment ----------
+# .env 파일은 절대 커밋 금지. env.example만 커밋한다.
+.env
+.env.*
+!.env.example
+!env/*.env.example
+env/dev.env
+env/prod.env
+env/*.local.env
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+downloads/
+eggs/
+.eggs/
+*.egg-info/
+*.egg
+MANIFEST
+.installed.cfg
+pip-log.txt
+pip-delete-this-directory.txt
+
+# 가상환경
+venv/
+.venv/
+env/venv/
+ENV/
+.python-version
+
+# Test / Coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+.hypothesis/
+
+# Type checker / lint cache
+.mypy_cache/
+.dmypy.json
+.pyre/
+.pytype/
+.ruff_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# ---------- Node / Frontend (향후 Next.js 대비) ----------
+node_modules/
+.next/
+out/
+.npm/
+.pnpm-store/
+.yarn/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ---------- Streamlit ----------
+.streamlit/secrets.toml
+
+# ---------- IDE / Editor ----------
+.vscode/
+!.vscode/settings.json.example
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ---------- Docker / Volumes (데이터 영속성, 절대 커밋 금지) ----------
+volumes/
+!volumes/.gitkeep
+volumes/postgres/
+volumes/qdrant/
+volumes/ollama/
+volumes/models/
+volumes/archive/
+volumes/openwebui/
+volumes/openclaw/
+volumes/redis/
+volumes/minio/
+
+# ---------- Archive / Local data ----------
+# Slack export 원본, 첨부파일, PDF, 이미지 등 대용량 로컬 자료
+archive/
+!archive/.gitkeep
+data/
+local_data/
+
+# 다운로드 받은 모델 파일
+models/
+*.bin
+*.safetensors
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.gguf
+
+# ---------- Logs ----------
+logs/
+*.log
+log/
+
+# ---------- Temp / OS ----------
+tmp/
+temp/
+*.tmp
+*.bak
+*.orig
+
+# ---------- External / Vendor (참조용 외부 저장소 — LinkMind 저장소에 커밋 금지) ----------
+# 예: external/openclaw/ 는 OpenClaw 코드를 읽기/참고용으로 clone한 것.
+# 만약 일부 코드를 vendor하려면 backend/vendor/ 하위로 명시적으로 copy하고
+# LICENSE/NOTICE 파일을 동반시킬 것.
+external/
+!external/.gitkeep
+
+# ---------- Misc ----------
+.cache/
+.scratch/
+scratch/

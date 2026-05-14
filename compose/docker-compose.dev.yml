@@ -1,0 +1,194 @@
+# ============================================================================
+# LinkMind — Docker Compose (개발 환경)
+# ----------------------------------------------------------------------------
+# 사용:
+#   cd compose
+#   docker compose -f docker-compose.dev.yml --env-file ../env/dev.env up -d
+#
+# Phase 2 서비스(tei, minio)는 profile로 게이트됨:
+#   docker compose -f docker-compose.dev.yml --profile phase2 up -d
+#
+# 데이터 영속성: ../volumes/ 하위에 bind mount. 컨테이너 삭제와 무관하게 유지.
+# ============================================================================
+
+# GPU 사용 서비스(ollama, tei)는 nvidia-container-toolkit 필요.
+# 호스트 확인: nvidia-smi && docker run --rm --gpus all nvidia/cuda:12.4.0-base nvidia-smi
+
+services:
+
+  # ─────────────────────────────────────────────────────────────
+  # PostgreSQL — 메인 RDB (raw_content, provenance, metadata 저장)
+  # ─────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: linkmind-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-linkmind}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      POSTGRES_DB: ${POSTGRES_DB:-linkmind}
+    ports:
+      - "5432:5432"
+    volumes:
+      - ../volumes/postgres:/var/lib/postgresql/data
+      # 초기 스키마 자동 적용
+      - ../backend/db/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-linkmind} -d ${POSTGRES_DB:-linkmind}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - linkmind
+
+  # ─────────────────────────────────────────────────────────────
+  # Qdrant — 벡터 검색
+  # ─────────────────────────────────────────────────────────────
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: linkmind-qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"       # REST API
+      - "6334:6334"       # gRPC
+    volumes:
+      - ../volumes/qdrant:/qdrant/storage
+    healthcheck:
+      # Qdrant 공식 이미지에는 wget/curl이 없을 수 있어 단순 TCP 체크 대신
+      # 헬스 엔드포인트를 bash builtin으로 호출.
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - linkmind
+
+  # ─────────────────────────────────────────────────────────────
+  # Ollama — 로컬 LLM 런타임 (GPU)
+  # ─────────────────────────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: linkmind-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ../volumes/ollama:/root/.ollama
+      - ../volumes/models:/models
+    environment:
+      OLLAMA_HOST: 0.0.0.0
+      OLLAMA_KEEP_ALIVE: "24h"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/11434' || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - linkmind
+
+  # ─────────────────────────────────────────────────────────────
+  # OpenWebUI — Ollama용 웹 UI (선택, 디버깅/모델 관리에 유용)
+  # ─────────────────────────────────────────────────────────────
+  openwebui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: linkmind-openwebui
+    restart: unless-stopped
+    ports:
+      - "3000:8080"
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11434
+      WEBUI_AUTH: "false"     # 로컬 단일 사용자 가정. 향후 외부 노출 시 활성화.
+    volumes:
+      - ../volumes/openwebui:/app/backend/data
+    depends_on:
+      ollama:
+        condition: service_started
+    networks:
+      - linkmind
+
+  # ═════════════════════════════════════════════════════════════
+  # Phase 2 services (profile: phase2)
+  # ═════════════════════════════════════════════════════════════
+
+  # ─────────────────────────────────────────────────────────────
+  # TEI — Text Embeddings Inference (HuggingFace)
+  # Phase 2: sentence-transformers를 떼고 전용 임베딩 서버로 스왑.
+  # ─────────────────────────────────────────────────────────────
+  tei:
+    image: ghcr.io/huggingface/text-embeddings-inference:1.5
+    container_name: linkmind-tei
+    restart: unless-stopped
+    profiles: ["phase2"]
+    ports:
+      - "8080:80"
+    volumes:
+      - ../volumes/models:/data
+    command:
+      - "--model-id=${EMBEDDING_MODEL:-BAAI/bge-m3}"
+      - "--max-batch-tokens=16384"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    networks:
+      - linkmind
+
+  # ─────────────────────────────────────────────────────────────
+  # MinIO — S3 호환 object storage (Phase 2)
+  # 학습 데이터셋 export, 이미지/PDF 대용량 저장용.
+  # ─────────────────────────────────────────────────────────────
+  minio:
+    image: minio/minio:latest
+    container_name: linkmind-minio
+    restart: unless-stopped
+    profiles: ["phase2"]
+    ports:
+      - "9000:9000"       # S3 API
+      - "9001:9001"       # Console
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+    volumes:
+      - ../volumes/minio:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    networks:
+      - linkmind
+
+  # ─────────────────────────────────────────────────────────────
+  # Redis (Phase 2) — 큐/캐시
+  # ─────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: linkmind-redis
+    restart: unless-stopped
+    profiles: ["phase2"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - ../volumes/redis:/data
+    command: redis-server --appendonly yes
+    networks:
+      - linkmind
+
+networks:
+  linkmind:
+    name: linkmind
+    driver: bridge
