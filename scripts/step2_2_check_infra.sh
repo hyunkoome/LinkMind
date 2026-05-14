@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ============================================================================
-# scripts/step2_check_infra.sh
+# scripts/step2_2_check_infra.sh
 # ----------------------------------------------------------------------------
-# step2_setup_infra.sh 로 띄운 인프라 컨테이너들이 정상 동작하는지 검증.
+# step2_2_setup_infra.sh 로 띄운 인프라 컨테이너들이 정상 동작하는지 검증.
 #
 # 점검 항목:
 #   1. docker / docker compose 가용
@@ -13,7 +13,7 @@
 #   6. OpenWebUI 컨테이너 running (healthcheck 미정의 → 기동만 확인)
 #
 # 사용:
-#   bash scripts/step2_check_infra.sh
+#   bash scripts/step2_2_check_infra.sh
 #
 # 종료 코드:
 #   0  모든 필수 체크 통과
@@ -109,7 +109,7 @@ echo ""
 echo "[3] Postgres"
 PG_CID="$(inspect_container postgres linkmind-postgres)"
 if [ -z "$PG_CID" ]; then
-    fail "linkmind-postgres 컨테이너 없음 — 'bash scripts/step2_setup_infra.sh' 먼저"
+    fail "linkmind-postgres 컨테이너 없음 — 'bash scripts/step2_2_setup_infra.sh' 먼저"
 else
     PG_HEALTH="$(docker inspect -f '{{.State.Health.Status}}' "$PG_CID" 2>/dev/null || echo unknown)"
     PG_RUN="$(docker inspect -f '{{.State.Running}}' "$PG_CID" 2>/dev/null || echo unknown)"
