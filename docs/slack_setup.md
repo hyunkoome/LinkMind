@@ -127,19 +127,27 @@ external/slack/d_cookie      ← Application 탭 d 쿠키 값 한 줄
 
 ---
 
-## 5. 공식 Slack Export 의 xoxe 파일 토큰
+## 5. 공식 Slack Export 의 xoxe 파일 토큰 (대부분의 경우 불필요)
 
 이건 위와 별개. **공식 Slack Export 페이지** 에서 export 를 만들면 페이지 하단에 "내보내기 파일 다운로드 토큰" 으로 `xoxe-...` 한 줄이 표시된다.
 
-- 용도: export 안의 messages.json 에 들어있는 **비공개 파일 URL** 을 다운로드할 때 `?t=<xoxe>` 로 붙여야 함
+- 용도: **공식 export ZIP 안의** messages.json 에 들어있는 비공개 파일 URL 을 다운로드할 때 `?t=<xoxe>` 로 붙임
 - 유효 기간: 사용자가 "토큰 철회" 누르기 전까지
-- LinkMind 환경변수:
-  ```bash
-  SLACK_EXPORT_FILE_TOKEN=xoxe-...
-  ```
 
-> Phase 2 의 `backend/ingest/slack/export_parser.py` 가 첨부 다운로드 시 이 값을 사용 (계획).
-> 모든 첨부 ingest 가 끝나면 Slack 페이지에서 토큰 철회로 보안 ↑.
+### 우리 케이스에선 사실상 불필요
+
+xoxc + d 쿠키 (§2-3) 만 있으면 Slack Web API 의 모든 호출이 가능하고, 첨부 파일 (`url_private_download`) 도 그 인증으로 다운로드된다. **slackdump 의 `export -files=true` 가 이미 xoxc+cookie 로 첨부를 받아 디렉토리에 넣어준다.** xoxe 는 다음 시나리오에서만 의미:
+
+- 누가 공식 export ZIP **만** 넘겨주고 xoxc/쿠키는 안 줄 때
+- xoxc 가 만료됐는데 공식 export 토큰만 살아있을 때
+
+개인 워크스페이스 single-user 사용에서는 **`SLACK_EXPORT_FILE_TOKEN=` 비워두면 됨**.
+
+> Slack UI 가 `xoxe-...-...-...-...` 처럼 토큰을 ellipsis 로 잘라 표시할 수 있어서, 단순 복사로는 진짜 값이 안 얻어진다. 정 필요하면 DevTools Console 에서:
+> ```javascript
+> [...document.querySelectorAll('input, code, span, td')].map(e => e.value || e.innerText).filter(v => /^xoxe-/.test(v))
+> ```
+> 로 전체 값 추출.
 
 ---
 
