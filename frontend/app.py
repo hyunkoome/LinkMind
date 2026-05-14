@@ -38,7 +38,12 @@ with tab_search:
                 st.markdown(f"**[{hit['score']:.3f}] {hit.get('title') or '(no title)'}**")
                 if hit.get("source_url"):
                     st.markdown(f"🔗 {hit['source_url']}")
-                if hit.get("snippet"):
+                # summary (AI 요약 한국어) 가 있으면 우선 표시 — 잡음 적고 보기 좋음.
+                # 없으면 snippet (raw chunk 텍스트) 로 fallback.
+                if hit.get("summary"):
+                    st.markdown(hit["summary"])
+                elif hit.get("snippet"):
+                    st.caption("(요약 미생성 — raw 본문 일부)")
                     st.write(hit["snippet"])
                 st.caption(f"source: `{hit['source_type']}` · tags: {hit.get('tags') or '-'}")
 

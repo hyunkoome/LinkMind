@@ -28,7 +28,12 @@ class LocalEmbeddingProvider(EmbeddingProvider):
         logger.info("임베딩 모델 로드 시작: %s (device=%s)", model_name, device)
         self._model = SentenceTransformer(model_name, device=device)
         # 차원 검증 — 설정과 실제 모델이 다르면 즉시 알 수 있도록.
-        actual_dim = self._model.get_sentence_embedding_dimension()
+        # sentence-transformers v5+ 에서 get_sentence_embedding_dimension 가
+        # get_embedding_dimension 로 renamed. 새 이름 우선, 옛 버전 fallback.
+        if hasattr(self._model, "get_embedding_dimension"):
+            actual_dim = self._model.get_embedding_dimension()
+        else:
+            actual_dim = self._model.get_sentence_embedding_dimension()
         if actual_dim != dim:
             logger.warning(
                 "EMBEDDING_DIM=%d 이지만 모델 실제 차원은 %d. 설정을 맞추세요.",

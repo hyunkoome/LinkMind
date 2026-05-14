@@ -58,6 +58,10 @@ class Settings(BaseSettings):
     embedding_model: str = Field(default="BAAI/bge-m3")
     embedding_dim: int = Field(default=1024)
     tei_url: str = Field(default="http://tei:80")
+    # 모델 캐시 받힌 후 True 로 두면 HF Hub metadata HEAD 요청 + 토큰 경고 모두 차단.
+    # get_settings() 가 이 값을 보고 process env (HF_HUB_OFFLINE, TRANSFORMERS_OFFLINE)
+    # 를 setdefault 로 export 해야 sentence-transformers/huggingface_hub 가 효과 봄.
+    hf_hub_offline: bool = Field(default=False)
 
     # ─── LLM Providers ────────────────────────────────────────────
     default_llm_provider: Literal["openai", "claude", "ollama"] = Field(default="openai")
@@ -73,6 +77,7 @@ class Settings(BaseSettings):
     openrouter_model: str = Field(default="")
 
     ollama_base_url: str = Field(default="http://ollama:11434")
+    ollama_base_url_local: str = Field(default="http://localhost:11434")
     ollama_model: str = Field(default="llama3.2:latest")
 
     # ─── OpenClaw (LinkMind는 client로서 호출만; 통합 시점에 사용) ──
@@ -119,6 +124,15 @@ class Settings(BaseSettings):
         return self.qdrant_url_local
 
     @property
+    def effective_ollama_base_url(self) -> str:
+        """LinkMind backend 가 호스트에서 직접 돌면 localhost:11434, docker compose
+        안의 backend 컨테이너에서 돌면 docker 서비스명(ollama:11434)."""
+        import os
+        if os.getenv("IN_DOCKER") == "1":
+            return self.ollama_base_url
+        return self.ollama_base_url_local
+
+    @property
     def storage_local_abs_path(self) -> Path:
         """STORAGE_LOCAL_PATH가 상대경로면 PROJECT_ROOT 기준으로 절대화."""
         p = Path(self.storage_local_path)
@@ -127,5 +141,16 @@ class Settings(BaseSettings):
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    """프로세스 전역에서 하나만 유지되는 settings 싱글톤."""
-    return Settings()  # type: ignore[call-arg]
+    """프로세스 전역에서 하나만 유지되는 settings 싱글톤.
+
+    settings 로드 시 부수효과로 HF_HUB_OFFLINE / TRANSFORMERS_OFFLINE 을 process
+    env 에 setdefault export. 이렇게 안 하면 env/dev.env 의 HF_HUB_OFFLINE 값은
+    pydantic Settings 객체에만 들어오고 sentence-transformers/huggingface_hub 가
+    직접 읽는 환경변수로는 전달 안 됨 → 매 startup 마다 Hub 호출 + 토큰 경고.
+    """
+    s = Settings()  # type: ignore[call-arg]
+    if s.hf_hub_offline:
+        import os
+        os.environ.setdefault("HF_HUB_OFFLINE", "1")
+        os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+    return s

@@ -25,14 +25,27 @@ from backend.db.repository import (
     find_item_by_hash,
     insert_chunks,
     insert_item,
+    update_item_analysis,
 )
 from backend.embedding.factory import get_embedding_provider
 from backend.embedding.qdrant_store import ensure_collection, upsert_chunks
+from backend.llm.base import ChatMessage
+from backend.llm.factory import get_llm_provider
 from backend.utils.chunking import chunk_text
 from backend.utils.hashing import sha256_text
 from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
 
 logger = logging.getLogger(__name__)
+
+# 요약 생성 시 LLM 에 보낼 raw 본문의 최대 길이. qwen2.5:7b 컨텍스트는 32K 지만
+# 안전 마진 + 빠른 응답 위해 앞부분만. 페이지 본문 앞쪽이 보통 가장 중요 (abstract).
+_SUMMARY_INPUT_LIMIT = 8000
+_SUMMARY_PROMPT_VERSION = "v1"
+_SUMMARY_SYSTEM_PROMPT = (
+    "You are a concise summarizer for technical research content. "
+    "Summarize the input in 3-5 bullet points in Korean. "
+    "Preserve technical terms (English) when appropriate."
+)
 
 
 async def fetch_html(url: str, timeout: float = 30.0) -> str:
@@ -114,15 +127,57 @@ async def ingest_url(url: str, *, analyze_now: bool = True) -> dict[str, Any]:
         await session.commit()
 
         chunks_indexed = 0
+        summary_text: str | None = None
         if analyze_now:
             chunks_indexed = await _embed_and_index(session, item_id=item_id, text=text_body)
+            # 요약은 옵션 — LLM 가 다운/미설정이어도 raw + embedding 은 이미 저장됨.
+            summary_text = await _generate_and_save_summary(
+                session, item_id=item_id, text=text_body,
+            )
 
         return {
             "item_id": str(item_id),
             "created": True,
             "chunks_indexed": chunks_indexed,
+            "summary_generated": summary_text is not None,
             "title": title,
         }
+
+
+async def _generate_and_save_summary(
+    session: AsyncSession, *, item_id: UUID, text: str,
+) -> str | None:
+    """LLM 으로 한국어 요약 생성 → items.summary 에 저장.
+
+    실패해도 ingest 자체는 계속 — raw_content / embedding 은 영향 없음.
+    LLM 미설정/다운 시 None 반환하고 warning 만 로깅.
+    """
+    try:
+        llm = get_llm_provider()
+        resp = await llm.chat([
+            ChatMessage(role="system", content=_SUMMARY_SYSTEM_PROMPT),
+            ChatMessage(role="user", content=text[:_SUMMARY_INPUT_LIMIT]),
+        ])
+        # summary_model 은 "provider/model" 로 합쳐서 한 컬럼에 — 재학습/재요약 시 어느
+        # 시점 어떤 모델로 생성했는지 추적 가능.
+        await update_item_analysis(
+            session,
+            item_id=item_id,
+            summary=resp.text,
+            summary_model=f"{resp.provider}/{resp.model}",
+            summary_prompt_version=_SUMMARY_PROMPT_VERSION,
+            categories=None,
+            tags=None,
+        )
+        await session.commit()
+        logger.info(
+            "요약 생성 완료: item=%s, model=%s/%s, len=%d",
+            item_id, resp.provider, resp.model, len(resp.text),
+        )
+        return resp.text
+    except Exception as e:  # noqa: BLE001
+        logger.warning("요약 생성 실패 (ingest 는 계속): %s", e)
+        return None
 
 
 async def _embed_and_index(
@@ -157,25 +212,5 @@ async def _embed_and_index(
         payloads=payloads,
     )
     return len(chunks)
-
-
-# ----------------------------------------------------------------------------
-# CLI 진입점 — `python -m backend.ingest.url <url> [<url> ...]`
-# ----------------------------------------------------------------------------
-if __name__ == "__main__":
-    import asyncio
-    import sys
-
-    if len(sys.argv) < 2:
-        print("usage: python -m backend.ingest.url <url> [<url> ...]")
-        raise SystemExit(2)
-
-    async def _run() -> None:
-        for u in sys.argv[1:]:
-            try:
-                result = await ingest_url(u)
-                print(f"OK  {u}  →  {result}")
-            except Exception as e:                  # noqa: BLE001
-                print(f"ERR {u}  →  {e}")
-
-    asyncio.run(_run())
+# CLI 진입점은 backend/ingest/url/__main__.py 에 분리 (패키지를 `-m` 으로 실행 시
+# Python 이 __main__.py 를 찾는 표준 동작).

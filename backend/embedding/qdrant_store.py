@@ -105,10 +105,13 @@ async def search_chunks(
         ))
     query_filter = qmodels.Filter(must=must) if must else None
 
-    return await client.search(
+    # qdrant-client v1.12+ 부터 .search() 가 제거됨 → .query_points() 로 대체.
+    # 시그니처 차이: query_vector= → query=, 반환은 QueryResponse 라 .points 추출.
+    result = await client.query_points(
         collection_name=settings.qdrant_collection,
-        query_vector=query_vector,
+        query=query_vector,
         limit=top_k,
         query_filter=query_filter,
         with_payload=True,
     )
+    return result.points

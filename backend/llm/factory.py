@@ -33,7 +33,7 @@ def get_llm_provider(name: str | None = None) -> LLMProvider:
         )
     if chosen == "ollama":
         return OllamaProvider(
-            base_url=settings.ollama_base_url,
+            base_url=settings.effective_ollama_base_url,
             default_model=settings.ollama_model,
         )
     raise ValueError(f"알 수 없는 LLM provider: {chosen}")
