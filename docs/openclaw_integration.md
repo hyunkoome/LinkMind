@@ -68,30 +68,25 @@ OpenClaw 는 agent (client) 이고, LinkMind 의 `LLMProvider` 추상화 (OpenAI
 
 ## 3. 설치 & 설정
 
-### 3.1. 호스트 설치 (런타임: Node 22.16+ 또는 24+)
+### 3.1. 호스트 설치
+
+LinkMind 의 개인 사용 시나리오 (단일 머신, OpenClaw 수정 의도 없음) 에서는 **공식 `install.sh` 가 가장 마찰이 적다** — Node.js / pnpm 등 의존성을 자동으로 bootstrap 한다.
 
 ```bash
-bash scripts/install_openclaw.sh        # 권장 — Node/pkg 검사 후 자동 설치
+bash scripts/install_openclaw.sh           # 기본 — curl install.sh | bash (권장)
+bash scripts/install_openclaw.sh --npm     # npm/pnpm 전역 설치 (팀/CI/재현성 필요 시)
+bash scripts/install_openclaw.sh --source  # external/openclaw/ 에서 dev 빌드 (OpenClaw 자체 수정)
 ```
 
-내부적으로 OpenClaw README 의 권장 방식인 npm/pnpm 전역 설치를 사용한다:
+세 방식 비교:
 
-```bash
-# 또는 수동:
-pnpm add -g openclaw@latest             # pnpm 권장
-# 또는:
-npm install -g openclaw@latest
-```
+| 모드 | 동작 | 적합한 경우 |
+|---|---|---|
+| 기본 (install.sh) | `curl -fsSL https://openclaw.ai/install.sh \| bash`. Node 미설치 시 자동 bootstrap. | 개인 사용, set-and-forget |
+| `--npm` | Node 22.16+ 또는 24+ 필요. `npm i -g openclaw@latest` 또는 `pnpm add -g openclaw@latest`. | 팀, CI, 버전 핀 필요 |
+| `--source` | `cd external/openclaw && pnpm install && pnpm build`. cloned repo 사용. | OpenClaw 자체 수정/패치 |
 
-OpenClaw 자체를 수정/패치하고 싶다면 cloned source 에서 dev 빌드:
-
-```bash
-bash scripts/install_openclaw.sh --source
-# 내부적으로:
-#   cd external/openclaw && pnpm install && pnpm build
-```
-
-Docker 아님 — OpenClaw 는 네이티브 Node CLI + daemon 구조.
+Docker 아님 — OpenClaw 는 네이티브 Node CLI + Gateway daemon 구조.
 
 ### 3.2. Onboarding
 

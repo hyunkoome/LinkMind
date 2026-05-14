@@ -118,7 +118,9 @@ python -m backend.ingest.url https://arxiv.org/abs/2401.01234
 OpenClaw 를 frontend agent 로 쓰면 Telegram/Slack 입력을 OpenClaw 가 받아서 LinkMind 로 forward 한다.
 
 ```bash
-bash scripts/install_openclaw.sh
+bash scripts/install_openclaw.sh              # 기본: 공식 install.sh (Node 자동 bootstrap)
+# bash scripts/install_openclaw.sh --npm      # 팀/CI 환경
+# bash scripts/install_openclaw.sh --source   # OpenClaw 자체 수정용
 ```
 
 자세한 통합은 [docs/openclaw_integration.md](docs/openclaw_integration.md) 참고.
