@@ -194,7 +194,7 @@ echo "────────────────────────�
 
 if [ "$FAIL" -eq 0 ]; then
     echo "🎉 베이스 환경 정상. 다음 단계로 진행 가능:"
-    echo "   bash scripts/step2_setup_infra.sh        # docker compose 인프라 기동"
+    echo "   bash scripts/step2_2_setup_infra.sh        # docker compose 인프라 기동"
     exit 0
 else
     echo "💥 ${FAIL} 개 항목 실패 — 위 메시지 확인 후 재셋업 (bash scripts/step1_install_base_env.sh)"

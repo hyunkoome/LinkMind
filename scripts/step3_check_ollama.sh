@@ -55,7 +55,7 @@ echo ""
 echo "[1] linkmind-ollama 컨테이너"
 CID="$(docker ps -aq --filter "name=^${CONTAINER_NAME}$" 2>/dev/null || true)"
 if [ -z "$CID" ]; then
-    fail "${CONTAINER_NAME} 컨테이너 없음 — 'bash scripts/step2_setup_infra.sh' 먼저"
+    fail "${CONTAINER_NAME} 컨테이너 없음 — 'bash scripts/step2_2_setup_infra.sh' 먼저"
     echo ""; echo "💥 컨테이너 없음 — 중단"; exit 1
 fi
 HEALTH="$(docker inspect -f '{{.State.Health.Status}}' "$CID" 2>/dev/null || echo unknown)"

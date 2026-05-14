@@ -75,8 +75,8 @@ yarn-error.log*
 .streamlit/secrets.toml
 
 # ---------- IDE / Editor ----------
-.vscode/
-!.vscode/settings.json.example
+# .vscode/ 는 repo 에 commit (files.watcherExclude 등 팀 공유 설정).
+# 개인 디버그용 launch.json 등 ignore 하고 싶으면 아래에 개별 추가.
 .idea/
 *.swp
 *.swo

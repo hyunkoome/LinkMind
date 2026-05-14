@@ -1,0 +1,25 @@
+{
+    "files.watcherExclude": {
+        "**/.venv/**": true,
+        "**/archive/**": true,
+        "**/volumes/**": true,
+        "**/external/**": true,
+        "**/__pycache__/**": true,
+        "**/.mypy_cache/**": true,
+        "**/.pytest_cache/**": true,
+        "**/.ruff_cache/**": true
+    },
+    "search.exclude": {
+        "**/.venv": true,
+        "**/archive": true,
+        "**/volumes": true,
+        "**/external": true,
+        "**/__pycache__": true
+    },
+    "files.exclude": {
+        "**/__pycache__": true,
+        "**/.mypy_cache": true,
+        "**/.pytest_cache": true,
+        "**/.ruff_cache": true
+    }
+}

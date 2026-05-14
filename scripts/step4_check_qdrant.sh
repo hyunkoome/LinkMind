@@ -61,7 +61,7 @@ fi
 if curl -fsS "http://127.0.0.1:${QDRANT_HTTP_PORT}/readyz" >/dev/null 2>&1; then
     ok "/readyz 200 OK"
 else
-    fail "/readyz 응답 실패 — 'bash scripts/step2_setup_infra.sh' 먼저"
+    fail "/readyz 응답 실패 — 'bash scripts/step2_2_setup_infra.sh' 먼저"
     echo ""; echo "💥 Qdrant 미응답 — 중단"; exit 1
 fi
 

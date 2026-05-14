@@ -76,18 +76,30 @@ bash scripts/step1_install_base_env.sh --cuda-version=126  # cu126 wheel 사용
 
 ### 3. 인프라 컨테이너 (step2)
 
-Postgres / Qdrant / Ollama / OpenWebUI 를 한 번에 띄우고 healthcheck 통과까지 대기:
+두 단계로 나뉜다 — step2_1 은 호스트에 docker 자체를 설치(sudo + 재로그인 필요할 수 있음), step2_2 는 docker 위에 LinkMind 컨테이너 4종을 기동:
+
+**step2_1 — Docker Engine + NVIDIA Container Toolkit 설치** (sudo 필요, 한 번만)
 
 ```bash
-bash scripts/step2_setup_infra.sh        # docker compose up -d + healthy 대기
-bash scripts/step2_check_infra.sh        # 4개 서비스 연결성 + 포트 검증
+bash scripts/step2_1_install_docker.sh   # docker-ce + compose v2 + nvidia-container-toolkit
+# 설치 직후 docker 그룹이 현재 셸에 적용 안 됨 → 새 셸 (exec su -l "$USER") 또는 newgrp docker
+bash scripts/step2_1_check_docker.sh     # docker / compose / nvidia runtime / hello-world 풀체인 검증
+```
+
+옵션: `--no-nvidia` (CPU 환경, toolkit skip)
+
+**step2_2 — LinkMind 인프라 컨테이너** (Postgres / Qdrant / Ollama / OpenWebUI 기동)
+
+```bash
+bash scripts/step2_2_setup_infra.sh        # docker compose up -d + healthy 대기
+bash scripts/step2_2_check_infra.sh        # 4개 서비스 연결성 + 포트 검증
 ```
 
 옵션:
 
 ```bash
-bash scripts/step2_setup_infra.sh --phase2     # + TEI / MinIO
-bash scripts/step2_setup_infra.sh --recreate   # 컨테이너 강제 재생성
+bash scripts/step2_2_setup_infra.sh --phase2     # + TEI / MinIO
+bash scripts/step2_2_setup_infra.sh --recreate   # 컨테이너 강제 재생성
 ```
 
 ### 4. Ollama 모델 (step3)
