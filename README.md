@@ -125,6 +125,10 @@ bash scripts/install_openclaw.sh              # 기본: 공식 install.sh (Node 
 
 자세한 통합은 [docs/openclaw_integration.md](docs/openclaw_integration.md) 참고.
 
+### 9. (선택) Slack 데이터 import
+
+비공개 채널 / DM 까지 받고 싶다면 slackdump 사용. 토큰 / 쿠키 추출 + export 절차는 [docs/slack_setup.md](docs/slack_setup.md) 참고.
+
 ---
 
 ## 디렉토리 구조

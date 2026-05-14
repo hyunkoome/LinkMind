@@ -126,6 +126,12 @@ temp/
 *.bak
 *.orig
 
+# ---------- slackdump 부산물 (프로젝트 루트에 떨어지는 dump 파일들) ----------
+channels-T*.txt
+users-T*.txt
+slackdump_*.zip
+slackdump_*.log
+
 # ---------- External / Vendor (참조용 외부 저장소 — LinkMind 저장소에 커밋 금지) ----------
 # 예: external/openclaw/ 는 OpenClaw 코드를 읽기/참고용으로 clone한 것.
 # 만약 일부 코드를 vendor하려면 backend/vendor/ 하위로 명시적으로 copy하고
