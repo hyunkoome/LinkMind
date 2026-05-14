@@ -102,8 +102,11 @@ elif ! command -v nvidia-smi >/dev/null 2>&1; then
     echo "ℹ️  nvidia-smi 없음 — CPU 환경으로 간주, toolkit skip"
 elif command -v nvidia-ctk >/dev/null 2>&1; then
     echo "✅ nvidia-container-toolkit 이미 설치됨"
-    # 이미 설치돼있어도 docker runtime 설정은 한 번 더 보장 (idempotent)
+    # 이미 설치돼있어도 docker runtime 설정 + daemon reload 는 한 번 더 보장 (idempotent).
+    # daemon.json 만 갱신하고 docker 를 재시작하지 않으면 'docker info' 에 nvidia runtime
+    # 이 안 나타나 step2_1_check_docker.sh [4] 가 실패함.
     sudo nvidia-ctk runtime configure --runtime=docker >/dev/null
+    sudo systemctl restart docker
 else
     echo "📦 nvidia-container-toolkit 설치"
     curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \

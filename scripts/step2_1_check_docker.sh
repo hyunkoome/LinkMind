@@ -20,6 +20,7 @@
 set -uo pipefail
 
 PASS=0
+INFO=0
 WARN=0
 FAIL=0
 HAS_TTY=0
@@ -30,6 +31,9 @@ yellow() { if [ "$HAS_TTY" -eq 1 ]; then printf '\033[33m%s\033[0m' "$*"; else p
 red()    { if [ "$HAS_TTY" -eq 1 ]; then printf '\033[31m%s\033[0m' "$*"; else printf '%s' "$*"; fi; }
 
 ok()   { printf '  %s  %s\n' "$(green '✅')" "$*"; PASS=$((PASS+1)); }
+# info: 사용자가 명시한 옵션(--no-pull, --no-nvidia 등) 으로 검증을 끈 케이스.
+# "잠재적 이슈" 가 아니라 단순 사실 전달이라 warn 으로 잡으면 신호-노이즈 비율이 망가짐.
+info() { printf '  %s  %s\n' "ℹ️ " "$*"; INFO=$((INFO+1)); }
 warn() { printf '  %s  %s\n' "$(yellow '⚠️ ')" "$*"; WARN=$((WARN+1)); }
 fail() { printf '  %s  %s\n' "$(red '❌')" "$*"; FAIL=$((FAIL+1)); }
 
@@ -77,26 +81,48 @@ else
 fi
 
 # ---- 4. NVIDIA runtime -----------------------------------------------------
+# daemon.json 에는 nvidia 가 등록됐는데 docker daemon 이 reload 안 된 케이스
+# (install 직후 흔히 발생) 는 sudo systemctl restart docker 로 자가 치유한다.
+# 그 외(daemon.json 자체에 항목이 없는 케이스) 는 install 책임이라 fail.
+#
+# 감지 방식: docker info 의 .Runtimes 는 map 이고, 값 객체에는 .Name 필드가 없음
+# (docker 29.x 기준 .Path / .Status 만 존재) → '{{range .Runtimes}}{{.Name}}{{end}}'
+# 같은 template 은 빈 문자열만 반복. 대신 {{json .Runtimes}} 출력을 받아 JSON key
+# '"nvidia":' 가 들어있는지를 grep 으로 본다. 형식 변화에 가장 안전.
+runtime_registered() {
+    docker info --format '{{json .Runtimes}}' 2>/dev/null \
+        | grep -Eq '"nvidia"[[:space:]]*:'
+}
 echo ""
 echo "[4] NVIDIA Container Runtime"
 if [ "$USE_NVIDIA" -eq 0 ]; then
-    warn "--no-nvidia — GPU 검증 skip"
+    info "--no-nvidia — GPU 검증 skip"
 elif ! command -v nvidia-smi >/dev/null 2>&1; then
     warn "nvidia-smi 없음 — CPU 환경으로 간주"
-else
-    RUNTIMES="$(docker info --format '{{range .Runtimes}}{{.Name}} {{end}}' 2>/dev/null || true)"
-    if echo "$RUNTIMES" | grep -qw nvidia; then
-        ok "docker 에 nvidia runtime 등록됨"
+elif runtime_registered; then
+    ok "docker 에 nvidia runtime 등록됨"
+elif grep -Eq '"nvidia"[[:space:]]*:' /etc/docker/daemon.json 2>/dev/null; then
+    # daemon.json 엔 등록됐는데 docker daemon 미반영 → restart 로 reload
+    warn "daemon.json 에 nvidia 항목 있으나 docker daemon 미반영 — 'sudo systemctl restart docker' 시도"
+    if sudo systemctl restart docker; then
+        sleep 1
+        if runtime_registered; then
+            ok "docker daemon 재시작 후 nvidia runtime 등록 확인"
+        else
+            fail "재시작 후에도 nvidia runtime 미등록 — 'sudo nvidia-ctk runtime configure --runtime=docker' 후 재시도"
+        fi
     else
-        fail "docker 에 nvidia runtime 미등록 — 'sudo nvidia-ctk runtime configure --runtime=docker' 후 docker 재시작"
+        fail "'sudo systemctl restart docker' 실패 — 수동 실행 필요"
     fi
+else
+    fail "docker 에 nvidia runtime 미등록 — 'sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker'"
 fi
 
 # ---- 5. hello-world ---------------------------------------------------------
 echo ""
 echo "[5] hello-world 컨테이너 (이미지 pull + 실행)"
 if [ "$DO_PULL" -eq 0 ]; then
-    warn "--no-pull — hello-world 검증 skip"
+    info "--no-pull — hello-world 검증 skip"
 else
     if docker run --rm hello-world >/dev/null 2>&1; then
         ok "hello-world 실행 OK — docker 풀체인 정상"
@@ -108,7 +134,7 @@ fi
 # ---- 요약 ------------------------------------------------------------------
 echo ""
 echo "────────────────────────────────────────────────"
-echo "  통과: $(green "$PASS")   경고: $(yellow "$WARN")   실패: $(red "$FAIL")"
+echo "  통과: $(green "$PASS")   정보: $INFO   경고: $(yellow "$WARN")   실패: $(red "$FAIL")"
 echo "────────────────────────────────────────────────"
 
 if [ "$FAIL" -eq 0 ]; then
