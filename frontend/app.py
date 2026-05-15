@@ -38,6 +38,18 @@ def _fetch_topics_for_item(item_id: str) -> list[dict]:
     return []
 
 
+def _fetch_topic_siblings(topic_slug: str, exclude_item: str) -> list[dict]:
+    """topic 안의 다른 item 들 (현재 hit 제외) — 같은 주제의 다른 modality 인라인 표시용."""
+    try:
+        r = httpx.get(f"{API_BASE}/topics/{topic_slug}", timeout=5.0)
+        if r.status_code != 200:
+            return []
+        items = r.json().get("items", []) or []
+        return [i for i in items if str(i.get("id")) != exclude_item]
+    except Exception:  # noqa: BLE001
+        return []
+
+
 # ─── Search ────────────────────────────────────────────────────
 with tab_search:
     st.caption(
@@ -79,6 +91,29 @@ with tab_search:
                         f"`{t['slug']}({t['role']})`" for t in topics_for_hit
                     )
                     st.caption(f"📚 topics: {topic_chips}")
+                    # primary topic (가장 confidence 높은 것) 의 다른 item 인라인 노출 —
+                    # 같은 주제의 paper/code/video 가 한 검색 결과 안에서 같이 보임.
+                    primary = max(topics_for_hit, key=lambda t: t.get("confidence", 0))
+                    siblings = _fetch_topic_siblings(primary["slug"], str(hit["item_id"]))
+                    if siblings:
+                        with st.expander(
+                            f"🔗 같은 topic 의 다른 modality {len(siblings)}개  "
+                            f"({primary['slug']})", expanded=False,
+                        ):
+                            for sib in siblings:
+                                sib_url = sib.get("source_url") or ""
+                                if sib_url.startswith("/"):
+                                    sib_url = f"{API_BASE}{sib_url}"
+                                sib_head = (
+                                    f"**[{sib['role']}]** "
+                                    f"{sib.get('title') or '(no title)'}"
+                                )
+                                st.markdown(sib_head)
+                                if sib_url:
+                                    st.markdown(f"🔗 [{sib_url}]({sib_url})")
+                                if sib.get("summary"):
+                                    first_line = sib["summary"].split("\n", 1)[0]
+                                    st.caption(first_line[:240])
 
 
 # ─── Ask (RAG) ─────────────────────────────────────────────────
@@ -284,11 +319,25 @@ with tab_topics:
 
     st.divider()
     st.markdown("### 수동 link (자동이 놓친 케이스)")
-    st.caption("item_id 와 대상 topic slug 를 알아내 직접 link. role = paper/code/video/pdf/blog/note 등.")
+    st.caption("item_id 와 대상 topic slug 를 직접 지정. role = paper/code/video/pdf/blog/note 등. "
+               "slug 는 기존 topic 중 선택 (검색 가능) 또는 직접 입력 — 새 slug 면 topic 자동 생성.")
+    # 기존 topic 의 slug 모음 — autocomplete (selectbox + 빈 옵션). 새 slug 도 가능 → 텍스트
+    # 입력으로 fallback. Streamlit 의 selectbox 는 type 으로 검색 가능.
+    slug_options = [""] + [t["slug"] for t in t_list]
     col1, col2 = st.columns(2)
     with col1:
         link_item_id = st.text_input("item_id (UUID)")
-        link_topic_slug = st.text_input("topic slug (예: arxiv:2106.09685)")
+        picked = st.selectbox(
+            "topic slug — 기존 선택 (또는 비워두고 아래에 새 slug 입력)",
+            slug_options,
+            key="link_slug_picked",
+        )
+        new_slug = st.text_input(
+            "또는 새 slug 직접 입력 (예: arxiv:2511.20343, github:owner/repo)",
+            value="",
+            key="link_slug_new",
+        )
+        link_topic_slug = (new_slug or picked).strip()
     with col2:
         link_role = st.selectbox(
             "role", ["paper", "pdf", "code", "video", "playlist", "blog", "note"]

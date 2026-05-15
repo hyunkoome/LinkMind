@@ -140,12 +140,23 @@ TodoWrite 는 "현재 세션의 작업 단계" 추적용, 이 문서는 "기능 
 
 ---
 
-## Phase 2.5 다음 wave (선택, 미착수)
+## Phase 2.5 다음 wave ✅ 완료 / ⏸ 일부 보류 (2026-05-16)
 
-- 검색 결과에 같은 topic 안의 다른 item 도 자동 인용 (현재는 칩만 표시, 클릭하면 topic 상세)
-- arxiv API 시드 — paper_id 만 있는 topic 의 title/author/published_at 자동 보강
-- paperswithcode slug → github_repo 자동 연결 (현재는 README 에 링크 있어야)
-- Streamlit 의 manual link UI 에서 search-by-slug autocomplete
+- ✅ 검색 결과에 같은 topic 의 다른 modality 인라인 노출 — Streamlit Search 탭의
+  hit 별 expander 안에 sibling item (role + url + 첫 줄 요약). primary topic
+  (confidence 최대) 기준 fetch.
+- ✅ arxiv API 시드 (`scripts/seed_arxiv_metadata.py`) — export.arxiv.org 의 atom
+  feed 로 `arxiv:<id>` topic 의 title / authors / published / summary / primary_category
+  자동 보강. batch (한 호출에 최대 100 id) + `tags` 에 `arxiv-seeded` idempotent 마커.
+  검증: 11개 arxiv topic 모두 paper 제목 정확히 갱신 (RoBERTa / DeBERTa / Adapter /
+  Prefix-Tuning 등 microsoft/LoRA README 가 가르킨 paper 들).
+- ✅ Streamlit manual link UI 의 topic slug autocomplete — selectbox (기존 topic
+  목록) + 새 slug 직접 입력 fallback.
+- ⏸ paperswithcode slug → github_repo 자동 연결 — **외부 API 종료로 보류**.
+  paperswithcode.com 이 Hugging Face 에 인수되어 `/api/v1/papers/` 가 302 redirect
+  (huggingface.co/papers). HF papers API (`huggingface.co/api/papers/{id}`) 는
+  github_repo 매핑 없음 (`ai_summary` / `authors` 정도만). 대안 없으면 GitHub README
+  의 arxiv 링크 자동 cross-link (이미 구현됨) 으로 충분.
 
 ---
 

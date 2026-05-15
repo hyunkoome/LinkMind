@@ -236,6 +236,7 @@ OpenClaw 는 **frontend agent** (사용자가 직접 대화하는 layer). LinkMi
 | 2 first wave   | 4종 ingester (url/youtube/github/pdf), Settings UI, DB-backed runtime, 한국어 prompt v3, `/files/{hash}` | ✅ 완료 |
 | 2 second wave  | `ingest --force`, PDF figure 추출, abstract regex 보강, YouTube 썸네일 attachments | ✅ 완료 |
 | **2.5 (Topic 그룹핑)** | `topics`+`item_topics` 스키마, external_ids extractor, 자동 매핑, Topics UI, description 자동 생성 | ✅ 완료 |
+| **2.5 wave-2** | arxiv API seed (title/abstract 자동), 검색 결과의 multi-modal 인라인 노출, manual link autocomplete | ✅ 완료 |
 | 2 후반 (Slack/Telegram) | Slack export 파서, Telegram ingest, AI 카테고리 강화, feedback 테이블, dataset exporter | 진행 예정 |
 | 3 | 이미지/OCR/멀티모달 RAG, TEI 임베딩 전환, MinIO object storage | |
 | 4 | **sVLL LoRA 파인튜닝** (LLaMA-Factory + Qwen2-VL), vLLM 서빙 | |
