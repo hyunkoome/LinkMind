@@ -64,8 +64,13 @@ class Settings(BaseSettings):
     hf_hub_offline: bool = Field(default=False)
 
     # ─── LLM Providers ────────────────────────────────────────────
-    default_llm_provider: Literal["openai", "claude", "ollama"] = Field(default="openai")
-    default_llm_model: str = Field(default="gpt-4o-mini")
+    # 정책:
+    #   - 인프라 위치 (ollama_base_url) / 시크릿 (*_api_key) 만 env 에서 읽음.
+    #   - 런타임 선호 (어떤 provider / 어떤 모델) 는 DB 의 app_settings + UI Settings
+    #     탭에서 관리. 아래 *_model / default_llm_provider 의 Field default 는 DB 가
+    #     비어 있을 때만 사용되는 fallback (이전에는 env 도 override 했지만 dead).
+    #   - DEFAULT_LLM_MODEL env 는 제거됨 (provider 별 *_model 이 있어 의미 모호).
+    default_llm_provider: Literal["openai", "claude", "ollama"] = Field(default="ollama")
 
     openai_api_key: str = Field(default="")
     openai_model: str = Field(default="gpt-4o-mini")
@@ -78,7 +83,7 @@ class Settings(BaseSettings):
 
     ollama_base_url: str = Field(default="http://ollama:11434")
     ollama_base_url_local: str = Field(default="http://localhost:11434")
-    ollama_model: str = Field(default="llama3.2:latest")
+    ollama_model: str = Field(default="qwen2.5:7b")
 
     # ─── OpenClaw (LinkMind는 client로서 호출만; 통합 시점에 사용) ──
     openclaw_gateway_url: str = Field(default="http://localhost:7890")

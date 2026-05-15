@@ -329,7 +329,7 @@ with tab_settings:
         st.stop()
 
     eff = llm_snap["effective"]
-    env_def = llm_snap["env_defaults"]
+    code_def = llm_snap["config_defaults"]
     override = llm_snap["override"]
     providers = models["providers"]
 
@@ -356,7 +356,7 @@ with tab_settings:
         new_anthropic_model = st.text_input("Anthropic model", value=eff["anthropic_model"])
 
     with st.expander("현재 상태 (debug)", expanded=False):
-        st.write({"effective": eff, "env_defaults": env_def, "override": override})
+        st.write({"effective": eff, "config_defaults": code_def, "override": override})
         if providers["ollama"].get("error"):
             st.warning(f"Ollama API 조회 에러: {providers['ollama']['error']}")
 

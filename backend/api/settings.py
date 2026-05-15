@@ -2,7 +2,7 @@
 /settings/* — UI(Streamlit Settings 탭) 에서 호출하는 런타임 설정 API.
 
 읽기:
-  GET  /settings/llm            -> 현재 effective + env_defaults + override + 활성 prompt
+  GET  /settings/llm            -> 현재 effective + config_defaults + override + 활성 prompt
   GET  /settings/llm/models     -> Ollama 에 설치된 모델 목록 + provider 별 default
   GET  /settings/prompts/{name}/versions  -> 특정 prompt 의 버전 히스토리
 

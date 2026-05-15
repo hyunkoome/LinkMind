@@ -207,7 +207,9 @@ async def snapshot() -> dict[str, Any]:
             "openai_model": get_effective_openai_model(),
             "anthropic_model": get_effective_anthropic_model(),
         },
-        "env_defaults": {
+        # 'config_defaults' = backend/config.py 의 Field default. DB 가 비어있을 때
+        # fallback 으로만 사용. (이전엔 env 도 override 했지만 LLM 관련 env 는 제거됨.)
+        "config_defaults": {
             "default_llm_provider": s.default_llm_provider,
             "ollama_model": s.ollama_model,
             "openai_model": s.openai_model,
