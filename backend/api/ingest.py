@@ -12,12 +12,15 @@ POST /ingest — 외부 client(OpenClaw extension, 스크립트 등)가 자료�
 from __future__ import annotations
 
 import logging
+import tempfile
+from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.config import get_settings
 from backend.db.connection import get_session
 from backend.db.repository import (
     find_item_by_hash,
@@ -34,12 +37,144 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+class UrlIngestRequest(BaseModel):
+    url: str = Field(..., min_length=1)
+    analyze_now: bool = True
+
+
+class UrlIngestResponse(BaseModel):
+    item_id: str
+    created: bool
+    chunks_indexed: int = 0
+    summary_generated: bool = False
+    tags: list[str] = Field(default_factory=list)
+    title: str | None = None
+
+
+def _wrap_result(result: dict[str, Any]) -> "UrlIngestResponse":
+    return UrlIngestResponse(**{k: result.get(k) for k in (
+        "item_id", "created", "chunks_indexed", "summary_generated", "tags", "title",
+    ) if k in result})
+
+
+def _classify_url(url: str) -> str:
+    """URL host 로 source 종류 추정. 'youtube' | 'github' | 'pdf' | 'url'."""
+    host = (urlparse(url).hostname or "").lower()
+    if host.endswith("youtube.com") or host == "youtu.be":
+        return "youtube"
+    if host == "github.com" or host == "www.github.com":
+        return "github"
+    if url.lower().split("?", 1)[0].endswith(".pdf"):
+        return "pdf"
+    return "url"
+
+
+@router.post("/url", response_model=UrlIngestResponse)
+async def ingest_url_endpoint(payload: UrlIngestRequest) -> UrlIngestResponse:
+    """URL 한 줄 ingest — 일반 웹 페이지/논문 abstract. 본격 흐름은 backend.ingest.url."""
+    from backend.ingest.url import ingest_url
+    try:
+        result = await ingest_url(payload.url, analyze_now=payload.analyze_now)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        logger.exception("URL ingest 실패: %s", payload.url)
+        raise HTTPException(status_code=500, detail=f"URL ingest 실패: {e!s}") from e
+    return _wrap_result(result)
+
+
+@router.post("/youtube", response_model=UrlIngestResponse)
+async def ingest_youtube_endpoint(payload: UrlIngestRequest) -> UrlIngestResponse:
+    from backend.ingest.youtube import ingest_youtube
+    try:
+        result = await ingest_youtube(payload.url, analyze_now=payload.analyze_now)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        logger.exception("YouTube ingest 실패: %s", payload.url)
+        raise HTTPException(status_code=500, detail=f"YouTube ingest 실패: {e!s}") from e
+    return _wrap_result(result)
+
+
+@router.post("/github", response_model=UrlIngestResponse)
+async def ingest_github_endpoint(payload: UrlIngestRequest) -> UrlIngestResponse:
+    from backend.ingest.github import ingest_github
+    try:
+        result = await ingest_github(payload.url, analyze_now=payload.analyze_now)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        logger.exception("GitHub ingest 실패: %s", payload.url)
+        raise HTTPException(status_code=500, detail=f"GitHub ingest 실패: {e!s}") from e
+    return _wrap_result(result)
+
+
+@router.post("/pdf", response_model=UrlIngestResponse)
+async def ingest_pdf_endpoint(payload: UrlIngestRequest) -> UrlIngestResponse:
+    """PDF URL ingest. multipart 파일 업로드는 /ingest/pdf/upload 사용."""
+    from backend.ingest.pdf import ingest_pdf
+    try:
+        result = await ingest_pdf(payload.url, analyze_now=payload.analyze_now)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        logger.exception("PDF ingest 실패: %s", payload.url)
+        raise HTTPException(status_code=500, detail=f"PDF ingest 실패: {e!s}") from e
+    return _wrap_result(result)
+
+
+@router.post("/pdf/upload", response_model=UrlIngestResponse)
+async def ingest_pdf_upload(
+    file: UploadFile = File(...),
+    analyze_now: bool = True,
+) -> UrlIngestResponse:
+    """multipart PDF 파일 업로드 ingest. tempfile 로 받아 ingest_pdf 호출."""
+    from backend.ingest.pdf import ingest_pdf
+    if not (file.filename or "").lower().endswith(".pdf"):
+        # MIME 만 보고 신뢰하긴 어려워 확장자도 확인.
+        if file.content_type not in ("application/pdf", "application/x-pdf"):
+            raise HTTPException(400, "PDF 파일만 허용됩니다")
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+            tmp.write(await file.read())
+            tmp_path = Path(tmp.name)
+        try:
+            result = await ingest_pdf(tmp_path, analyze_now=analyze_now)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        logger.exception("PDF upload ingest 실패: %s", file.filename)
+        raise HTTPException(status_code=500, detail=f"PDF ingest 실패: {e!s}") from e
+    return _wrap_result(result)
+
+
+@router.post("/auto", response_model=UrlIngestResponse)
+async def ingest_auto(payload: UrlIngestRequest) -> UrlIngestResponse:
+    """URL host 로 자동 분류 후 해당 ingester 호출.
+
+    분류 결과:
+      - youtube.com / youtu.be     → youtube
+      - github.com                 → github
+      - 확장자 *.pdf               → pdf (URL)
+      - 그 외                      → url (일반 페이지)
+    """
+    kind = _classify_url(payload.url)
+    if kind == "youtube":
+        return await ingest_youtube_endpoint(payload)
+    if kind == "github":
+        return await ingest_github_endpoint(payload)
+    if kind == "pdf":
+        return await ingest_pdf_endpoint(payload)
+    return await ingest_url_endpoint(payload)
+
+
 @router.post("", response_model=IngestResponse)
 async def ingest(
     payload: IngestRequest,
     session: AsyncSession = Depends(get_session),
 ) -> IngestResponse:
-    settings = get_settings()
     content_hash = sha256_text(payload.raw_content)
 
     # 1) idempotent 체크

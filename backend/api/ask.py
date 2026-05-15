@@ -7,8 +7,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend import runtime_settings
 from backend.api.search import search as _do_search
-from backend.config import get_settings
 from backend.db.connection import get_session
 from backend.llm.base import ChatMessage
 from backend.llm.factory import get_llm_provider
@@ -22,15 +22,9 @@ from backend.schemas.models import (
 router = APIRouter()
 
 
-SYSTEM_PROMPT = """당신은 사용자의 개인 기술 연구 지식베이스(LinkMind)를 검색해 답변하는 비서입니다.
-
-규칙:
-- 제공된 [Context] 항목들만 근거로 답변합니다.
-- 답변 끝에 어떤 항목을 근거로 했는지 [n] 형태로 인용 번호를 표기합니다.
-- Context에 없으면 추측하지 말고 "관련 자료가 충분하지 않습니다"라고 답합니다.
-- 기술 용어(SLAM, 3DGS, LiDAR 등)는 원문 그대로 유지합니다.
-- 답변은 한국어로, 간결하게.
-"""
+# SYSTEM_PROMPT 는 DB(prompts 테이블 name='rag_system') 에서 활성 버전을 매 요청마다
+# 캐시 hit 로 가져온다. DB 초기 시드 default 는 runtime_settings.RAG_SYSTEM_PROMPT_SEED.
+# UI Settings 탭에서 변경하면 새 버전이 저장되고 즉시 다음 요청부터 반영.
 
 
 @router.post("", response_model=AskResponse)
@@ -38,8 +32,6 @@ async def ask(
     payload: AskRequest,
     session: AsyncSession = Depends(get_session),
 ) -> AskResponse:
-    settings = get_settings()
-
     # 1) Retrieval
     search_resp = await _do_search(
         SearchRequest(query=payload.question, top_k=payload.top_k),
@@ -62,13 +54,14 @@ async def ask(
         ))
     context = "\n\n".join(context_blocks) if context_blocks else "(검색 결과 없음)"
 
-    # 3) LLM
-    provider_name = payload.llm_provider or settings.default_llm_provider
+    # 3) LLM — provider 는 명시값(있으면) 또는 effective default(runtime override → env).
+    provider_name = payload.llm_provider or runtime_settings.get_effective_llm_provider()
     provider = get_llm_provider(provider_name)
     user_msg = f"[Context]\n{context}\n\n[Question]\n{payload.question}"
+    _, system_prompt = runtime_settings.get_active_prompt("rag_system")
     resp = await provider.chat(
         messages=[
-            ChatMessage(role="system", content=SYSTEM_PROMPT),
+            ChatMessage(role="system", content=system_prompt),
             ChatMessage(role="user", content=user_msg),
         ],
         model=payload.llm_model,

@@ -104,6 +104,26 @@ async def update_item_analysis(
     )
 
 
+async def list_items_by_tags(
+    session: AsyncSession, *, tags: list[str], top_k: int,
+) -> list[dict[str, Any]]:
+    """tags 중 하나라도 매칭되는 items 를 최신순으로. `#tag` 만 있는 검색용."""
+    if not tags:
+        return []
+    res = await session.execute(
+        text("""
+            SELECT id, source_type, source_url, title, summary, categories, tags,
+                   ingested_at
+            FROM items
+            WHERE tags && CAST(:tags AS TEXT[])
+            ORDER BY ingested_at DESC
+            LIMIT :limit
+        """),
+        {"tags": tags, "limit": top_k},
+    )
+    return [dict(r) for r in res.mappings().all()]
+
+
 async def get_items_by_ids(session: AsyncSession, ids: list[UUID]) -> dict[UUID, dict[str, Any]]:
     if not ids:
         return {}
@@ -155,6 +175,170 @@ async def insert_chunks(
         )
         ids.append(row.scalar_one())
     return ids
+
+
+# ──────────────────────────────────────────────────────────────
+# app_settings  (런타임 key-value 설정)
+# ──────────────────────────────────────────────────────────────
+
+
+async def get_app_setting(session: AsyncSession, key: str) -> str | None:
+    res = await session.execute(
+        text("SELECT value FROM app_settings WHERE key = :k"),
+        {"k": key},
+    )
+    return res.scalar_one_or_none()
+
+
+async def get_all_app_settings(session: AsyncSession) -> dict[str, str]:
+    res = await session.execute(text("SELECT key, value FROM app_settings"))
+    return {r[0]: r[1] for r in res.all()}
+
+
+async def set_app_setting(session: AsyncSession, key: str, value: str) -> None:
+    await session.execute(
+        text("""
+            INSERT INTO app_settings (key, value)
+            VALUES (:k, :v)
+            ON CONFLICT (key) DO UPDATE
+                SET value = EXCLUDED.value,
+                    updated_at = now()
+        """),
+        {"k": key, "v": value},
+    )
+
+
+async def delete_app_setting(session: AsyncSession, key: str) -> None:
+    await session.execute(text("DELETE FROM app_settings WHERE key = :k"), {"k": key})
+
+
+# ──────────────────────────────────────────────────────────────
+# prompts  (system prompt 버전 히스토리)
+# ──────────────────────────────────────────────────────────────
+
+
+async def get_active_prompt(
+    session: AsyncSession, name: str
+) -> dict[str, Any] | None:
+    """name 의 활성 프롬프트 반환. {id, version, content, created_at} 또는 None."""
+    res = await session.execute(
+        text("""
+            SELECT id, version, content, created_at
+            FROM prompts
+            WHERE name = :name AND is_active
+        """),
+        {"name": name},
+    )
+    row = res.mappings().one_or_none()
+    return dict(row) if row else None
+
+
+async def list_prompt_versions(
+    session: AsyncSession, name: str
+) -> list[dict[str, Any]]:
+    res = await session.execute(
+        text("""
+            SELECT id, version, content, is_active, note, created_at
+            FROM prompts
+            WHERE name = :name
+            ORDER BY created_at DESC
+        """),
+        {"name": name},
+    )
+    return [dict(r) for r in res.mappings().all()]
+
+
+async def _next_version_label(session: AsyncSession, name: str) -> str:
+    """name 안에서 다음 버전 라벨 — 기존 'vN' 들의 max N + 1. 없으면 v1."""
+    res = await session.execute(
+        text("""
+            SELECT version FROM prompts
+            WHERE name = :name AND version ~ '^v[0-9]+$'
+        """),
+        {"name": name},
+    )
+    nums = [int(v[1:]) for (v,) in res.all()]
+    return f"v{(max(nums) if nums else 0) + 1}"
+
+
+async def save_new_prompt_version(
+    session: AsyncSession,
+    *,
+    name: str,
+    content: str,
+    note: str | None = None,
+    activate: bool = True,
+) -> dict[str, Any]:
+    """새 버전 저장. activate=True 면 기존 활성 해제 후 이 버전을 활성으로."""
+    version = await _next_version_label(session, name)
+    if activate:
+        await session.execute(
+            text("UPDATE prompts SET is_active = FALSE WHERE name = :name AND is_active"),
+            {"name": name},
+        )
+    res = await session.execute(
+        text("""
+            INSERT INTO prompts (name, version, content, is_active, note)
+            VALUES (:name, :version, :content, :active, :note)
+            RETURNING id, version, content, is_active, created_at
+        """),
+        {
+            "name": name,
+            "version": version,
+            "content": content,
+            "active": activate,
+            "note": note,
+        },
+    )
+    return dict(res.mappings().one())
+
+
+async def activate_prompt_version(
+    session: AsyncSession, *, name: str, version: str
+) -> None:
+    await session.execute(
+        text("UPDATE prompts SET is_active = FALSE WHERE name = :name AND is_active"),
+        {"name": name},
+    )
+    await session.execute(
+        text("UPDATE prompts SET is_active = TRUE WHERE name = :name AND version = :version"),
+        {"name": name, "version": version},
+    )
+
+
+async def ensure_seed_prompt(
+    session: AsyncSession, *, name: str, default_content: str
+) -> None:
+    """name 에 대해 활성 prompt 가 하나도 없으면 default_content 로 v1 시드.
+    이미 있으면 무시."""
+    existing = await get_active_prompt(session, name)
+    if existing is not None:
+        return
+    # 활성 row 가 없어도 history 가 있을 수 있으니, 둘 다 없을 때만 v1.
+    res = await session.execute(
+        text("SELECT 1 FROM prompts WHERE name = :name LIMIT 1"),
+        {"name": name},
+    )
+    if res.first() is not None:
+        # history 는 있는데 아무것도 활성 아님 → 최신 버전 활성화.
+        latest = await session.execute(
+            text("""
+                SELECT version FROM prompts WHERE name = :name
+                ORDER BY created_at DESC LIMIT 1
+            """),
+            {"name": name},
+        )
+        v = latest.scalar_one()
+        await activate_prompt_version(session, name=name, version=v)
+        return
+    # 완전 새로 시작 — v1 시드 + 활성.
+    await save_new_prompt_version(
+        session,
+        name=name,
+        content=default_content,
+        note="initial seed from code default",
+        activate=True,
+    )
 
 
 # ──────────────────────────────────────────────────────────────

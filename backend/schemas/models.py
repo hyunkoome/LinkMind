@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field, HttpUrl
 
 SourceType = Literal[
     "slack", "telegram", "url", "pdf",
-    "github", "arxiv", "youtube", "manual",
+    "github", "arxiv", "youtube", "youtube_playlist", "manual",
 ]
 
 

@@ -18,8 +18,9 @@ class OllamaProvider(LLMProvider):
     def __init__(self, base_url: str, default_model: str = "llama3.2:latest") -> None:
         self._base_url = base_url.rstrip("/")
         self._default_model = default_model
-        # Ollama 응답은 GPU 모델 로드 등으로 첫 호출이 느릴 수 있어 넉넉히.
-        self._client = httpx.AsyncClient(timeout=httpx.Timeout(120.0))
+        # Ollama 응답은 GPU 모델 로드 + 긴 입력 처리로 매우 느릴 수 있음.
+        # 14b 모델 첫 호출은 GPU 로드만 30s+, 8000자 입력 생성은 추가 60s+. 넉넉히 600s.
+        self._client = httpx.AsyncClient(timeout=httpx.Timeout(600.0))
 
     async def chat(
         self,

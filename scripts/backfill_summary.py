@@ -17,32 +17,42 @@ from __future__ import annotations
 import asyncio
 import sys
 from pathlib import Path
+from typing import Any
 from uuid import UUID
 
-# 프로젝트 루트를 sys.path 에 추가 (스크립트로 실행 시 필요).
-# scripts/step4_init_qdrant.py 와 동일한 패턴.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sqlalchemy import text  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker  # noqa: E402
 
+from backend import runtime_settings  # noqa: E402
 from backend.db.connection import get_engine  # noqa: E402
-from backend.ingest.url import _generate_and_save_summary  # noqa: E402
+from backend.ingest.url import ExtractedDoc, _generate_and_save_summary  # noqa: E402
 
 
-async def _fetch_targets(session: AsyncSession, *, item_id: UUID | None, force: bool) -> list[tuple[UUID, str]]:
+async def _fetch_targets(
+    session: AsyncSession, *, item_id: UUID | None, force: bool,
+) -> list[tuple[UUID, str, str | None, dict[str, Any]]]:
+    """(item_id, raw_content, title, source_metadata) 튜플 목록."""
     if item_id is not None:
         rows = await session.execute(
-            text("SELECT id, raw_content FROM items WHERE id = :id"),
+            text("""
+                SELECT id, raw_content, title, source_metadata
+                FROM items WHERE id = :id
+            """),
             {"id": str(item_id)},
         )
     elif force:
-        rows = await session.execute(text("SELECT id, raw_content FROM items ORDER BY ingested_at"))
+        rows = await session.execute(text(
+            "SELECT id, raw_content, title, source_metadata FROM items "
+            "ORDER BY ingested_at"
+        ))
     else:
-        rows = await session.execute(
-            text("SELECT id, raw_content FROM items WHERE summary IS NULL ORDER BY ingested_at")
-        )
-    return [(r.id, r.raw_content) for r in rows.all()]
+        rows = await session.execute(text(
+            "SELECT id, raw_content, title, source_metadata FROM items "
+            "WHERE summary IS NULL ORDER BY ingested_at"
+        ))
+    return [(r.id, r.raw_content, r.title, r.source_metadata or {}) for r in rows.all()]
 
 
 async def main() -> int:
@@ -54,6 +64,10 @@ async def main() -> int:
     engine = get_engine()
     session_factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
+    # backend 가 안 떠 있어도 별도 프로세스로 도는 backfill 이라 prompt 캐시가 비어있다.
+    # seed_and_load 로 DB → 캐시 적재 — 그래야 summary_prompt_version 이 정확히 기록됨.
+    await runtime_settings.seed_and_load()
+
     async with session_factory() as session:
         targets = await _fetch_targets(session, item_id=item_id, force=force)
         if not targets:
@@ -62,11 +76,20 @@ async def main() -> int:
 
         print(f"대상 {len(targets)} 건 — 요약 생성 시작")
         ok, fail = 0, 0
-        for iid, raw in targets:
+        for iid, raw, title, meta in targets:
             print(f"  - {iid} ...", end=" ", flush=True)
-            res = await _generate_and_save_summary(session, item_id=iid, text=raw)
-            if res:
-                print(f"OK ({len(res)} chars)")
+            # 옛 row 는 source_metadata 에 paper_keywords 가 없을 수도 — 안전 fallback.
+            doc = ExtractedDoc(
+                body=raw,
+                title=title,
+                abstract=None,                # backfill 은 항상 body 앞부분으로 cap.
+                paper_keywords=meta.get("paper_keywords") or [],
+            )
+            res_text, res_tags = await _generate_and_save_summary(
+                session, item_id=iid, doc=doc,
+            )
+            if res_text:
+                print(f"OK ({len(res_text)} chars, tags={res_tags})")
                 ok += 1
             else:
                 print("실패")

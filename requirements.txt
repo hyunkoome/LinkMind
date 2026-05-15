@@ -43,6 +43,7 @@ pypdf>=5.1.0                      # PDF (기본)
 pymupdf>=1.24.13                  # PDF (이미지/figure 추출 강력)
 trafilatura>=2.0.0                # 웹 본문 추출 (블로그/뉴스)
 youtube-transcript-api>=0.6.3     # YouTube 자막
+yt-dlp>=2024.10.0                 # YouTube 메타/플레이리스트
 
 # ─── Frontend (MVP) ───────────────────────────────────────────────
 streamlit>=1.40.0

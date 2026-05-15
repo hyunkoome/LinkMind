@@ -156,6 +156,41 @@ CREATE INDEX IF NOT EXISTS idx_ingestion_runs_source  ON ingestion_runs (source_
 
 
 -- ============================================================================
+-- app_settings : 런타임에서 UI/API 로 변경 가능한 key-value 설정.
+-- LLM provider/model 의 "기본값" override 보관 (env/dev.env 는 시드값, 여기가 우선).
+-- value 는 JSON 문자열 또는 단일 문자열 — 단순 TEXT 로.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS app_settings (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+
+-- ============================================================================
+-- prompts : 시스템 프롬프트 버전 히스토리 (Versioned analysis 원칙).
+-- 새 버전 저장 시 기존 버전은 그대로 보존 — 학습 데이터 재현/감사용.
+-- (name) 당 is_active=TRUE 행은 정확히 1개 (partial unique index).
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS prompts (
+    id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name       TEXT NOT NULL,              -- 'rag_system' | 'summary_system' | ...
+    version    TEXT NOT NULL,              -- 'v1', 'v2', ... — name 안에서 단조 증가
+    content    TEXT NOT NULL,
+    is_active  BOOLEAN NOT NULL DEFAULT FALSE,
+    note       TEXT,                       -- 변경 사유 (선택)
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (name, version)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_prompts_active_per_name
+    ON prompts (name)
+    WHERE is_active;
+
+CREATE INDEX IF NOT EXISTS idx_prompts_name_created ON prompts (name, created_at DESC);
+
+
+-- ============================================================================
 -- Trigger: items.updated_at 자동 갱신
 -- ============================================================================
 CREATE OR REPLACE FUNCTION trg_set_updated_at()

@@ -5,7 +5,7 @@ LinkMind Streamlit UI — MVP.
     cd <project_root>
     streamlit run frontend/app.py
 
-LinkMind FastAPI 서버가 LINKMIND_HOST:LINKMIND_PORT 에서 떠 있어야 함.
+LinkMind FastAPI 서버가 LINKMIND_API_BASE 에서 떠 있어야 함.
 """
 
 from __future__ import annotations
@@ -20,43 +20,61 @@ API_BASE = os.getenv("LINKMIND_API_BASE", "http://localhost:8000")
 st.set_page_config(page_title="LinkMind", layout="wide")
 
 st.title("🧠 LinkMind")
-st.caption("개인 AI Research OS — Search · Ask · Ingest")
+st.caption("개인 AI Research OS — Search · Ask · Ingest · Settings")
 
-tab_search, tab_ask, tab_ingest, tab_status = st.tabs(["Search", "Ask", "Ingest", "Status"])
+tab_search, tab_ask, tab_ingest, tab_settings, tab_status = st.tabs(
+    ["Search", "Ask", "Ingest", "Settings", "Status"]
+)
+
 
 # ─── Search ────────────────────────────────────────────────────
 with tab_search:
-    q = st.text_input("검색어", placeholder="예: 3DGS compression, reflector localization")
+    st.caption(
+        "검색어에 `#SLAM`, `#3DGS` 같은 해시태그를 섞으면 해당 tag 로 자동 필터. "
+        "예: `cure model #survival #statistics`. 태그만 입력하면 최신순으로 보여줌."
+    )
+    q = st.text_input("검색어", placeholder="예: 3DGS compression #SLAM")
     top_k = st.slider("Top-K", 1, 30, 10)
     if st.button("검색", type="primary") and q:
         with st.spinner("검색 중..."):
             r = httpx.post(f"{API_BASE}/search", json={"query": q, "top_k": top_k}, timeout=60.0)
             r.raise_for_status()
             data = r.json()
+        if not data["hits"]:
+            st.info("결과 없음. 다른 검색어 또는 태그를 시도해보세요.")
         for hit in data["hits"]:
             with st.container(border=True):
                 st.markdown(f"**[{hit['score']:.3f}] {hit.get('title') or '(no title)'}**")
                 if hit.get("source_url"):
-                    st.markdown(f"🔗 {hit['source_url']}")
-                # summary (AI 요약 한국어) 가 있으면 우선 표시 — 잡음 적고 보기 좋음.
-                # 없으면 snippet (raw chunk 텍스트) 로 fallback.
+                    url = hit["source_url"]
+                    # path-only `/files/...` 는 API_BASE 와 결합해서 절대 URL 로 (PDF inline).
+                    if url.startswith("/"):
+                        url = f"{API_BASE}{url}"
+                    st.markdown(f"🔗 [{url}]({url})")
                 if hit.get("summary"):
                     st.markdown(hit["summary"])
                 elif hit.get("snippet"):
                     st.caption("(요약 미생성 — raw 본문 일부)")
                     st.write(hit["snippet"])
-                st.caption(f"source: `{hit['source_type']}` · tags: {hit.get('tags') or '-'}")
+                meta_parts = [f"source: `{hit['source_type']}`"]
+                if hit.get("tags"):
+                    meta_parts.append("tags: " + " ".join(f"`#{t}`" for t in hit["tags"]))
+                st.caption(" · ".join(meta_parts))
+
 
 # ─── Ask (RAG) ─────────────────────────────────────────────────
 with tab_ask:
-    question = st.text_area("질문", height=100, placeholder="LiDAR GS fusion 관련해서 내가 모은 자료 요약해줘")
-    provider = st.selectbox("LLM Provider", ["(default)", "openai", "claude", "ollama"], index=0)
+    st.caption("Settings 탭에서 default LLM provider / model 을 바꿀 수 있습니다.")
+    question = st.text_area(
+        "질문", height=100, placeholder="LiDAR GS fusion 관련해서 내가 모은 자료 요약해줘"
+    )
     if st.button("질문 보내기", type="primary") and question:
         with st.spinner("LinkMind 검색 + LLM 호출 중..."):
-            req: dict = {"question": question, "top_k": 8}
-            if provider != "(default)":
-                req["llm_provider"] = provider
-            r = httpx.post(f"{API_BASE}/ask", json=req, timeout=120.0)
+            r = httpx.post(
+                f"{API_BASE}/ask",
+                json={"question": question, "top_k": 8},
+                timeout=300.0,
+            )
             r.raise_for_status()
             data = r.json()
         st.markdown(f"### 답변 _(via {data['llm_provider']} / {data['llm_model']})_")
@@ -66,17 +84,77 @@ with tab_ask:
             for i, c in enumerate(data["citations"], start=1):
                 st.markdown(f"[{i}] **{c.get('title') or 'untitled'}** — {c.get('source_url') or ''}")
 
-# ─── Ingest (manual 입력) ──────────────────────────────────────
+
+# ─── Ingest (URL/manual) ───────────────────────────────────────
 with tab_ingest:
-    st.caption("수동 텍스트 ingest. 자동 수집은 OpenClaw 또는 별도 스크립트에서 처리.")
+    st.caption(
+        "URL 한 줄이면 자동 분석 (본문/abstract/keywords 추출 + 한국어 요약 + 해시태그). "
+        "수동 텍스트는 source_type 선택 후 raw_content 붙여넣기."
+    )
+
+    st.subheader("URL / 자동")
+    st.caption(
+        "host 자동 분류 — youtube.com/youtu.be → 영상/플레이리스트, github.com → repo, "
+        "*.pdf 끝나면 PDF URL, 나머지는 일반 웹 페이지(논문 abstract 포함)."
+    )
+    url = st.text_input("URL", placeholder="https://arxiv.org/abs/2401.01234")
+    kind = st.selectbox(
+        "처리 방식",
+        ["auto", "url", "youtube", "github", "pdf"],
+        index=0,
+        help="auto 가 권장. 특정 ingester 를 강제하려면 직접 선택.",
+    )
+    if st.button("URL ingest", type="primary") and url:
+        endpoint = f"/ingest/{kind}" if kind != "auto" else "/ingest/auto"
+        with st.spinner(f"{endpoint} 호출 중..."):
+            r = httpx.post(
+                f"{API_BASE}{endpoint}",
+                json={"url": url, "analyze_now": True},
+                timeout=600.0,
+            )
+            if r.status_code != 200:
+                st.error(f"{r.status_code}: {r.text}")
+            else:
+                result = r.json()
+                st.success(f"item_id: `{result.get('item_id')}` · created={result.get('created')}")
+                if result.get("title"):
+                    st.markdown(f"**제목**: {result['title']}")
+                if result.get("tags"):
+                    st.markdown("**tags**: " + " ".join(f"`#{t}`" for t in result["tags"]))
+                st.caption(
+                    f"chunks_indexed={result.get('chunks_indexed')}, "
+                    f"summary_generated={result.get('summary_generated')}"
+                )
+
+    st.divider()
+    st.subheader("PDF 파일 업로드")
+    pdf_file = st.file_uploader("PDF 선택", type=["pdf"])
+    if pdf_file is not None and st.button("PDF 업로드 ingest"):
+        with st.spinner("PDF 저장 → 텍스트 추출 → 분석..."):
+            r = httpx.post(
+                f"{API_BASE}/ingest/pdf/upload",
+                files={"file": (pdf_file.name, pdf_file.getvalue(), "application/pdf")},
+                timeout=600.0,
+            )
+            if r.status_code != 200:
+                st.error(f"{r.status_code}: {r.text}")
+            else:
+                result = r.json()
+                st.success(f"item_id: `{result.get('item_id')}` · created={result.get('created')}")
+                if result.get("tags"):
+                    st.markdown("**tags**: " + " ".join(f"`#{t}`" for t in result["tags"]))
+
+    st.divider()
+    st.subheader("수동 텍스트")
     source_type = st.selectbox(
         "source_type",
-        ["manual", "url", "telegram", "slack", "github", "arxiv", "youtube", "pdf"],
+        ["manual", "url", "telegram", "slack", "github", "arxiv",
+         "youtube", "youtube_playlist", "pdf"],
     )
     raw_content = st.text_area("raw_content", height=200)
     title = st.text_input("title (옵션)")
     source_url = st.text_input("source_url (옵션)")
-    if st.button("ingest 보내기", type="primary") and raw_content:
+    if st.button("ingest 보내기") and raw_content:
         with st.spinner("ingest 중..."):
             req = {
                 "source_type": source_type,
@@ -88,6 +166,109 @@ with tab_ingest:
             r = httpx.post(f"{API_BASE}/ingest", json=req, timeout=300.0)
             r.raise_for_status()
             st.success(r.json())
+
+
+# ─── Settings ──────────────────────────────────────────────────
+with tab_settings:
+    st.caption(
+        "여기서 바꾼 default 모델 / system prompt 는 DB 에 저장되어 backend 재시작 후에도 유지됩니다. "
+        "prompt 변경은 새 version 으로 저장 (Versioned analysis 원칙) — 옛 버전도 보존."
+    )
+
+    # 현재 effective 상태 + 사용 가능 모델
+    try:
+        llm_snap = httpx.get(f"{API_BASE}/settings/llm", timeout=10.0).json()
+        models = httpx.get(f"{API_BASE}/settings/llm/models", timeout=10.0).json()
+    except Exception as e:                          # noqa: BLE001
+        st.error(f"Settings API 호출 실패: {e}")
+        st.stop()
+
+    eff = llm_snap["effective"]
+    env_def = llm_snap["env_defaults"]
+    override = llm_snap["override"]
+    providers = models["providers"]
+
+    st.subheader("Default LLM")
+    col1, col2 = st.columns(2)
+    with col1:
+        provider_options = ["openai", "claude", "ollama"]
+        provider_idx = provider_options.index(eff["default_llm_provider"]) \
+            if eff["default_llm_provider"] in provider_options else 2
+        new_provider = st.selectbox(
+            "Default provider", provider_options, index=provider_idx
+        )
+    with col2:
+        ollama_models = providers["ollama"]["models"] or [eff["ollama_model"]]
+        current_ollama = eff["ollama_model"]
+        ollama_idx = ollama_models.index(current_ollama) if current_ollama in ollama_models else 0
+        new_ollama_model = st.selectbox(
+            "Ollama model (default provider 가 ollama 일 때 사용)",
+            ollama_models, index=ollama_idx,
+        )
+
+    with st.expander("OpenAI / Claude 모델 (선택)", expanded=False):
+        new_openai_model = st.text_input("OpenAI model", value=eff["openai_model"])
+        new_anthropic_model = st.text_input("Anthropic model", value=eff["anthropic_model"])
+
+    with st.expander("현재 상태 (debug)", expanded=False):
+        st.write({"effective": eff, "env_defaults": env_def, "override": override})
+        if providers["ollama"].get("error"):
+            st.warning(f"Ollama API 조회 에러: {providers['ollama']['error']}")
+
+    if st.button("저장 (LLM 설정)", type="primary"):
+        with st.spinner("저장 중..."):
+            r = httpx.put(
+                f"{API_BASE}/settings/llm",
+                json={
+                    "default_llm_provider": new_provider,
+                    "ollama_model": new_ollama_model,
+                    "openai_model": new_openai_model,
+                    "anthropic_model": new_anthropic_model,
+                },
+                timeout=10.0,
+            )
+            r.raise_for_status()
+            st.success("저장됨. 다음 요청부터 새 default 가 적용됩니다.")
+            st.rerun()
+
+    st.divider()
+
+    # ─── Prompts ──────────────────────────────────────────────
+    st.subheader("System Prompts")
+    prompts = llm_snap["prompts"]
+
+    for name, label in (
+        ("rag_system", "Ask (RAG) system prompt"),
+        ("summary_system", "Ingest summary system prompt"),
+    ):
+        active = prompts.get(name, {})
+        with st.expander(f"{label} — 활성 버전: `{active.get('version') or '미설정'}`",
+                         expanded=False):
+            new_content = st.text_area(
+                "내용",
+                value=active.get("content") or "",
+                height=300,
+                key=f"prompt_content_{name}",
+            )
+            note = st.text_input("변경 사유 (옵션)", key=f"prompt_note_{name}")
+            cols = st.columns([1, 1, 2])
+            if cols[0].button(f"새 버전으로 저장", key=f"save_{name}"):
+                r = httpx.post(
+                    f"{API_BASE}/settings/prompts/{name}",
+                    json={"content": new_content, "note": note or None},
+                    timeout=15.0,
+                )
+                if r.status_code == 200:
+                    st.success("저장 + 활성화됨")
+                    st.rerun()
+                else:
+                    st.error(f"실패: {r.status_code} {r.text}")
+            if cols[1].button(f"버전 히스토리", key=f"hist_{name}"):
+                rh = httpx.get(
+                    f"{API_BASE}/settings/prompts/{name}/versions", timeout=10.0,
+                ).json()
+                st.write(rh)
+
 
 # ─── Status ────────────────────────────────────────────────────
 with tab_status:

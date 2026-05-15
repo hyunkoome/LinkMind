@@ -76,6 +76,29 @@ async def upsert_chunks(
     await client.upsert(collection_name=settings.qdrant_collection, points=points, wait=True)
 
 
+async def set_payload_for_item_chunks(
+    *, item_id: str, payload: dict[str, Any],
+) -> None:
+    """item_id 매칭 모든 chunk 의 payload 에 부분 갱신 (set, replace 아님).
+
+    Ingest 흐름상 chunks 는 summary 보다 먼저 upsert 되므로, tags 가 정해진 후
+    이 함수로 chunk payload 의 tags 를 채워준다. Qdrant 의 tag 필터링이 가능해짐.
+    """
+    settings = get_settings()
+    client = get_qdrant_client()
+    await client.set_payload(
+        collection_name=settings.qdrant_collection,
+        payload=payload,
+        points=qmodels.Filter(
+            must=[qmodels.FieldCondition(
+                key="item_id",
+                match=qmodels.MatchValue(value=item_id),
+            )]
+        ),
+        wait=True,
+    )
+
+
 async def search_chunks(
     *,
     query_vector: list[float],
