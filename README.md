@@ -120,10 +120,18 @@ python scripts/step4_init_qdrant.py      # 컬렉션 생성
 bash scripts/step4_check_qdrant.sh       # 컬렉션 존재 + vector dim 일치 확인
 ```
 
-### 6. FastAPI 백엔드 띄우기
+### 6. 백엔드 + Streamlit 동시 기동 (step5)
 
 ```bash
+# 한 셸 — backend (FastAPI :8000) + frontend (Streamlit :8501) 동시 백그라운드
+bash scripts/step5_run_dev.sh             # log: /tmp/linkmind-*.log
+bash scripts/step5_run_dev.sh --status    # pid + 포트 + 최근 로그
+bash scripts/step5_run_dev.sh --stop      # 둘 다 종료
+bash scripts/step5_run_dev.sh --foreground  # 포어그라운드 (Ctrl+C 종료)
+
+# 또는 셸 둘
 uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
+streamlit run frontend/app.py             # http://localhost:8501
 ```
 
 확인:
@@ -132,20 +140,29 @@ uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
 curl http://localhost:8000/health | jq
 ```
 
-### 7. Streamlit UI
+### 7. 첫 자료 수집 (URL 한 건)
 
 ```bash
-streamlit run frontend/app.py
-# 기본: http://localhost:8501
+python -m backend.ingest.url https://arxiv.org/abs/2106.09685
+# 또는 --force 로 기존 hash 있어도 summary/tags 재계산
+python -m backend.ingest.url --force https://arxiv.org/abs/2106.09685
 ```
 
-### 8. 첫 자료 수집 (URL 한 건)
+또는 Streamlit `Ingest` 탭에서 URL 입력 — host 자동 분류 (youtube / github /
+*.pdf / 일반 페이지) + PDF 파일 업로드. force 체크박스로 재계산 가능.
+
+같은 주제 (같은 arxiv_id / github_repo / doi / yt_id) 의 자료가 여러 modality 로
+들어오면 자동으로 한 **topic** 으로 묶임 — `Topics` 탭에서 확인.
+
+### 8. 테스트 (CI 와 로컬 분리)
 
 ```bash
-python -m backend.ingest.url https://arxiv.org/abs/2401.01234
+bash scripts/tests/total/run_all_local.sh       # 5 카테고리 다 (cpu/embedding/integration/llm/gpu)
+bash scripts/tests/total/run_ci_simulation.sh   # CI 가 도는 것만 (push 전 점검)
+bash scripts/tests/ci/step1_cpu.sh              # 가장 빠른 default suite (≈4s)
 ```
 
-또는 Streamlit `➕ 자료 추가` 탭에서 텍스트 직접 붙여넣기.
+자세한 정책은 `CLAUDE.md` §9 (Testing 정책) + `scripts/tests/README.md`.
 
 ### 9. (선택) OpenClaw 설치
 
@@ -215,11 +232,16 @@ OpenClaw 는 **frontend agent** (사용자가 직접 대화하는 layer). LinkMi
 
 | Phase | 핵심 내용 | 상태 |
 |---|---|---|
-| 1 | Postgres + Qdrant + 기본 ingest + 임베딩 + Semantic Search | 진행 중 (scaffold 완료) |
-| 2 | AI 요약/태깅, Streamlit RAG UI, Slack export 파서, TEI 전환 | 다음 |
-| 3 | 이미지/OCR/멀티모달 RAG, feedback 테이블, **dataset export** | |
-| 4 | Docker 전체 통합, OpenWebUI 연동, **sVLL LoRA 파인튜닝**, vLLM 서빙 | |
+| 1   | Postgres + Qdrant + URL ingest + 임베딩 + Semantic Search + RAG | ✅ 완료 |
+| 2 first wave   | 4종 ingester (url/youtube/github/pdf), Settings UI, DB-backed runtime, 한국어 prompt v3, `/files/{hash}` | ✅ 완료 |
+| 2 second wave  | `ingest --force`, PDF figure 추출, abstract regex 보강, YouTube 썸네일 attachments | ✅ 완료 |
+| **2.5 (Topic 그룹핑)** | `topics`+`item_topics` 스키마, external_ids extractor, 자동 매핑, Topics UI, description 자동 생성 | ✅ 완료 |
+| 2 후반 (Slack/Telegram) | Slack export 파서, Telegram ingest, AI 카테고리 강화, feedback 테이블, dataset exporter | 진행 예정 |
+| 3 | 이미지/OCR/멀티모달 RAG, TEI 임베딩 전환, MinIO object storage | |
+| 4 | **sVLL LoRA 파인튜닝** (LLaMA-Factory + Qwen2-VL), vLLM 서빙 | |
 | 5 | Continuous training loop, on-prem AI 엔진 완성 | |
+
+자세한 backlog 와 phase 별 완료/미구현 항목 — `docs/features_backlog.md` 참고.
 
 ## 라이센스
 

@@ -87,14 +87,96 @@ TodoWrite 는 "현재 세션의 작업 단계" 추적용, 이 문서는 "기능 
 
 ---
 
-## Phase B follow-up (작은 후속 작업, 다음 세션)
+## Phase B follow-up — ✅ 완료 (2026-05-16)
 
-- 다른 두 PDF (SLAM Multi-Camera, FAST-LIVO2) 도 `backfill_summary.py <id> --force` 로 v3 prompt 재요약
-- microsoft/LoRA item 의 `#MIT` 라이선스 tag 보강 — DB 직접 update 또는 `/ingest/github` 에 `--force` 플래그 신설
-- `/files/{hash}` 실제 브라우저 inline 동작 검증 (Streamlit 결과의 source_url 클릭 시)
-- YouTube 영상 썸네일을 attachments 로 저장 (Phase 3 멀티모달 학습 데이터)
-- PDF figure/image 추출 (pymupdf `page.get_images()`, role='figure' attachments)
-- PDF abstract regex 보강 — 일부 논문이 누락됨
+- ✅ SLAM Multi-Camera / FAST-LIVO2 / LiDAR Teach-Radar PDF 3건 모두 `backfill_summary.py --force` 로 v3 prompt 한국어 재요약 + 한국어 해시태그
+- ✅ `ingest --force` 옵션 신설 (url/github/pdf/youtube + API + CLI + Streamlit 체크박스) — 동일 hash 의 기존 item 도 summary/tags/source_metadata 재계산. raw/chunks 보존. `refresh_existing_item_analysis` 헬퍼 공통화
+- ✅ GitHub `raw_body` hash 안정화 (stars/forks 카운터 제거 + sorted topics/languages) → idempotent 보장
+- ✅ microsoft/LoRA `--force` re-ingest → `#MIT` 라이선스 태그 정상 진입 + qwen2.5:14b v3 한국어 요약
+- ✅ `/files/{hash}` endpoint 동작 검증 (200 inline PDF + 400/404 에러 케이스, Streamlit path 결합)
+- ✅ YouTube 영상/playlist 썸네일 → attachments role='thumbnail' (`_pick_best_thumbnail` 가장 큰 해상도 선택, multimodal 학습 데이터)
+- ✅ PDF figure 추출 — pymupdf `page.get_images()` + xref dedup + 200×200 미만 skip → attachments role='figure'
+- ✅ PDF abstract regex 보강 — em-dash/colon/uppercase 라벨 + 'SUPPLEMENTARY MATERIAL'/'I NTRODUCTION'(글자 사이 공백)/Index Terms 종결 + 라벨 없는 fallback (Introduction 직전 단락)
+- ✅ `Qdrant orphan` 정리 헬퍼 (`delete_chunks_for_item`)
+- ✅ `attachments` insert 일반화 (`repository.insert_attachment` — PDF 본체/figure/thumbnail 공통)
+
+---
+
+## Phase 2.5 — Topic 그룹핑 (멀티모달) ✅ 완료 (2026-05-16)
+
+같은 "지식 단위" (논문 + 코드 + 영상 + 블로그) 가 자동으로 한 topic 으로 묶이는 구조. sVLL 학습 시 multi-modal 페어 생성의 기반.
+
+### 2.5.1 — backend / 그룹핑 자동 매핑 ✅
+
+- 새 테이블: `topics(id, slug, title, description, primary_external_id JSONB, tags, ...)` + `item_topics(item_id, topic_id, role, confidence, source, note)`
+  - slug 규칙: `arxiv:<paper_id>` (버전 제외), `github:<owner>/<repo>`, `doi:<lowercased>`, `yt:<video_id>`, `ytpl:<playlist_id>`
+  - role: paper / pdf / code / video / playlist / blog / note
+  - source: 'auto' / 'manual' (UPSERT 우선순위로 manual 이 auto 안 덮어쓰지 못함)
+- `backend/utils/external_ids.py` — 표준 식별자 추출 + 정규화 (URL + 텍스트 모두). `ExternalId` dataclass + `extract_external_ids(url, text)` + `primary_external_id(ids)` (arxiv > doi > github > yt > ytpl 우선순위)
+- ingester 4종 (url/pdf/github/youtube) — ingest 시 source_url + 본문에서 external_ids 추출 → `source_metadata.external_ids` 채움 + `auto_link_topics(item, ids)` 호출. primary 는 confidence 1.0, cross-modal 단서는 0.7
+- `scripts/backfill_external_ids.py` — 기존 item 들에 소급 적용 (`source_metadata.external_ids` 키 유무로 idempotent, `--force` 재계산)
+
+### 2.5.2 — API / UI ✅
+
+- `GET /topics?limit=N` — 최신 updated 순 + item_count
+- `GET /topics/{id_or_slug}` — 상세 + 그 안의 모든 item (role 정렬). slug 안의 '/' 도 처리 (`{slug:path}`)
+- `GET /topics/items/{item_id}` — item 의 topic membership (검색 결과 보강)
+- `POST /topics/items/{id}/link` — 수동 link (source='manual')
+- Streamlit **Topics 탭** 신규: 왼쪽 topic 목록 ↔ 오른쪽 상세 (description / items role 별)
+- Search 결과 보강: hit 별로 `📚 topics: slug(role) ...` 칩 표시
+- 수동 link UI (item_id + slug + role + note)
+
+### 2.5.3 — Topic description 자동 생성 ✅
+
+- `scripts/generate_topic_descriptions.py` — 자식 item 2개 이상인 topic 에 대해 (role, title, summary) 합쳐 LLM 으로 한국어 5-8 bullet 합성 → `topics.description`
+- `_TOPIC_SYSTEM_PROMPT` 별도 — "같은 주제를 여러 modality 가 어떤 관점에서 다루는지" 명시
+- 검증: arxiv:2106.09685 (LoRA paper + GitHub) + arxiv:2511.20343 (AMB3R paper + GitHub + project page)
+
+### 2.5.4 — 실 데이터 검증 ✅
+
+- arxiv:2106.09685 — LoRA paper URL + microsoft/LoRA GitHub → 같은 topic 자동 묶임
+- arxiv:2511.20343 — AMB3R paper + HengyiWang/amb3r + project page (hengyiwang.github.io) 3 modality 자동 묶임 + Livioni/OmniVGGT 는 별 topic (false positive 없음)
+- microsoft/LoRA README 의 paper link 6개 → arxiv:1907.11692/2006.03654/1902.00751/2101.00190 + huggingface/peft 등 6개 secondary topic 자동 생성
+
+---
+
+## Phase 2.5 다음 wave (선택, 미착수)
+
+- 검색 결과에 같은 topic 안의 다른 item 도 자동 인용 (현재는 칩만 표시, 클릭하면 topic 상세)
+- arxiv API 시드 — paper_id 만 있는 topic 의 title/author/published_at 자동 보강
+- paperswithcode slug → github_repo 자동 연결 (현재는 README 에 링크 있어야)
+- Streamlit 의 manual link UI 에서 search-by-slug autocomplete
+
+---
+
+## Testing 인프라 ✅ 완료 (2026-05-16)
+
+새 함수 추가 시 같은 PR 안에서 단위 테스트도 동반 작성하는 정책 (CLAUDE.md §9 참고).
+
+- pytest marker 5종: 마커 없는 default (`cpu`) / `embedding` / `integration` / `llm` / `gpu`
+- `tests/` 디렉토리: `tests/{integration,embedding,gpu,llm}/` 와 root (default suite)
+- 실 fixture: `tests/resources/2003.02014v1.pdf` (SLAM Multi-Cam ICRA 2020, 2.4MB) + `2408.14035v2.pdf` (FAST-LIVO2, 39MB) + `test_urls.json` (그룹핑 fixture)
+- `scripts/tests/` — ci/local/total 디렉토리로 환경 별 분리, README 포함
+- GitHub Actions CI (`.github/workflows/ci.yml`) — `requirements-test.txt` 의 lightweight 의존성 + `pytest -m "not gpu"` (GPU 만 deselect)
+- 총 95 tests:
+  - default 83건 (pure unit + mock — pdf abstract, url classify/tags, hashtag, yt/github parse, github API mock, topic auto-link 5종, real URL 그룹핑 4종, PDF pipeline 8종, external_ids 22종 등)
+  - embedding 3건 (`sentence-transformers MiniLM-L6-v2` CPU smoke)
+  - integration 4건 (FastAPI Topics API live)
+  - llm 2건 (Ollama 짧은 chat smoke, qwen2.5:7b/14b)
+  - gpu 3건 (torch.cuda + sentence-transformers cuda + LocalEmbeddingProvider)
+
+검증 시간 (로컬 RTX 4090):  cpu 4s / embedding 19s / integration 0s / llm 3s / gpu 14s = **5 카테고리 PASS**.
+
+---
+
+## ENV cleanup ✅ 완료 (2026-05-16)
+
+env 는 **인프라 위치** + **시크릿** 만. LLM 런타임 선호 (provider/model) 는 DB `app_settings` + UI Settings 탭.
+
+- 제거: `DEFAULT_LLM_MODEL` (dead env, /health 표시만), `DEFAULT_LLM_PROVIDER` (DB+UI), `OLLAMA_MODEL` / `OPENAI_MODEL` / `ANTHROPIC_MODEL` (DB+UI)
+- 유지: `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `OPENROUTER_API_KEY` (시크릿), `OLLAMA_BASE_URL[_LOCAL]` (인프라 위치), `POSTGRES_*` / `QDRANT_URL` / `EMBEDDING_*` / `HF_HUB_OFFLINE`
+- `backend/runtime_settings.snapshot()` 의 `env_defaults` → `config_defaults` 라벨 변경 (의미 명확화 — 실제는 backend/config.py 의 Field default)
+- Postgres user 비번 `8gD7XF51...` → `real2real` 단순화 (dev 환경 한정)
 
 ---
 
