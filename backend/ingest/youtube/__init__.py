@@ -23,16 +23,20 @@ import json
 import logging
 from typing import Any
 from urllib.parse import parse_qs, urlparse
+from uuid import UUID
 
+import httpx
 from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
 
 from backend.db.connection import get_engine
-from backend.db.repository import find_item_by_hash, insert_item
+from backend.db.repository import find_item_by_hash, insert_attachment, insert_item
 from backend.ingest.url import (
     ExtractedDoc,
     _embed_and_index,
     _generate_and_save_summary,
+    refresh_existing_item_analysis,
 )
+from backend.storage.local import save_bytes
 from backend.utils.hashing import sha256_text
 
 logger = logging.getLogger(__name__)
@@ -136,10 +140,111 @@ def _canonical_playlist_url(playlist_id: str) -> str:
     return f"https://www.youtube.com/playlist?list={playlist_id}"
 
 
+# ── Thumbnail (멀티모달 학습 데이터) ─────────────────────────
+
+
+def _pick_best_thumbnail(info: dict[str, Any]) -> dict[str, Any] | None:
+    """yt-dlp info 에서 가장 큰 해상도의 thumbnail 메타 반환.
+
+    info["thumbnails"] 는 list[{url, width, height, ...}] (가끔 width/height 누락).
+    누락된 경우 마지막 항목이 보통 가장 큰 해상도 — yt-dlp 가 quality 오름차순으로 줌.
+    info["thumbnail"] 단일 URL 만 있으면 그것 사용.
+    """
+    thumbs = info.get("thumbnails") or []
+    if thumbs:
+        # width*height 가 있는 것 우선, 그 안에서 max. 없는 경우 마지막 (yt-dlp 가
+        # 오름차순으로 채워주는 경향). url 없는 항목은 제외.
+        sized = [t for t in thumbs if t.get("url") and t.get("width") and t.get("height")]
+        if sized:
+            best = max(sized, key=lambda t: t["width"] * t["height"])
+            return best
+        # 크기 메타가 없는 케이스 — 끝에서부터 url 있는 것 선택.
+        for t in reversed(thumbs):
+            if t.get("url"):
+                return t
+    single = info.get("thumbnail")
+    if single:
+        return {"url": single, "width": None, "height": None}
+    return None
+
+
+async def _attach_youtube_thumbnail(
+    *,
+    item_id: UUID,
+    info: dict[str, Any],
+    caption: str | None,
+    result: dict[str, Any],
+) -> None:
+    """별도 session 으로 thumbnail 다운로드 + insert. result dict 에 결과 기록.
+
+    실패해도 ingest 자체는 영향 없음 — warning 만 로그.
+    """
+    engine = get_engine()
+    session_factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    try:
+        async with session_factory() as session:
+            saved = await _download_and_save_thumbnail(
+                session, item_id=item_id, info=info, caption=caption,
+            )
+            await session.commit()
+        result["thumbnail_saved"] = saved
+    except Exception as e:  # noqa: BLE001
+        logger.warning(
+            "thumbnail attach 실패 (item=%s): %s: %s",
+            item_id, type(e).__name__, e or "(no message)",
+        )
+        result["thumbnail_saved"] = 0
+
+
+async def _download_and_save_thumbnail(
+    session: AsyncSession,
+    *,
+    item_id: UUID,
+    info: dict[str, Any],
+    role: str = "thumbnail",
+    caption: str | None = None,
+) -> int:
+    """yt-dlp info 에서 best thumbnail 을 골라 storage 저장 + attachments INSERT.
+
+    반환: 1 if saved, 0 if 다운로드 실패 / 메타 없음 / 중복.
+    """
+    thumb = _pick_best_thumbnail(info)
+    if not thumb:
+        return 0
+    url = thumb["url"]
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
+            r = await client.get(url, headers={"User-Agent": "LinkMind/0.1"})
+            r.raise_for_status()
+            data = r.content
+    except Exception as e:  # noqa: BLE001
+        logger.warning("thumbnail 다운로드 실패 (%s): %s", url, e)
+        return 0
+
+    fp, fh, fsize = save_bytes(data)
+    # MIME 은 응답 헤더에서. webp/jpeg 둘 다 흔함.
+    mime = (r.headers.get("content-type") or "image/jpeg").split(";", 1)[0].strip()
+    att_id = await insert_attachment(
+        session,
+        item_id=item_id,
+        file_path=fp,
+        file_hash=fh,
+        file_size=fsize,
+        mime_type=mime,
+        role=role,
+        width=thumb.get("width"),
+        height=thumb.get("height"),
+        caption=caption,
+    )
+    return 1 if att_id is not None else 0
+
+
 # ── Single video ──────────────────────────────────────────────
 
 
-async def ingest_youtube_video(video_url: str, *, analyze_now: bool = True) -> dict[str, Any]:
+async def ingest_youtube_video(
+    video_url: str, *, analyze_now: bool = True, force: bool = False,
+) -> dict[str, Any]:
     parsed = parse_youtube_url(video_url)
     video_id = parsed.get("video_id")
     if not video_id:
@@ -183,7 +288,7 @@ async def ingest_youtube_video(video_url: str, *, analyze_now: bool = True) -> d
         body=raw_body, title=title, abstract=abstract, paper_keywords=paper_keywords,
     )
 
-    return await _save_with_summary(
+    result = await _save_with_summary(
         doc=doc,
         source_type="youtube",
         source_id=video_id,
@@ -199,13 +304,27 @@ async def ingest_youtube_video(video_url: str, *, analyze_now: bool = True) -> d
             "has_transcript": bool(transcript),
         },
         analyze_now=analyze_now,
+        force=force,
     )
+
+    # 썸네일 저장 — 멀티모달 학습 데이터 (Phase 4 sVLL). 신규/force refresh 시 시도.
+    if analyze_now and (result.get("created") or result.get("refreshed")):
+        await _attach_youtube_thumbnail(
+            item_id=UUID(result["item_id"]),
+            info=info,
+            caption=f"thumbnail for video {video_id}",
+            result=result,
+        )
+
+    return result
 
 
 # ── Playlist ──────────────────────────────────────────────────
 
 
-async def ingest_youtube_playlist(playlist_url: str, *, analyze_now: bool = True) -> dict[str, Any]:
+async def ingest_youtube_playlist(
+    playlist_url: str, *, analyze_now: bool = True, force: bool = False,
+) -> dict[str, Any]:
     parsed = parse_youtube_url(playlist_url)
     playlist_id = parsed.get("playlist_id")
     if not playlist_id:
@@ -245,7 +364,7 @@ async def ingest_youtube_playlist(playlist_url: str, *, analyze_now: bool = True
         paper_keywords=paper_keywords,
     )
 
-    return await _save_with_summary(
+    result = await _save_with_summary(
         doc=doc,
         source_type="youtube_playlist",
         source_id=playlist_id,
@@ -258,7 +377,19 @@ async def ingest_youtube_playlist(playlist_url: str, *, analyze_now: bool = True
             "video_ids": [e.get("id") for e in entries],
         },
         analyze_now=analyze_now,
+        force=force,
     )
+
+    # 플레이리스트도 yt-dlp 가 대표 썸네일 (보통 첫 영상) 을 제공.
+    if analyze_now and (result.get("created") or result.get("refreshed")):
+        await _attach_youtube_thumbnail(
+            item_id=UUID(result["item_id"]),
+            info=info,
+            caption=f"thumbnail for playlist {playlist_id}",
+            result=result,
+        )
+
+    return result
 
 
 def _safe_json_dump(data: dict[str, Any]) -> str:
@@ -271,13 +402,15 @@ def _safe_json_dump(data: dict[str, Any]) -> str:
 # ── Dispatcher ────────────────────────────────────────────────
 
 
-async def ingest_youtube(url: str, *, analyze_now: bool = True) -> dict[str, Any]:
+async def ingest_youtube(
+    url: str, *, analyze_now: bool = True, force: bool = False,
+) -> dict[str, Any]:
     """URL 의 형태 (video / playlist) 자동 판별 후 적절한 ingester 호출."""
     parsed = parse_youtube_url(url)
     if parsed["kind"] == "playlist":
-        return await ingest_youtube_playlist(url, analyze_now=analyze_now)
+        return await ingest_youtube_playlist(url, analyze_now=analyze_now, force=force)
     if parsed["kind"] == "video":
-        return await ingest_youtube_video(url, analyze_now=analyze_now)
+        return await ingest_youtube_video(url, analyze_now=analyze_now, force=force)
     raise ValueError(f"YouTube URL 형식을 판별할 수 없습니다: {url}")
 
 
@@ -292,6 +425,7 @@ async def _save_with_summary(
     source_url: str,
     source_metadata: dict[str, Any],
     analyze_now: bool,
+    force: bool = False,
 ) -> dict[str, Any]:
     if not doc.body or len(doc.body.strip()) < 50:
         raise ValueError("본문이 너무 짧아 저장할 수 없습니다")
@@ -304,7 +438,20 @@ async def _save_with_summary(
             session, source_type=source_type, content_hash=content_hash,
         )
         if existing is not None:
-            return {"item_id": str(existing), "created": False, "chunks_indexed": 0}
+            if not force:
+                return {"item_id": str(existing), "created": False, "chunks_indexed": 0}
+            refreshed = await refresh_existing_item_analysis(
+                session, item_id=existing, doc=doc, source_metadata=source_metadata,
+            )
+            return {
+                "item_id": str(existing),
+                "created": False,
+                "refreshed": True,
+                "chunks_indexed": 0,
+                "summary_generated": refreshed["summary"] is not None,
+                "tags": refreshed["tags"],
+                "title": doc.title,
+            }
 
         item_id = await insert_item(
             session,

@@ -32,27 +32,30 @@ from backend.ingest.url import ExtractedDoc, _generate_and_save_summary  # noqa:
 
 async def _fetch_targets(
     session: AsyncSession, *, item_id: UUID | None, force: bool,
-) -> list[tuple[UUID, str, str | None, dict[str, Any]]]:
-    """(item_id, raw_content, title, source_metadata) 튜플 목록."""
+) -> list[tuple[UUID, str, str, str | None, dict[str, Any]]]:
+    """(item_id, source_type, raw_content, title, source_metadata) 튜플 목록."""
     if item_id is not None:
         rows = await session.execute(
             text("""
-                SELECT id, raw_content, title, source_metadata
+                SELECT id, source_type, raw_content, title, source_metadata
                 FROM items WHERE id = :id
             """),
             {"id": str(item_id)},
         )
     elif force:
         rows = await session.execute(text(
-            "SELECT id, raw_content, title, source_metadata FROM items "
+            "SELECT id, source_type, raw_content, title, source_metadata FROM items "
             "ORDER BY ingested_at"
         ))
     else:
         rows = await session.execute(text(
-            "SELECT id, raw_content, title, source_metadata FROM items "
+            "SELECT id, source_type, raw_content, title, source_metadata FROM items "
             "WHERE summary IS NULL ORDER BY ingested_at"
         ))
-    return [(r.id, r.raw_content, r.title, r.source_metadata or {}) for r in rows.all()]
+    return [
+        (r.id, r.source_type, r.raw_content, r.title, r.source_metadata or {})
+        for r in rows.all()
+    ]
 
 
 async def main() -> int:
@@ -76,13 +79,19 @@ async def main() -> int:
 
         print(f"대상 {len(targets)} 건 — 요약 생성 시작")
         ok, fail = 0, 0
-        for iid, raw, title, meta in targets:
-            print(f"  - {iid} ...", end=" ", flush=True)
+        for iid, source_type, raw, title, meta in targets:
+            print(f"  - {iid} ({source_type}) ...", end=" ", flush=True)
+            # PDF 의 경우 abstract 가 본문 앞부분에 있으므로 재추출. 비-PDF 는 raw 그대로
+            # (URL 류는 ingest 시점에 이미 metadata.has_abstract 에 정보 보존됨).
+            abstract: str | None = None
+            if source_type == "pdf":
+                from backend.ingest.pdf import _detect_abstract
+                abstract = _detect_abstract(raw)
             # 옛 row 는 source_metadata 에 paper_keywords 가 없을 수도 — 안전 fallback.
             doc = ExtractedDoc(
                 body=raw,
                 title=title,
-                abstract=None,                # backfill 은 항상 body 앞부분으로 cap.
+                abstract=abstract,
                 paper_keywords=meta.get("paper_keywords") or [],
             )
             res_text, res_tags = await _generate_and_save_summary(

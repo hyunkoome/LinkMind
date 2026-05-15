@@ -30,6 +30,7 @@ from backend.ingest.url import (
     ExtractedDoc,
     _embed_and_index,
     _generate_and_save_summary,
+    refresh_existing_item_analysis,
 )
 from backend.utils.hashing import sha256_text
 
@@ -83,7 +84,9 @@ def _detect_paper_links(text: str) -> list[str]:
     return list(dict.fromkeys(_PAPER_LINK_RE.findall(text or "")))
 
 
-async def ingest_github(url: str, *, analyze_now: bool = True) -> dict[str, Any]:
+async def ingest_github(
+    url: str, *, analyze_now: bool = True, force: bool = False,
+) -> dict[str, Any]:
     owner, repo = parse_github_url(url)
     canonical = f"https://github.com/{owner}/{repo}"
 
@@ -117,16 +120,19 @@ async def ingest_github(url: str, *, analyze_now: bool = True) -> dict[str, Any]
 
     paper_links = _detect_paper_links(readme_text + " " + description)
 
+    # raw_body 는 "콘텐츠" 만 포함 — stars/forks 같이 시간에 따라 변하는 카운터는
+    # source_metadata 에만. 그래야 raw_content_hash 가 안정 → force 재ingest 가
+    # 같은 item 매칭에 성공 (raw-first + idempotent 원칙).
+    # languages dict 도 key 순서 비결정적이라 정렬해서 직렬화.
     header = [
         f"GitHub: {owner}/{repo}",
         f"URL: {canonical}",
         f"Description: {description}" if description else "Description: (none)",
         f"Primary language: {primary_lang or '(unknown)'}",
-        f"Languages: {', '.join(langs.keys()) if langs else '(none)'}",
-        f"Stars: {stars} / Forks: {forks}",
+        f"Languages: {', '.join(sorted(langs.keys())) if langs else '(none)'}",
         f"License: {license_spdx or license_name or '(no license)'}",
         f"Homepage: {homepage}" if homepage else "",
-        f"Topics: {', '.join(topics) if topics else '(none)'}",
+        f"Topics: {', '.join(sorted(topics)) if topics else '(none)'}",
     ]
     if paper_links:
         header.append("Paper links: " + ", ".join(paper_links))
@@ -176,6 +182,7 @@ async def ingest_github(url: str, *, analyze_now: bool = True) -> dict[str, Any]
             "paper_links": paper_links,
         },
         analyze_now=analyze_now,
+        force=force,
     )
 
 
@@ -195,6 +202,7 @@ async def _save_with_summary(
     source_url: str,
     source_metadata: dict[str, Any],
     analyze_now: bool,
+    force: bool = False,
 ) -> dict[str, Any]:
     if not doc.body or len(doc.body.strip()) < 50:
         raise ValueError("본문이 너무 짧아 저장할 수 없습니다")
@@ -207,7 +215,20 @@ async def _save_with_summary(
             session, source_type=source_type, content_hash=content_hash,
         )
         if existing is not None:
-            return {"item_id": str(existing), "created": False, "chunks_indexed": 0}
+            if not force:
+                return {"item_id": str(existing), "created": False, "chunks_indexed": 0}
+            refreshed = await refresh_existing_item_analysis(
+                session, item_id=existing, doc=doc, source_metadata=source_metadata,
+            )
+            return {
+                "item_id": str(existing),
+                "created": False,
+                "refreshed": True,
+                "chunks_indexed": 0,
+                "summary_generated": refreshed["summary"] is not None,
+                "tags": refreshed["tags"],
+                "title": doc.title,
+            }
 
         item_id = await insert_item(
             session,

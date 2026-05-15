@@ -24,15 +24,15 @@ from typing import Any
 from uuid import UUID
 
 import httpx
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
 
 from backend.db.connection import get_engine
-from backend.db.repository import find_item_by_hash, insert_item
+from backend.db.repository import find_item_by_hash, insert_attachment, insert_item
 from backend.ingest.url import (
     ExtractedDoc,
     _embed_and_index,
     _generate_and_save_summary,
+    refresh_existing_item_analysis,
 )
 from backend.storage.local import save_bytes
 from backend.utils.hashing import sha256_text
@@ -122,20 +122,70 @@ def _extract_pdf_text(data: bytes) -> tuple[str, dict[str, Any]]:
     return "", {"extractor": "none"}
 
 
-_ABSTRACT_HEAD_RE = re.compile(
-    r"abstract[\s\.\:\-—]+(.{200,3000}?)(?=\n\s*\n|introduction|1\.\s+introduction|keywords)",
-    re.IGNORECASE | re.DOTALL,
+# Abstract 라벨 — "Abstract", "ABSTRACT", "Abstract:", "Abstract.", "Abstract—" 등.
+# 시작 anchor (^ or \n) 로 본문 중간의 단어 "abstract" 매칭은 피한다.
+_ABSTRACT_LABEL_RE = re.compile(
+    r"(?:^|\n)\s*abstract\s*[\.\:\-—–]*\s*",
+    re.IGNORECASE,
 )
+
+# Abstract 끝 신호 — 다음 섹션 시작 또는 단락 break.
+# PDF 추출이 종종 대문자 제목 글자 사이에 공백을 끼워넣음 ("I NTRODUCTION", "S UMMARY") —
+# `\s?` 를 사이사이에 넣어 그 케이스도 잡는다.
+_INTRO_LOOSE = r"i\s?n\s?t\s?r\s?o\s?d\s?u\s?c\s?t\s?i\s?o\s?n"
+
+# `(?P<sec>...)` 그룹 — 라벨 기반 1차에서는 `\n\s*\n` 도 포함, 라벨 없는 fallback 에서는
+# 명시적 섹션 헤더만 사용 (빈 줄은 author/소속 단락 뒤에도 흔해 fallback 노이즈).
+_SECTION_HEADERS = (
+    rf"(?:^|\n)\s*(?:[1IⅠ]\.?|section\s+[1IⅠ])\s+{_INTRO_LOOSE}"  # "1. Introduction" / "I. Introduction"
+    rf"|(?:^|\n)\s*{_INTRO_LOOSE}\b"
+    r"|(?:^|\n)\s*key\s*words?\b"
+    r"|(?:^|\n)\s*index\s+terms\b"
+    r"|(?:^|\n)\s*ccs\s+concepts\b"
+    r"|(?:^|\n)\s*categories\s+and\s+subject\s+descriptors"
+    r"|(?:^|\n)\s*supplementary\s+material"
+)
+# 1차 (라벨 다음 본문이 어디서 끝나는지) 용 — 빈 줄도 종결로 인정.
+_ABSTRACT_END_RE = re.compile(r"\n\s*\n|" + _SECTION_HEADERS, re.IGNORECASE)
+# 2차 fallback 용 — 빈 줄 제외, 섹션 헤더만.
+_SECTION_ONLY_RE = re.compile(_SECTION_HEADERS, re.IGNORECASE)
 
 
 def _detect_abstract(text_in: str) -> str | None:
-    """본문 앞 5000자에서 'Abstract' 섹션 추출. 실패하면 None."""
-    head = text_in[:5000]
-    m = _ABSTRACT_HEAD_RE.search(head)
-    if not m:
-        return None
-    abs_text = re.sub(r"\s+", " ", m.group(1)).strip()
-    return abs_text if len(abs_text) >= 100 else None
+    """본문 앞 8000자 안에서 abstract 추출. 라벨 우선 → 다음 섹션 직전 단락 fallback.
+
+    잡는 케이스:
+    - "Abstract—..." (em-dash, IEEE/ICRA 스타일)
+    - "Abstract: ..." (학회/저널)
+    - "ABSTRACT\n..." (라벨 한 줄, 다음 줄부터 본문)
+    - 라벨 없이 author/affiliation 다음 첫 단락 (워크샵 페이퍼 일부)
+
+    너무 짧은 (<100자) 후보는 reject — 본문 fallback 으로 넘김 (요약 입력 안정성).
+    """
+    head = text_in[:8000]
+
+    # 1차: 라벨 기반 — "Abstract" 다음의 본문을 다음 섹션/단락까지.
+    m_label = _ABSTRACT_LABEL_RE.search(head)
+    if m_label:
+        body = head[m_label.end():]
+        m_end = _ABSTRACT_END_RE.search(body)
+        end = m_end.start() if m_end else min(5000, len(body))
+        candidate = re.sub(r"\s+", " ", body[:end]).strip()
+        if 100 <= len(candidate) <= 6000:
+            return candidate
+        # 길이 미달이면 그대로 fallback 으로 진행 (라벨이 misleading 인 경우 대비)
+
+    # 2차: 라벨 없음 — "Introduction" 등 명시적 섹션 헤더 직전 단락이 abstract 후보.
+    # 빈 줄(\n\s*\n) 만 보면 저자/소속 단락이 잘못 잡혀서 fallback 이 너무 앞에서 끊김.
+    m_sec = _SECTION_ONLY_RE.search(head)
+    if m_sec and m_sec.start() >= 200:
+        before = head[: m_sec.start()]
+        for para in reversed(re.split(r"\n\s*\n", before)):
+            candidate = re.sub(r"\s+", " ", para).strip()
+            if 200 <= len(candidate) <= 6000 and len(candidate.split()) >= 30:
+                return candidate
+
+    return None
 
 
 async def _insert_pdf_attachment(
@@ -146,29 +196,121 @@ async def _insert_pdf_attachment(
     file_hash: str,
     file_size: int,
 ) -> UUID | None:
-    res = await session.execute(
-        text("""
-            INSERT INTO attachments (
-                item_id, file_path, mime_type, file_size, file_hash, role
-            ) VALUES (
-                :item_id, :file_path, :mime, :size, :hash, 'attachment'
-            )
-            ON CONFLICT (item_id, file_hash) DO NOTHING
-            RETURNING id
-        """),
-        {
-            "item_id": item_id,
-            "file_path": file_path,
-            "mime": "application/pdf",
-            "size": file_size,
-            "hash": file_hash,
-        },
+    return await insert_attachment(
+        session,
+        item_id=item_id,
+        file_path=file_path,
+        file_hash=file_hash,
+        file_size=file_size,
+        mime_type="application/pdf",
+        role="attachment",
     )
-    return res.scalar_one_or_none()
 
 
-async def ingest_pdf(src: str | Path, *, analyze_now: bool = True) -> dict[str, Any]:
-    """PDF 한 건 처리. src 는 로컬 파일 경로 또는 https URL."""
+# pymupdf 가 추출하는 image ext 와 MIME 매핑.
+_EXT_MIME = {
+    "png": "image/png", "jpeg": "image/jpeg", "jpg": "image/jpeg",
+    "tiff": "image/tiff", "tif": "image/tiff", "gif": "image/gif",
+    "webp": "image/webp", "bmp": "image/bmp", "jp2": "image/jp2",
+    "jbig2": "image/jbig2",
+}
+
+# figure 로 간주하는 최소 가로/세로 (px). 그 미만은 페이지 마진의 로고/장식 등
+# 비-figure 일 가능성이 커서 제외 (학습 데이터 노이즈 방지).
+_FIGURE_MIN_DIM = 200
+
+
+def _extract_pdf_figures(data: bytes) -> list[dict[str, Any]]:
+    """pymupdf 로 PDF figure 이미지 추출. xref 기준 dedup.
+
+    반환 항목 dict 구조: {bytes, ext, width, height, page_indices: list[int]}.
+    pypdf 는 image 추출이 약해서 fallback 없이 pymupdf 만 사용.
+    """
+    try:
+        import fitz  # pymupdf
+    except Exception as e:  # noqa: BLE001
+        logger.warning("pymupdf import 실패 (figure 추출 skip): %s", e)
+        return []
+
+    pdf_doc = fitz.open(stream=data, filetype="pdf")
+    by_xref: dict[int, dict[str, Any]] = {}
+    try:
+        for pno, page in enumerate(pdf_doc):
+            try:
+                imgs = page.get_images(full=True)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("PDF page %d get_images 실패: %s", pno, e)
+                continue
+            for img in imgs:
+                xref = img[0]
+                if xref in by_xref:
+                    by_xref[xref]["page_indices"].append(pno)
+                    continue
+                try:
+                    ext = pdf_doc.extract_image(xref)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("PDF figure xref=%d 추출 실패: %s", xref, e)
+                    continue
+                width = int(ext.get("width") or 0)
+                height = int(ext.get("height") or 0)
+                if width < _FIGURE_MIN_DIM or height < _FIGURE_MIN_DIM:
+                    continue
+                by_xref[xref] = {
+                    "bytes": ext.get("image", b""),
+                    "ext": (ext.get("ext") or "png").lower(),
+                    "width": width,
+                    "height": height,
+                    "page_indices": [pno],
+                }
+    finally:
+        pdf_doc.close()
+    return list(by_xref.values())
+
+
+async def _save_pdf_figures(
+    session: AsyncSession, *, item_id: UUID, data: bytes,
+) -> int:
+    """PDF 본문 bytes 에서 figure 추출 + storage 저장 + attachments INSERT.
+
+    반환은 새로 저장된 figure 수 (이미 같은 file_hash 가 있으면 ON CONFLICT 로 skip
+    돼서 count 에 안 들어감 — None 반환).
+    """
+    figures = _extract_pdf_figures(data)
+    saved = 0
+    for idx, fig in enumerate(figures):
+        if not fig["bytes"]:
+            continue
+        try:
+            fp, fh, fsize = save_bytes(fig["bytes"])
+        except Exception as e:  # noqa: BLE001
+            logger.warning("figure %d storage 저장 실패: %s", idx, e)
+            continue
+        att_id = await insert_attachment(
+            session,
+            item_id=item_id,
+            file_path=fp,
+            file_hash=fh,
+            file_size=fsize,
+            mime_type=_EXT_MIME.get(fig["ext"], "application/octet-stream"),
+            role="figure",
+            width=fig["width"],
+            height=fig["height"],
+            caption=f"page {min(fig['page_indices']) + 1} (xref reused on {len(fig['page_indices'])} pages)"
+            if len(fig["page_indices"]) > 1 else f"page {fig['page_indices'][0] + 1}",
+        )
+        if att_id is not None:
+            saved += 1
+    return saved
+
+
+async def ingest_pdf(
+    src: str | Path, *, analyze_now: bool = True, force: bool = False,
+) -> dict[str, Any]:
+    """PDF 한 건 처리. src 는 로컬 파일 경로 또는 https URL.
+
+    force=True 면 동일 hash 기존 item 의 summary/tags/source_metadata 만 재계산
+    (raw_content/chunks/attachments 는 그대로).
+    """
     data, external_url = await _load_pdf_bytes(src)
     file_path, file_hash, file_size = save_bytes(data)
     # 외부 URL 이 있으면 그대로 (출처 추적), 없으면 우리 files endpoint 로 — 브라우저에서
@@ -202,8 +344,39 @@ async def ingest_pdf(src: str | Path, *, analyze_now: bool = True) -> dict[str, 
                 session, item_id=existing, file_path=file_path,
                 file_hash=file_hash, file_size=file_size,
             )
+            # 옛 item 에 figure 가 없을 수 있으니 force 일 때 backfill 시도 — analyze_now
+            # 일 때만 (단순 dedup hit 에서 figure 추출 비용을 강요하지 않음).
+            figures_saved_existing = 0
+            if force and analyze_now:
+                figures_saved_existing = await _save_pdf_figures(
+                    session, item_id=existing, data=data,
+                )
             await session.commit()
-            return {"item_id": str(existing), "created": False, "chunks_indexed": 0}
+            if not force:
+                return {"item_id": str(existing), "created": False, "chunks_indexed": 0}
+            refreshed = await refresh_existing_item_analysis(
+                session,
+                item_id=existing,
+                doc=doc,
+                source_metadata={
+                    "file_hash": file_hash,
+                    "file_size": file_size,
+                    "file_path": file_path,
+                    "pdf": pdf_meta,
+                },
+            )
+            return {
+                "item_id": str(existing),
+                "created": False,
+                "refreshed": True,
+                "chunks_indexed": 0,
+                "figures_saved": figures_saved_existing,
+                "summary_generated": refreshed["summary"] is not None,
+                "tags": refreshed["tags"],
+                "title": title,
+                "file_path": file_path,
+                "file_hash": file_hash,
+            }
 
         item_id = await insert_item(
             session,
@@ -228,10 +401,16 @@ async def ingest_pdf(src: str | Path, *, analyze_now: bool = True) -> dict[str, 
         await session.commit()
 
         chunks_indexed = 0
+        figures_saved = 0
         summary_text: str | None = None
         tags: list[str] = []
         if analyze_now:
             chunks_indexed = await _embed_and_index(session, item_id=item_id, text=body)
+            # figure 추출은 summary 보다 빠르므로 chunks 다음 / summary 이전에 배치.
+            figures_saved = await _save_pdf_figures(
+                session, item_id=item_id, data=data,
+            )
+            await session.commit()
             summary_text, tags = await _generate_and_save_summary(
                 session, item_id=item_id, doc=doc,
             )
@@ -240,6 +419,7 @@ async def ingest_pdf(src: str | Path, *, analyze_now: bool = True) -> dict[str, 
             "item_id": str(item_id),
             "created": True,
             "chunks_indexed": chunks_indexed,
+            "figures_saved": figures_saved,
             "summary_generated": summary_text is not None,
             "tags": tags,
             "title": title,

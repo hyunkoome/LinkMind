@@ -99,6 +99,32 @@ async def set_payload_for_item_chunks(
     )
 
 
+async def delete_chunks_for_item(item_id: str) -> int:
+    """item_id payload 가진 모든 chunk point 를 삭제. 반환은 삭제 시도 status.
+
+    item 자체가 삭제되거나 force 재처리로 chunks 재생성될 때 호출. Postgres 의
+    chunks 는 items 의 ON DELETE CASCADE 로 자동 삭제되지만 Qdrant 는 분리 시스템
+    이라 orphan point 가 남으므로 명시적으로 정리해야 검색 결과에 노이즈가 안 섞임.
+    """
+    settings = get_settings()
+    client = get_qdrant_client()
+    result = await client.delete(
+        collection_name=settings.qdrant_collection,
+        points_selector=qmodels.FilterSelector(
+            filter=qmodels.Filter(
+                must=[qmodels.FieldCondition(
+                    key="item_id",
+                    match=qmodels.MatchValue(value=item_id),
+                )]
+            )
+        ),
+        wait=True,
+    )
+    # qdrant-client 의 UpdateResult 는 status enum 만 — 삭제 건수는 not exposed.
+    # 0 if completed else -1 정도로만 표시.
+    return 0 if str(result.status).endswith("completed") else -1
+
+
 async def search_chunks(
     *,
     query_vector: list[float],

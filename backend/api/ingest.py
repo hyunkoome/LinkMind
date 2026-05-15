@@ -40,12 +40,22 @@ router = APIRouter()
 class UrlIngestRequest(BaseModel):
     url: str = Field(..., min_length=1)
     analyze_now: bool = True
+    force: bool = Field(
+        default=False,
+        description=(
+            "True 면 동일 hash 의 기존 item 도 skip 하지 않고 summary/tags/source_metadata "
+            "를 재계산. raw_content/chunks 는 그대로 두므로 비용은 LLM 요약 1회분."
+        ),
+    )
 
 
 class UrlIngestResponse(BaseModel):
     item_id: str
     created: bool
+    refreshed: bool = False
     chunks_indexed: int = 0
+    figures_saved: int = 0       # PDF only — pymupdf get_images() 로 추출한 figure 수
+    thumbnail_saved: int = 0     # YouTube only — 영상/playlist 썸네일 attachments 수 (0/1)
     summary_generated: bool = False
     tags: list[str] = Field(default_factory=list)
     title: str | None = None
@@ -53,7 +63,9 @@ class UrlIngestResponse(BaseModel):
 
 def _wrap_result(result: dict[str, Any]) -> "UrlIngestResponse":
     return UrlIngestResponse(**{k: result.get(k) for k in (
-        "item_id", "created", "chunks_indexed", "summary_generated", "tags", "title",
+        "item_id", "created", "refreshed", "chunks_indexed",
+        "figures_saved", "thumbnail_saved",
+        "summary_generated", "tags", "title",
     ) if k in result})
 
 
@@ -74,7 +86,9 @@ async def ingest_url_endpoint(payload: UrlIngestRequest) -> UrlIngestResponse:
     """URL 한 줄 ingest — 일반 웹 페이지/논문 abstract. 본격 흐름은 backend.ingest.url."""
     from backend.ingest.url import ingest_url
     try:
-        result = await ingest_url(payload.url, analyze_now=payload.analyze_now)
+        result = await ingest_url(
+            payload.url, analyze_now=payload.analyze_now, force=payload.force,
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:  # noqa: BLE001
@@ -87,7 +101,9 @@ async def ingest_url_endpoint(payload: UrlIngestRequest) -> UrlIngestResponse:
 async def ingest_youtube_endpoint(payload: UrlIngestRequest) -> UrlIngestResponse:
     from backend.ingest.youtube import ingest_youtube
     try:
-        result = await ingest_youtube(payload.url, analyze_now=payload.analyze_now)
+        result = await ingest_youtube(
+            payload.url, analyze_now=payload.analyze_now, force=payload.force,
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:  # noqa: BLE001
@@ -100,7 +116,9 @@ async def ingest_youtube_endpoint(payload: UrlIngestRequest) -> UrlIngestRespons
 async def ingest_github_endpoint(payload: UrlIngestRequest) -> UrlIngestResponse:
     from backend.ingest.github import ingest_github
     try:
-        result = await ingest_github(payload.url, analyze_now=payload.analyze_now)
+        result = await ingest_github(
+            payload.url, analyze_now=payload.analyze_now, force=payload.force,
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:  # noqa: BLE001
@@ -114,7 +132,9 @@ async def ingest_pdf_endpoint(payload: UrlIngestRequest) -> UrlIngestResponse:
     """PDF URL ingest. multipart 파일 업로드는 /ingest/pdf/upload 사용."""
     from backend.ingest.pdf import ingest_pdf
     try:
-        result = await ingest_pdf(payload.url, analyze_now=payload.analyze_now)
+        result = await ingest_pdf(
+            payload.url, analyze_now=payload.analyze_now, force=payload.force,
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:  # noqa: BLE001
@@ -127,6 +147,7 @@ async def ingest_pdf_endpoint(payload: UrlIngestRequest) -> UrlIngestResponse:
 async def ingest_pdf_upload(
     file: UploadFile = File(...),
     analyze_now: bool = True,
+    force: bool = False,
 ) -> UrlIngestResponse:
     """multipart PDF 파일 업로드 ingest. tempfile 로 받아 ingest_pdf 호출."""
     from backend.ingest.pdf import ingest_pdf
@@ -139,7 +160,7 @@ async def ingest_pdf_upload(
             tmp.write(await file.read())
             tmp_path = Path(tmp.name)
         try:
-            result = await ingest_pdf(tmp_path, analyze_now=analyze_now)
+            result = await ingest_pdf(tmp_path, analyze_now=analyze_now, force=force)
         finally:
             tmp_path.unlink(missing_ok=True)
     except ValueError as e:

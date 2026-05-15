@@ -97,26 +97,38 @@ with tab_ingest:
         "host 자동 분류 — youtube.com/youtu.be → 영상/플레이리스트, github.com → repo, "
         "*.pdf 끝나면 PDF URL, 나머지는 일반 웹 페이지(논문 abstract 포함)."
     )
-    url = st.text_input("URL", placeholder="https://arxiv.org/abs/2401.01234")
+    url = st.text_input(
+        "URL",
+        placeholder="arxiv abs / github repo / *.pdf / youtube 영상·플레이리스트 / 일반 웹 페이지",
+    )
     kind = st.selectbox(
         "처리 방식",
         ["auto", "url", "youtube", "github", "pdf"],
         index=0,
         help="auto 가 권장. 특정 ingester 를 강제하려면 직접 선택.",
     )
+    force_url = st.checkbox(
+        "force (기존 item 도 summary/tags 재계산)", value=False,
+        help="동일 hash 의 기존 item 이 있으면 skip 대신 새 fetch 한 abstract/"
+             "metadata 로 summary/tags 만 다시 계산. raw/chunks 는 그대로 보존.",
+    )
     if st.button("URL ingest", type="primary") and url:
         endpoint = f"/ingest/{kind}" if kind != "auto" else "/ingest/auto"
         with st.spinner(f"{endpoint} 호출 중..."):
             r = httpx.post(
                 f"{API_BASE}{endpoint}",
-                json={"url": url, "analyze_now": True},
+                json={"url": url, "analyze_now": True, "force": force_url},
                 timeout=600.0,
             )
             if r.status_code != 200:
                 st.error(f"{r.status_code}: {r.text}")
             else:
                 result = r.json()
-                st.success(f"item_id: `{result.get('item_id')}` · created={result.get('created')}")
+                status = (
+                    "refreshed" if result.get("refreshed")
+                    else ("created" if result.get("created") else "skipped (existing)")
+                )
+                st.success(f"item_id: `{result.get('item_id')}` · {status}")
                 if result.get("title"):
                     st.markdown(f"**제목**: {result['title']}")
                 if result.get("tags"):
@@ -129,11 +141,16 @@ with tab_ingest:
     st.divider()
     st.subheader("PDF 파일 업로드")
     pdf_file = st.file_uploader("PDF 선택", type=["pdf"])
+    force_pdf = st.checkbox(
+        "force (PDF) — 기존 item 도 summary/tags 재계산", value=False,
+        key="force_pdf",
+    )
     if pdf_file is not None and st.button("PDF 업로드 ingest"):
         with st.spinner("PDF 저장 → 텍스트 추출 → 분석..."):
             r = httpx.post(
                 f"{API_BASE}/ingest/pdf/upload",
                 files={"file": (pdf_file.name, pdf_file.getvalue(), "application/pdf")},
+                params={"force": str(force_pdf).lower()},
                 timeout=600.0,
             )
             if r.status_code != 200:

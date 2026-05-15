@@ -36,6 +36,7 @@ from backend.db.repository import (
     insert_chunks,
     insert_item,
     update_item_analysis,
+    update_item_metadata,
 )
 from backend.embedding.factory import get_embedding_provider
 from backend.embedding.qdrant_store import (
@@ -250,10 +251,16 @@ def _normalize_tags(raw: list[str]) -> list[str]:
 # ──────────────────────────────────────────────────────────────
 
 
-async def ingest_url(url: str, *, analyze_now: bool = True) -> dict[str, Any]:
+async def ingest_url(
+    url: str, *, analyze_now: bool = True, force: bool = False,
+) -> dict[str, Any]:
     """URL 하나를 fetch + extract + DB 저장 + (옵션) 임베딩/요약.
 
-    Returns: {"item_id": ..., "created": bool, "chunks_indexed": int,
+    force=True 면 동일 hash 의 기존 item 이 있어도 skip 하지 않고 분석 결과
+    (summary, tags, source_metadata, title) 만 재계산해서 덮어쓴다. raw_content /
+    chunks 는 동일 hash 라 의미상 같으므로 건드리지 않는다 (loss-less + 비용 최소).
+
+    Returns: {"item_id": ..., "created": bool, "refreshed": bool, "chunks_indexed": int,
               "summary_generated": bool, "tags": [...], "title": ...}
     """
     html = await fetch_html(url)
@@ -270,7 +277,26 @@ async def ingest_url(url: str, *, analyze_now: bool = True) -> dict[str, Any]:
             session, source_type="url", content_hash=content_hash
         )
         if existing is not None:
-            return {"item_id": str(existing), "created": False, "chunks_indexed": 0}
+            if not force:
+                return {"item_id": str(existing), "created": False, "chunks_indexed": 0}
+            refreshed = await refresh_existing_item_analysis(
+                session,
+                item_id=existing,
+                doc=doc,
+                source_metadata={
+                    "has_abstract": bool(doc.abstract),
+                    "paper_keywords": doc.paper_keywords,
+                },
+            )
+            return {
+                "item_id": str(existing),
+                "created": False,
+                "refreshed": True,
+                "chunks_indexed": 0,
+                "summary_generated": refreshed["summary"] is not None,
+                "tags": refreshed["tags"],
+                "title": doc.title,
+            }
 
         item_id = await insert_item(
             session,
@@ -308,6 +334,33 @@ async def ingest_url(url: str, *, analyze_now: bool = True) -> dict[str, Any]:
             "tags": final_tags,
             "title": doc.title,
         }
+
+
+async def refresh_existing_item_analysis(
+    session: AsyncSession,
+    *,
+    item_id: UUID,
+    doc: ExtractedDoc,
+    source_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """force 재ingest 의 핵심 — raw/chunks 는 그대로, summary/tags/metadata 만 갱신.
+
+    `_generate_and_save_summary` 는 update_item_analysis 의 COALESCE 흐름이라
+    새 summary/tags 를 NULL 이 아닌 값으로 덮어쓴다. title/source_metadata 는
+    update_item_metadata 로 별도 갱신 (예: 새 fetch 한 GitHub topics, license 등).
+    """
+    if source_metadata is not None or doc.title:
+        await update_item_metadata(
+            session,
+            item_id=item_id,
+            title=doc.title,
+            source_metadata=source_metadata,
+        )
+        await session.commit()
+    summary, tags = await _generate_and_save_summary(
+        session, item_id=item_id, doc=doc,
+    )
+    return {"summary": summary, "tags": tags}
 
 
 async def _generate_and_save_summary(

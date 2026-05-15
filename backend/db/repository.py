@@ -72,6 +72,35 @@ async def insert_item(
     return row.scalar_one()
 
 
+async def update_item_metadata(
+    session: AsyncSession,
+    *,
+    item_id: UUID,
+    title: str | None = None,
+    source_metadata: dict[str, Any] | None = None,
+) -> None:
+    """title / source_metadata 갱신 — `force` 재ingest 시 새 fetch 결과 반영용.
+
+    raw_content / raw_content_hash 는 절대 건드리지 않음 (loss-less 원칙).
+    None 인 인자는 변경하지 않음 (COALESCE).
+    """
+    if title is None and source_metadata is None:
+        return
+    await session.execute(
+        text("""
+            UPDATE items SET
+                title = COALESCE(:title, title),
+                source_metadata = COALESCE(CAST(:meta AS JSONB), source_metadata)
+            WHERE id = :id
+        """),
+        {
+            "id": item_id,
+            "title": title,
+            "meta": _to_json(source_metadata) if source_metadata is not None else None,
+        },
+    )
+
+
 async def update_item_analysis(
     session: AsyncSession,
     *,
@@ -137,6 +166,56 @@ async def get_items_by_ids(session: AsyncSession, ids: list[UUID]) -> dict[UUID,
     )
     rows = res.mappings().all()
     return {r["id"]: dict(r) for r in rows}
+
+
+# ──────────────────────────────────────────────────────────────
+# attachments
+# ──────────────────────────────────────────────────────────────
+
+
+async def insert_attachment(
+    session: AsyncSession,
+    *,
+    item_id: UUID,
+    file_path: str,
+    file_hash: str,
+    file_size: int,
+    mime_type: str,
+    role: str,
+    width: int | None = None,
+    height: int | None = None,
+    caption: str | None = None,
+) -> UUID | None:
+    """일반화된 attachment INSERT — PDF 본체 / figure / YouTube thumbnail 등 공통.
+
+    `ON CONFLICT (item_id, file_hash) DO NOTHING` — 동일 item 에 같은 파일을 여러 번
+    insert 해도 안전 (force 재처리, backfill 등). 충돌 시 None 반환.
+    """
+    res = await session.execute(
+        text("""
+            INSERT INTO attachments (
+                item_id, file_path, mime_type, file_size, file_hash,
+                role, width, height, caption
+            ) VALUES (
+                :item_id, :file_path, :mime, :size, :hash,
+                :role, :w, :h, :caption
+            )
+            ON CONFLICT (item_id, file_hash) DO NOTHING
+            RETURNING id
+        """),
+        {
+            "item_id": item_id,
+            "file_path": file_path,
+            "mime": mime_type,
+            "size": file_size,
+            "hash": file_hash,
+            "role": role,
+            "w": width,
+            "h": height,
+            "caption": caption,
+        },
+    )
+    return res.scalar_one_or_none()
 
 
 # ──────────────────────────────────────────────────────────────
