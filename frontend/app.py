@@ -22,9 +22,20 @@ st.set_page_config(page_title="LinkMind", layout="wide")
 st.title("🧠 LinkMind")
 st.caption("개인 AI Research OS — Search · Ask · Ingest · Settings")
 
-tab_search, tab_ask, tab_ingest, tab_settings, tab_status = st.tabs(
-    ["Search", "Ask", "Ingest", "Settings", "Status"]
+tab_search, tab_ask, tab_ingest, tab_topics, tab_settings, tab_status = st.tabs(
+    ["Search", "Ask", "Ingest", "Topics", "Settings", "Status"]
 )
+
+
+def _fetch_topics_for_item(item_id: str) -> list[dict]:
+    """search hit 별 topic membership 조회 — lazy, 실패해도 검색 자체는 깨지지 않음."""
+    try:
+        r = httpx.get(f"{API_BASE}/topics/items/{item_id}", timeout=5.0)
+        if r.status_code == 200:
+            return r.json()
+    except Exception:  # noqa: BLE001
+        pass
+    return []
 
 
 # ─── Search ────────────────────────────────────────────────────
@@ -60,6 +71,14 @@ with tab_search:
                 if hit.get("tags"):
                     meta_parts.append("tags: " + " ".join(f"`#{t}`" for t in hit["tags"]))
                 st.caption(" · ".join(meta_parts))
+
+                # 같은 topic 에 묶인 다른 modality item — multi-modal 컨텍스트 표시.
+                topics_for_hit = _fetch_topics_for_item(str(hit["item_id"]))
+                if topics_for_hit:
+                    topic_chips = " ".join(
+                        f"`{t['slug']}({t['role']})`" for t in topics_for_hit
+                    )
+                    st.caption(f"📚 topics: {topic_chips}")
 
 
 # ─── Ask (RAG) ─────────────────────────────────────────────────
@@ -183,6 +202,115 @@ with tab_ingest:
             r = httpx.post(f"{API_BASE}/ingest", json=req, timeout=300.0)
             r.raise_for_status()
             st.success(r.json())
+
+
+# ─── Topics ────────────────────────────────────────────────────
+with tab_topics:
+    st.caption(
+        "외부 식별자 (arxiv_id / github_repo / doi / yt 등) 로 자동 그룹핑된 'topic' 단위. "
+        "한 topic 에 같은 주제의 paper / 코드 / 영상 등이 묶입니다. "
+        "수동 link 도 가능 — 자동 매칭이 놓친 케이스용."
+    )
+
+    col_l, col_r = st.columns([1, 2])
+
+    with col_l:
+        st.markdown("### Topics")
+        topic_limit = st.slider("표시 개수", 10, 200, 50)
+        try:
+            t_list = httpx.get(
+                f"{API_BASE}/topics", params={"limit": topic_limit}, timeout=10.0
+            ).json()
+        except Exception as e:                      # noqa: BLE001
+            st.error(f"Topics API 호출 실패: {e}")
+            t_list = []
+
+        if not t_list:
+            st.info("topic 없음. ingest 가 외부 식별자를 발견하면 자동 생성됩니다.")
+
+        # 선택 상태를 session 에 보관
+        if "selected_topic_slug" not in st.session_state:
+            st.session_state.selected_topic_slug = (
+                t_list[0]["slug"] if t_list else None
+            )
+
+        for t in t_list:
+            label = f"**{t['slug']}** ({t['item_count']})"
+            if st.button(label, key=f"pick_{t['slug']}", use_container_width=True):
+                st.session_state.selected_topic_slug = t["slug"]
+
+    with col_r:
+        slug = st.session_state.get("selected_topic_slug")
+        if not slug:
+            st.write("← 왼쪽에서 topic 을 선택하세요.")
+        else:
+            try:
+                detail = httpx.get(
+                    f"{API_BASE}/topics/{slug}", timeout=10.0
+                ).json()
+            except Exception as e:                      # noqa: BLE001
+                st.error(f"topic 상세 조회 실패: {e}")
+                detail = None
+            if detail:
+                st.markdown(f"### {detail['title']}")
+                st.caption(f"slug: `{detail['slug']}`")
+                if detail.get("primary_external_id"):
+                    p = detail["primary_external_id"]
+                    st.caption(f"primary: {p.get('kind')} · {p.get('value')}")
+                if detail.get("description"):
+                    st.markdown(detail["description"])
+                if detail.get("tags"):
+                    st.caption("tags: " + " ".join(f"`#{t}`" for t in detail["tags"]))
+
+                st.markdown(f"#### Items ({len(detail.get('items') or [])})")
+                for it in detail.get("items") or []:
+                    with st.container(border=True):
+                        head = f"**[{it['role']}]** {it.get('title') or '(no title)'}"
+                        if it.get("confidence", 1.0) < 1.0:
+                            head += f"  _(conf {it['confidence']:.2f}, {it['source']})_"
+                        st.markdown(head)
+                        if it.get("source_url"):
+                            url = it["source_url"]
+                            if url.startswith("/"):
+                                url = f"{API_BASE}{url}"
+                            st.markdown(f"🔗 [{url}]({url})")
+                        if it.get("summary"):
+                            with st.expander("요약 보기"):
+                                st.markdown(it["summary"])
+                        if it.get("tags"):
+                            st.caption(
+                                "tags: " + " ".join(f"`#{t}`" for t in it["tags"])
+                            )
+
+    st.divider()
+    st.markdown("### 수동 link (자동이 놓친 케이스)")
+    st.caption("item_id 와 대상 topic slug 를 알아내 직접 link. role = paper/code/video/pdf/blog/note 등.")
+    col1, col2 = st.columns(2)
+    with col1:
+        link_item_id = st.text_input("item_id (UUID)")
+        link_topic_slug = st.text_input("topic slug (예: arxiv:2106.09685)")
+    with col2:
+        link_role = st.selectbox(
+            "role", ["paper", "pdf", "code", "video", "playlist", "blog", "note"]
+        )
+        link_note = st.text_input("note (옵션)")
+    if st.button("link 만들기") and link_item_id and link_topic_slug:
+        try:
+            r = httpx.post(
+                f"{API_BASE}/topics/items/{link_item_id}/link",
+                json={
+                    "topic_slug": link_topic_slug,
+                    "role": link_role,
+                    "note": link_note or None,
+                },
+                timeout=10.0,
+            )
+            if r.status_code == 200:
+                st.success(f"link 생성됨: {r.json()}")
+            else:
+                st.error(f"{r.status_code}: {r.text}")
+        except Exception as e:                          # noqa: BLE001
+            st.error(f"실패: {e}")
 
 
 # ─── Settings ──────────────────────────────────────────────────
