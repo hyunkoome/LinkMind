@@ -98,22 +98,8 @@ async def list_topics_endpoint(
     return [TopicSummary(**row) for row in rows]
 
 
-@router.get("/{topic_id_or_slug}", response_model=TopicDetail)
-async def get_topic(
-    topic_id_or_slug: str,
-    session: AsyncSession = Depends(get_session),
-) -> TopicDetail:
-    """topic 상세 + 그 안의 모든 item (role 정렬). UUID 또는 slug 둘 다 허용."""
-    topic = await _resolve_topic(session, topic_id_or_slug)
-    items = await list_items_for_topic(session, topic_id=topic["id"])
-    return TopicDetail(
-        **{k: topic[k] for k in (
-            "id", "slug", "title", "description", "primary_external_id", "tags",
-        )},
-        items=[TopicItem(**i) for i in items],
-    )
-
-
+# items/ 류는 path catch-all 보다 먼저 정의 — 그래야 '/topics/items/...' 가
+# '/topics/{slug:path}' 에 잡혀 들어가지 않음 (FastAPI 는 등록 순서 매칭).
 @router.get("/items/{item_id}", response_model=list[ItemTopic])
 async def topics_for_item(
     item_id: UUID,
@@ -148,6 +134,24 @@ async def link_item_topic_manual(
         primary_external_id=topic.get("primary_external_id"),
         tags=topic.get("tags") or [],
         role=payload.role, confidence=1.0, source="manual",
+    )
+
+
+# `:path` 컨버터 — slug 안에 '/' 가 들어가는 경우 (예: 'github:owner/repo') 도
+# 그대로 받음. items/ 류 보다 *뒤* 에 정의해야 fall-through 가 의도대로.
+@router.get("/{topic_id_or_slug:path}", response_model=TopicDetail)
+async def get_topic(
+    topic_id_or_slug: str,
+    session: AsyncSession = Depends(get_session),
+) -> TopicDetail:
+    """topic 상세 + 그 안의 모든 item (role 정렬). UUID 또는 slug 둘 다 허용."""
+    topic = await _resolve_topic(session, topic_id_or_slug)
+    items = await list_items_for_topic(session, topic_id=topic["id"])
+    return TopicDetail(
+        **{k: topic[k] for k in (
+            "id", "slug", "title", "description", "primary_external_id", "tags",
+        )},
+        items=[TopicItem(**i) for i in items],
     )
 
 

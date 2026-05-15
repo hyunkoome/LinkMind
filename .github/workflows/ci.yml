@@ -29,7 +29,7 @@ jobs:
           python -m pip install -U pip
           python -m pip install -r requirements-test.txt
 
-      - name: Run pytest
+      - name: Run pytest (CPU-only, mock-based — pytest.ini 가 gpu/integration/llm marker 자동 deselect)
         env:
           # conftest.py 가 더미값을 채우지만 환경에서도 한 번 더 보호.
           POSTGRES_USER: test
