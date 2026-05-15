@@ -191,7 +191,52 @@ CREATE INDEX IF NOT EXISTS idx_prompts_name_created ON prompts (name, created_at
 
 
 -- ============================================================================
--- Trigger: items.updated_at 자동 갱신
+-- topics : 같은 "지식 단위" (논문 + 그 코드 + 발표 영상 + 블로그 글) 를 묶는 단위.
+-- 하나의 topic 에 여러 item 이 매핑되어 multi-modal 학습 데이터 페어 구성 가능.
+-- slug 는 가능하면 외부 식별자 기반 ('arxiv:2106.09685', 'github:microsoft/LoRA',
+-- 'doi:10.xxx', 'yt:videoId', 'ytpl:playlistId') — 자동 dedup 키.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS topics (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    slug TEXT UNIQUE NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT,
+    primary_external_id JSONB,            -- {"kind": "arxiv", "value": "2106.09685"} 등
+    tags TEXT[] DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_topics_primary_ext ON topics USING GIN (primary_external_id);
+CREATE INDEX IF NOT EXISTS idx_topics_tags ON topics USING GIN (tags);
+
+
+-- ============================================================================
+-- item_topics : items ↔ topics many-to-many.
+-- role : 같은 topic 안에서 이 item 의 관점/모달리티
+--        ('paper' = arxiv abstract URL, 'pdf' = PDF 본문,
+--         'code' = GitHub repo, 'video' = YouTube 영상,
+--         'playlist' = YouTube playlist, 'blog' = 일반 웹 글, 'note' = 수동 메모).
+-- confidence/source : auto-link 신뢰도 (0~1) 와 매칭 출처 ('auto'/'manual').
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS item_topics (
+    item_id UUID NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+    topic_id UUID NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+    role TEXT NOT NULL,
+    confidence REAL NOT NULL DEFAULT 1.0,
+    source TEXT NOT NULL DEFAULT 'auto',
+    note TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (item_id, topic_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_item_topics_item ON item_topics(item_id);
+CREATE INDEX IF NOT EXISTS idx_item_topics_topic ON item_topics(topic_id);
+CREATE INDEX IF NOT EXISTS idx_item_topics_role ON item_topics(role);
+
+
+-- ============================================================================
+-- Trigger: items.updated_at / topics.updated_at 자동 갱신
 -- ============================================================================
 CREATE OR REPLACE FUNCTION trg_set_updated_at()
 RETURNS TRIGGER LANGUAGE plpgsql AS $$
@@ -204,4 +249,9 @@ $$;
 DROP TRIGGER IF EXISTS items_set_updated_at ON items;
 CREATE TRIGGER items_set_updated_at
     BEFORE UPDATE ON items
+    FOR EACH ROW EXECUTE FUNCTION trg_set_updated_at();
+
+DROP TRIGGER IF EXISTS topics_set_updated_at ON topics;
+CREATE TRIGGER topics_set_updated_at
+    BEFORE UPDATE ON topics
     FOR EACH ROW EXECUTE FUNCTION trg_set_updated_at();

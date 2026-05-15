@@ -33,8 +33,10 @@ from backend import runtime_settings
 from backend.db.connection import get_engine
 from backend.db.repository import (
     find_item_by_hash,
+    find_or_create_topic,
     insert_chunks,
     insert_item,
+    link_item_to_topic,
     update_item_analysis,
     update_item_metadata,
 )
@@ -47,6 +49,12 @@ from backend.embedding.qdrant_store import (
 from backend.llm.base import ChatMessage
 from backend.llm.factory import get_llm_provider
 from backend.utils.chunking import chunk_text
+from backend.utils.external_ids import (
+    ExternalId,
+    extract_external_ids,
+    primary_external_id,
+    role_for_external_id,
+)
 from backend.utils.hashing import sha256_text
 from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
 
@@ -268,6 +276,9 @@ async def ingest_url(
     if not doc.body or len(doc.body.strip()) < 50:
         raise ValueError(f"URL 에서 본문을 추출하지 못했습니다: {url}")
 
+    # 외부 식별자 (arxiv_id / doi / github_repo / yt video_id 등) — URL + 본문 모두에서.
+    ext_ids = extract_external_ids(url=url, text=doc.body)
+
     content_hash = sha256_text(doc.body)
 
     engine = get_engine()
@@ -286,8 +297,16 @@ async def ingest_url(
                 source_metadata={
                     "has_abstract": bool(doc.abstract),
                     "paper_keywords": doc.paper_keywords,
+                    "external_ids": [
+                        {"kind": x.kind, "value": x.value} for x in ext_ids
+                    ],
                 },
             )
+            await auto_link_topics(
+                session, item_id=existing, source_type="url",
+                title=doc.title, ids=ext_ids,
+            )
+            await session.commit()
             return {
                 "item_id": str(existing),
                 "created": False,
@@ -308,9 +327,17 @@ async def ingest_url(
             source_metadata={
                 "has_abstract": bool(doc.abstract),
                 "paper_keywords": doc.paper_keywords,
+                "external_ids": [
+                    {"kind": x.kind, "value": x.value} for x in ext_ids
+                ],
             },
             title=doc.title,
             source_created_at=None,
+        )
+        # ingest 직후 topic auto-link — 새 item commit 전 같은 transaction 안에서.
+        await auto_link_topics(
+            session, item_id=item_id, source_type="url",
+            title=doc.title, ids=ext_ids,
         )
         await session.commit()
 
@@ -334,6 +361,71 @@ async def ingest_url(
             "tags": final_tags,
             "title": doc.title,
         }
+
+
+async def auto_link_topics(
+    session: AsyncSession,
+    *,
+    item_id: UUID,
+    source_type: str,
+    title: str | None,
+    ids: list[ExternalId],
+) -> list[dict[str, Any]]:
+    """item 의 external_ids 로 topic 자동 매핑.
+
+    primary external_id 로 topic find_or_create → link. 추가로 발견된 다른 external_id
+    (cross-modal 단서, 예: GitHub README 의 arxiv 링크) 도 topic 으로 매핑 — 단,
+    그 단서들은 confidence 를 낮춰서 사용자 confirm 여지를 둠.
+
+    Returns: 매핑된 topics 목록 [{topic_id, slug, role, ...}].
+    """
+    if not ids:
+        return []
+    primary = primary_external_id(ids)
+    if primary is None:
+        return []
+
+    matched: list[dict[str, Any]] = []
+    # 1차: primary external_id 로 main topic
+    main_role = role_for_external_id(primary.kind, source_type)
+    topic, _ = await find_or_create_topic(
+        session,
+        slug=primary.slug,
+        title=title or primary.slug,
+        primary_external_id={"kind": primary.kind, "value": primary.value},
+    )
+    await link_item_to_topic(
+        session,
+        item_id=item_id,
+        topic_id=topic["id"],
+        role=main_role,
+        confidence=1.0,
+        source="auto",
+    )
+    matched.append({**topic, "role": main_role, "confidence": 1.0})
+
+    # 2차: 다른 external_id 들 — 보조 단서 (cross-modal). primary 와 같은 slug 면 skip.
+    for x in ids:
+        if x.slug == primary.slug:
+            continue
+        role = role_for_external_id(x.kind, source_type)
+        side_topic, _ = await find_or_create_topic(
+            session,
+            slug=x.slug,
+            title=title or x.slug,
+            primary_external_id={"kind": x.kind, "value": x.value},
+        )
+        await link_item_to_topic(
+            session,
+            item_id=item_id,
+            topic_id=side_topic["id"],
+            role=role,
+            confidence=0.7,            # cross-modal 단서는 자동이지만 신뢰도 낮춤
+            source="auto",
+        )
+        matched.append({**side_topic, "role": role, "confidence": 0.7})
+
+    return matched
 
 
 async def refresh_existing_item_analysis(

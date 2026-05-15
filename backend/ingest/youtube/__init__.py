@@ -34,9 +34,11 @@ from backend.ingest.url import (
     ExtractedDoc,
     _embed_and_index,
     _generate_and_save_summary,
+    auto_link_topics,
     refresh_existing_item_analysis,
 )
 from backend.storage.local import save_bytes
+from backend.utils.external_ids import ExternalId, extract_external_ids
 from backend.utils.hashing import sha256_text
 
 logger = logging.getLogger(__name__)
@@ -288,6 +290,13 @@ async def ingest_youtube_video(
         body=raw_body, title=title, abstract=abstract, paper_keywords=paper_keywords,
     )
 
+    # YouTube 영상 자체 + 자막/description 안의 arxiv/doi/github 링크 → external_ids.
+    ext_ids: list[ExternalId] = [ExternalId(kind="yt", value=video_id)]
+    for x in extract_external_ids(text=(transcript or "") + " " + description):
+        if x.kind == "yt" and x.value == video_id:
+            continue
+        ext_ids.append(x)
+
     result = await _save_with_summary(
         doc=doc,
         source_type="youtube",
@@ -302,9 +311,11 @@ async def ingest_youtube_video(
             "categories": categories,
             "yt_tags": yt_tags,
             "has_transcript": bool(transcript),
+            "external_ids": [{"kind": x.kind, "value": x.value} for x in ext_ids],
         },
         analyze_now=analyze_now,
         force=force,
+        external_ids=ext_ids,
     )
 
     # 썸네일 저장 — 멀티모달 학습 데이터 (Phase 4 sVLL). 신규/force refresh 시 시도.
@@ -364,6 +375,8 @@ async def ingest_youtube_playlist(
         paper_keywords=paper_keywords,
     )
 
+    ext_ids: list[ExternalId] = [ExternalId(kind="ytpl", value=playlist_id)]
+
     result = await _save_with_summary(
         doc=doc,
         source_type="youtube_playlist",
@@ -375,9 +388,11 @@ async def ingest_youtube_playlist(
             "uploader": uploader,
             "video_count": len(entries),
             "video_ids": [e.get("id") for e in entries],
+            "external_ids": [{"kind": x.kind, "value": x.value} for x in ext_ids],
         },
         analyze_now=analyze_now,
         force=force,
+        external_ids=ext_ids,
     )
 
     # 플레이리스트도 yt-dlp 가 대표 썸네일 (보통 첫 영상) 을 제공.
@@ -426,6 +441,7 @@ async def _save_with_summary(
     source_metadata: dict[str, Any],
     analyze_now: bool,
     force: bool = False,
+    external_ids: list[ExternalId] | None = None,
 ) -> dict[str, Any]:
     if not doc.body or len(doc.body.strip()) < 50:
         raise ValueError("본문이 너무 짧아 저장할 수 없습니다")
@@ -443,6 +459,12 @@ async def _save_with_summary(
             refreshed = await refresh_existing_item_analysis(
                 session, item_id=existing, doc=doc, source_metadata=source_metadata,
             )
+            if external_ids:
+                await auto_link_topics(
+                    session, item_id=existing, source_type=source_type,
+                    title=doc.title, ids=external_ids,
+                )
+                await session.commit()
             return {
                 "item_id": str(existing),
                 "created": False,
@@ -464,6 +486,11 @@ async def _save_with_summary(
             title=doc.title,
             source_created_at=None,
         )
+        if external_ids:
+            await auto_link_topics(
+                session, item_id=item_id, source_type=source_type,
+                title=doc.title, ids=external_ids,
+            )
         await session.commit()
 
         chunks_indexed = 0

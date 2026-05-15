@@ -30,8 +30,10 @@ from backend.ingest.url import (
     ExtractedDoc,
     _embed_and_index,
     _generate_and_save_summary,
+    auto_link_topics,
     refresh_existing_item_analysis,
 )
+from backend.utils.external_ids import ExternalId, extract_external_ids
 from backend.utils.hashing import sha256_text
 
 logger = logging.getLogger(__name__)
@@ -157,6 +159,14 @@ async def ingest_github(
 
     abstract = description if (description and len(description) >= 60) else None
 
+    # github repo 자체 + README 안의 arxiv/doi/다른 github 링크 → external_ids.
+    ext_ids: list[ExternalId] = [ExternalId(kind="github", value=f"{owner}/{repo}")]
+    for x in extract_external_ids(text=readme_text + " " + description):
+        # 자기 자신 (github:{owner}/{repo}) 은 위에서 이미 넣음 — dedup
+        if x.kind == "github" and x.value == f"{owner}/{repo}":
+            continue
+        ext_ids.append(x)
+
     doc = ExtractedDoc(
         body=raw_body, title=f"{owner}/{repo}",
         abstract=abstract, paper_keywords=paper_keywords,
@@ -180,9 +190,11 @@ async def ingest_github(
             "homepage": homepage,
             "default_branch": default_branch,
             "paper_links": paper_links,
+            "external_ids": [{"kind": x.kind, "value": x.value} for x in ext_ids],
         },
         analyze_now=analyze_now,
         force=force,
+        external_ids=ext_ids,
     )
 
 
@@ -203,6 +215,7 @@ async def _save_with_summary(
     source_metadata: dict[str, Any],
     analyze_now: bool,
     force: bool = False,
+    external_ids: list[ExternalId] | None = None,
 ) -> dict[str, Any]:
     if not doc.body or len(doc.body.strip()) < 50:
         raise ValueError("본문이 너무 짧아 저장할 수 없습니다")
@@ -220,6 +233,12 @@ async def _save_with_summary(
             refreshed = await refresh_existing_item_analysis(
                 session, item_id=existing, doc=doc, source_metadata=source_metadata,
             )
+            if external_ids:
+                await auto_link_topics(
+                    session, item_id=existing, source_type=source_type,
+                    title=doc.title, ids=external_ids,
+                )
+                await session.commit()
             return {
                 "item_id": str(existing),
                 "created": False,
@@ -241,6 +260,11 @@ async def _save_with_summary(
             title=doc.title,
             source_created_at=None,
         )
+        if external_ids:
+            await auto_link_topics(
+                session, item_id=item_id, source_type=source_type,
+                title=doc.title, ids=external_ids,
+            )
         await session.commit()
 
         chunks_indexed = 0

@@ -32,9 +32,11 @@ from backend.ingest.url import (
     ExtractedDoc,
     _embed_and_index,
     _generate_and_save_summary,
+    auto_link_topics,
     refresh_existing_item_analysis,
 )
 from backend.storage.local import save_bytes
+from backend.utils.external_ids import extract_external_ids
 from backend.utils.hashing import sha256_text
 
 logger = logging.getLogger(__name__)
@@ -324,6 +326,9 @@ async def ingest_pdf(
     title = (info.get("Title") or info.get("/Title") or "").strip() or None
     abstract = _detect_abstract(body)
 
+    # PDF 본문에서 arxiv id / DOI / GitHub repo / arxiv link 등 추출 — topic auto-link 단서.
+    ext_ids = extract_external_ids(url=external_url, text=body[:20000])
+
     paper_keywords: list[str] = ["pdf"]
     if (info.get("Author") or info.get("/Author") or "").strip():
         paper_keywords.append("has-author-meta")
@@ -363,8 +368,16 @@ async def ingest_pdf(
                     "file_size": file_size,
                     "file_path": file_path,
                     "pdf": pdf_meta,
+                    "external_ids": [
+                        {"kind": x.kind, "value": x.value} for x in ext_ids
+                    ],
                 },
             )
+            await auto_link_topics(
+                session, item_id=existing, source_type="pdf",
+                title=doc.title, ids=ext_ids,
+            )
+            await session.commit()
             return {
                 "item_id": str(existing),
                 "created": False,
@@ -390,6 +403,9 @@ async def ingest_pdf(
                 "file_size": file_size,
                 "file_path": file_path,
                 "pdf": pdf_meta,
+                "external_ids": [
+                    {"kind": x.kind, "value": x.value} for x in ext_ids
+                ],
             },
             title=title,
             source_created_at=None,
@@ -397,6 +413,11 @@ async def ingest_pdf(
         await _insert_pdf_attachment(
             session, item_id=item_id, file_path=file_path,
             file_hash=file_hash, file_size=file_size,
+        )
+        # PDF 의 arxiv_id / DOI / paper-link 단서로 자동 topic 매핑.
+        await auto_link_topics(
+            session, item_id=item_id, source_type="pdf",
+            title=title, ids=ext_ids,
         )
         await session.commit()
 

@@ -257,6 +257,172 @@ async def insert_chunks(
 
 
 # ──────────────────────────────────────────────────────────────
+# topics  +  item_topics  (지식 단위 그룹핑)
+# ──────────────────────────────────────────────────────────────
+
+
+async def find_topic_by_slug(
+    session: AsyncSession, slug: str,
+) -> dict[str, Any] | None:
+    res = await session.execute(
+        text("""
+            SELECT id, slug, title, description, primary_external_id, tags,
+                   created_at, updated_at
+            FROM topics WHERE slug = :s
+        """),
+        {"s": slug},
+    )
+    row = res.mappings().one_or_none()
+    return dict(row) if row else None
+
+
+async def create_topic(
+    session: AsyncSession,
+    *,
+    slug: str,
+    title: str,
+    primary_external_id: dict[str, str] | None = None,
+    description: str | None = None,
+    tags: list[str] | None = None,
+) -> dict[str, Any]:
+    res = await session.execute(
+        text("""
+            INSERT INTO topics (slug, title, description, primary_external_id, tags)
+            VALUES (
+                :slug, :title, :description,
+                CAST(:peid AS JSONB),
+                COALESCE(:tags, '{}'::text[])
+            )
+            RETURNING id, slug, title, description, primary_external_id, tags,
+                      created_at, updated_at
+        """),
+        {
+            "slug": slug,
+            "title": title,
+            "description": description,
+            "peid": _to_json(primary_external_id) if primary_external_id is not None else None,
+            "tags": tags,
+        },
+    )
+    return dict(res.mappings().one())
+
+
+async def find_or_create_topic(
+    session: AsyncSession,
+    *,
+    slug: str,
+    title: str,
+    primary_external_id: dict[str, str] | None = None,
+) -> tuple[dict[str, Any], bool]:
+    """slug 기준 upsert. 반환 (topic, created)."""
+    existing = await find_topic_by_slug(session, slug)
+    if existing is not None:
+        return existing, False
+    topic = await create_topic(
+        session,
+        slug=slug,
+        title=title,
+        primary_external_id=primary_external_id,
+    )
+    return topic, True
+
+
+async def link_item_to_topic(
+    session: AsyncSession,
+    *,
+    item_id: UUID,
+    topic_id: UUID,
+    role: str,
+    confidence: float = 1.0,
+    source: str = "auto",
+    note: str | None = None,
+) -> bool:
+    """item ↔ topic link. 이미 있으면 role/source/note 만 갱신 (manual 이 auto 를 덮음).
+
+    반환: 새로 만들어졌으면 True, 기존이면 False.
+    """
+    # auto 가 기존 manual 을 덮어쓰면 안 되므로 source 우선순위 보호:
+    # 새 source 가 manual 이거나, 기존이 auto 면 갱신. 그 외엔 들어온 정보는 무시.
+    res = await session.execute(
+        text("""
+            INSERT INTO item_topics (item_id, topic_id, role, confidence, source, note)
+            VALUES (:item_id, :topic_id, :role, :conf, :source, :note)
+            ON CONFLICT (item_id, topic_id) DO UPDATE
+                SET role = CASE
+                        WHEN EXCLUDED.source = 'manual' OR item_topics.source = 'auto'
+                        THEN EXCLUDED.role ELSE item_topics.role
+                    END,
+                    confidence = GREATEST(item_topics.confidence, EXCLUDED.confidence),
+                    source = CASE
+                        WHEN EXCLUDED.source = 'manual' THEN 'manual'
+                        ELSE item_topics.source
+                    END,
+                    note = COALESCE(EXCLUDED.note, item_topics.note)
+            RETURNING (xmax = 0) AS inserted
+        """),
+        {
+            "item_id": item_id, "topic_id": topic_id, "role": role,
+            "conf": confidence, "source": source, "note": note,
+        },
+    )
+    row = res.first()
+    return bool(row and row[0])
+
+
+async def list_items_for_topic(
+    session: AsyncSession, *, topic_id: UUID,
+) -> list[dict[str, Any]]:
+    res = await session.execute(
+        text("""
+            SELECT i.id, i.source_type, i.source_url, i.title, i.summary,
+                   i.tags, it.role, it.confidence, it.source, it.note,
+                   i.ingested_at
+            FROM item_topics it
+            JOIN items i ON i.id = it.item_id
+            WHERE it.topic_id = :tid
+            ORDER BY it.role, i.ingested_at
+        """),
+        {"tid": topic_id},
+    )
+    return [dict(r) for r in res.mappings().all()]
+
+
+async def list_topics_for_item(
+    session: AsyncSession, *, item_id: UUID,
+) -> list[dict[str, Any]]:
+    res = await session.execute(
+        text("""
+            SELECT t.id, t.slug, t.title, t.primary_external_id, t.tags,
+                   it.role, it.confidence, it.source
+            FROM item_topics it
+            JOIN topics t ON t.id = it.topic_id
+            WHERE it.item_id = :iid
+        """),
+        {"iid": item_id},
+    )
+    return [dict(r) for r in res.mappings().all()]
+
+
+async def list_topics(
+    session: AsyncSession, *, limit: int = 50,
+) -> list[dict[str, Any]]:
+    res = await session.execute(
+        text("""
+            SELECT t.id, t.slug, t.title, t.primary_external_id, t.tags,
+                   t.created_at, t.updated_at,
+                   COUNT(it.item_id) AS item_count
+            FROM topics t
+            LEFT JOIN item_topics it ON it.topic_id = t.id
+            GROUP BY t.id
+            ORDER BY t.updated_at DESC
+            LIMIT :lim
+        """),
+        {"lim": limit},
+    )
+    return [dict(r) for r in res.mappings().all()]
+
+
+# ──────────────────────────────────────────────────────────────
 # app_settings  (런타임 key-value 설정)
 # ──────────────────────────────────────────────────────────────
 
