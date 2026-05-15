@@ -89,6 +89,16 @@ class Settings(BaseSettings):
     openclaw_gateway_url: str = Field(default="http://localhost:7890")
     openclaw_api_key: str = Field(default="")
 
+    # ─── Telegram inbox watcher (scripts/telegram_inbox_watcher.py) ──
+    # CLAUDE.md §3 정신상 LinkMind backend 안에 봇 코드는 두지 않고, scripts/ 의
+    # 별 process daemon 이 채널 메시지를 받아 LinkMind HTTP API 를 호출. 아래는
+    # 그 daemon 이 읽을 시크릿/위치만. 미설정이면 watcher 가 자체 skip.
+    # api_id 는 정수지만 env 가 빈 문자열일 수 있으므로 str 로 받고 사용 시 int().
+    telegram_api_id: str = Field(default="")       # my.telegram.org 에서 발급 (숫자)
+    telegram_api_hash: str = Field(default="")     # my.telegram.org 에서 발급 (32자)
+    telegram_session_path: str = Field(default="volumes/telegram/inbox.session")
+    telegram_inbox_invite: str = Field(default="") # 채널 invite link 또는 채널명/ID
+
     # ─── Storage ──────────────────────────────────────────────────
     storage_backend: Literal["local", "minio"] = Field(default="local")
     storage_local_path: str = Field(default="./volumes/archive")

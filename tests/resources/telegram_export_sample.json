@@ -1,0 +1,54 @@
+{
+  "name": "LinkMind-Inbox",
+  "type": "private_supergroup",
+  "id": -1001234567890,
+  "messages": [
+    {
+      "id": 1,
+      "type": "service",
+      "date": "2026-05-16T10:00:00",
+      "date_unixtime": "1810540800",
+      "action": "create_channel"
+    },
+    {
+      "id": 2,
+      "type": "message",
+      "date": "2026-05-16T10:05:00",
+      "date_unixtime": "1810541100",
+      "from": "hkkim",
+      "from_id": "user1234",
+      "text": "오늘 본 논문 https://arxiv.org/abs/2511.20343"
+    },
+    {
+      "id": 3,
+      "type": "message",
+      "date": "2026-05-16T10:10:00",
+      "date_unixtime": "1810541400",
+      "from": "hkkim",
+      "from_id": "user1234",
+      "text": [
+        "관련 코드 ",
+        {"type": "text_link", "text": "github.com/HengyiWang/amb3r", "href": "https://github.com/HengyiWang/amb3r"},
+        " — 같은 주제."
+      ]
+    },
+    {
+      "id": 4,
+      "type": "message",
+      "date": "2026-05-16T10:20:00",
+      "date_unixtime": "1810542000",
+      "from": "hkkim",
+      "from_id": "user1234",
+      "text": "오늘 정리한 메모: multi-view 3D reconstruction 의 dense reconstruction 흐름에서 voxel-based 가 다시 부상하는 듯. AMB3R + FAST-LIVO2 둘 다 voxel map 으로 수렴."
+    },
+    {
+      "id": 5,
+      "type": "message",
+      "date": "2026-05-16T10:25:00",
+      "date_unixtime": "1810542300",
+      "from": "hkkim",
+      "from_id": "user1234",
+      "text": "ㅋ"
+    }
+  ]
+}
