@@ -1,0 +1,44 @@
+{
+  "_comment": [
+    "그룹핑 / external_ids 추출 테스트용 실 URL 모음.",
+    "새 URL 추가 시 이 파일만 갱신 — 테스트 코드는 그대로.",
+    "expected_external_ids 는 URL 자체에서 (본문 분석 없이) 뽑아야 하는 식별자."
+  ],
+  "groups": [
+    {
+      "name": "amber",
+      "description": "같은 프로젝트의 paper / code / project page → 같은 arxiv topic 으로 묶여야",
+      "urls": [
+        {
+          "kind": "project_page",
+          "url": "https://hengyiwang.github.io/projects/amber",
+          "expected_external_ids": [],
+          "note": "github.io project page — URL 자체엔 식별자 없음. 본문 분석 시 arxiv/github 링크 잡힘."
+        },
+        {
+          "kind": "code",
+          "url": "https://github.com/HengyiWang/amb3r",
+          "expected_external_ids": [{"kind": "github", "value": "HengyiWang/amb3r"}]
+        },
+        {
+          "kind": "paper",
+          "url": "https://arxiv.org/abs/2511.20343",
+          "expected_external_ids": [{"kind": "arxiv", "value": "2511.20343"}]
+        }
+      ],
+      "expected_shared_topics": ["arxiv:2511.20343"]
+    },
+    {
+      "name": "omni",
+      "description": "amber 와 무관한 별도 프로젝트 — control 그룹 (그룹핑이 false positive 없어야)",
+      "urls": [
+        {
+          "kind": "code",
+          "url": "https://github.com/Livioni/OmniVGGT-official",
+          "expected_external_ids": [{"kind": "github", "value": "Livioni/OmniVGGT-official"}]
+        }
+      ],
+      "expected_shared_topics": []
+    }
+  ]
+}

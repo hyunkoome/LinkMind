@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Unit tests (no infra)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: "pip"
+
+      - name: Install lightweight test deps
+        # 전체 requirements.txt 는 torch/sentence-transformers 가 들어가 무거우므로
+        # 단위 테스트 (DB/GPU 없이) 용으로 분리한 requirements-test.txt 사용.
+        run: |
+          python -m pip install -U pip
+          python -m pip install -r requirements-test.txt
+
+      - name: Run pytest
+        env:
+          # conftest.py 가 더미값을 채우지만 환경에서도 한 번 더 보호.
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: test
+        run: |
+          python -m pytest tests/ -v --maxfail=5
