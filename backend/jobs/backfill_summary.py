@@ -20,7 +20,6 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sqlalchemy import text  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker  # noqa: E402

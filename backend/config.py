@@ -89,7 +89,7 @@ class Settings(BaseSettings):
     openclaw_gateway_url: str = Field(default="http://localhost:7890")
     openclaw_api_key: str = Field(default="")
 
-    # ─── Telegram inbox watcher (scripts/telegram_inbox_watcher.py) ──
+    # ─── Telegram inbox watcher (ai_agents/telegram_inbox_watcher.py) ──
     # CLAUDE.md §3 정신상 LinkMind backend 안에 봇 코드는 두지 않고, scripts/ 의
     # 별 process daemon 이 채널 메시지를 받아 LinkMind HTTP API 를 호출. 아래는
     # 그 daemon 이 읽을 시크릿/위치만. 미설정이면 watcher 가 자체 skip.

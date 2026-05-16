@@ -116,7 +116,7 @@ bash scripts/step3_check_ollama.sh       # 컨테이너/API/모델 존재/genera
 bge-m3 모델 첫 로드(약 1.4GB) 후 컬렉션 생성:
 
 ```bash
-python scripts/step4_init_qdrant.py      # 컬렉션 생성
+python -m backend.jobs.init_qdrant      # 컬렉션 생성
 bash scripts/step4_check_qdrant.sh       # 컬렉션 존재 + vector dim 일치 확인
 ```
 
@@ -171,10 +171,10 @@ LinkMind-Inbox 같은 텔레그램 채널에 URL/메모 던지면 자동 ingest 
 ```bash
 # https://my.telegram.org 에서 API ID/Hash 발급 후 env/dev.env 에 채우기
 # (자세히는 docs/telegram_setup.md)
-bash scripts/telegram_inbox_watcher.sh                # 첫 실행: SMS 인증
-bash scripts/telegram_inbox_watcher.sh --daemon       # 백그라운드 daemon
-bash scripts/telegram_inbox_watcher.sh --restart      # 코드 변경 후 재기동 (idempotent)
-bash scripts/telegram_inbox_watcher.sh --backfill 50  # 채널의 최근 N개도 처리
+bash ai_agents/telegram_inbox_watcher.sh                # 첫 실행: SMS 인증
+bash ai_agents/telegram_inbox_watcher.sh --daemon       # 백그라운드 daemon
+bash ai_agents/telegram_inbox_watcher.sh --restart      # 코드 변경 후 재기동 (idempotent)
+bash ai_agents/telegram_inbox_watcher.sh --backfill 50  # 채널의 최근 N개도 처리
 tail -f /tmp/telegram-watcher.log                     # 로그
 ```
 

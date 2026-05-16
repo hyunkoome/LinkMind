@@ -133,7 +133,7 @@ echo "────────────────────────�
 
 if [ "$FAIL" -eq 0 ]; then
     echo "🎉 Ollama 정상. 다음 단계:"
-    echo "   python scripts/step4_init_qdrant.py      # Qdrant 컬렉션 생성"
+    echo "   python -m backend.jobs.init_qdrant      # Qdrant 컬렉션 생성"
     exit 0
 else
     echo "💥 ${FAIL} 개 항목 실패 — 'docker logs ${CONTAINER_NAME}' 로 원인 확인"

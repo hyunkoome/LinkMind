@@ -111,11 +111,11 @@ _start_telegram() {
     if ! _telegram_env_ready; then
         echo "ℹ️  telegram watcher skip — TELEGRAM_API_ID/HASH 또는 session 미설정"
         echo "    준비:  docs/telegram_setup.md"
-        echo "    첫 인증: bash scripts/telegram_inbox_watcher.sh (foreground, SMS 입력)"
+        echo "    첫 인증: bash ai_agents/telegram_inbox_watcher.sh (foreground, SMS 입력)"
         return
     fi
     echo "▶️  telegram watcher 기동 — log=$TELEGRAM_LOG"
-    nohup "$VENV_PY" scripts/telegram_inbox_watcher.py > "$TELEGRAM_LOG" 2>&1 &
+    nohup "$VENV_PY" ai_agents/telegram_inbox_watcher.py > "$TELEGRAM_LOG" 2>&1 &
     echo $! > "$TELEGRAM_PIDFILE"
     disown 2>/dev/null || true
 }
@@ -133,16 +133,16 @@ _health_check() {
 
 _stop_telegram() {
     # telegram watcher 는 자체 pidfile + 이름 매칭. step5 가 띄운 게 아닌 외부에서
-    # 띄운 watcher (예: scripts/telegram_inbox_watcher.sh --daemon) 도 같이 정리.
+    # 띄운 watcher (예: ai_agents/telegram_inbox_watcher.sh --daemon) 도 같이 정리.
     if _pid_alive "$TELEGRAM_PIDFILE"; then
         echo "  · telegram (pid=$(cat "$TELEGRAM_PIDFILE")) 종료"
         kill "$(cat "$TELEGRAM_PIDFILE")" 2>/dev/null || true
         sleep 1
         kill -9 "$(cat "$TELEGRAM_PIDFILE")" 2>/dev/null || true
     fi
-    if pgrep -f "scripts/telegram_inbox_watcher.py" > /dev/null 2>&1; then
+    if pgrep -f "ai_agents/telegram_inbox_watcher.py" > /dev/null 2>&1; then
         echo "  · 외부 watcher process 도 정리"
-        pkill -f "scripts/telegram_inbox_watcher.py" 2>/dev/null || true
+        pkill -f "ai_agents/telegram_inbox_watcher.py" 2>/dev/null || true
     fi
     rm -f "$TELEGRAM_PIDFILE"
 }

@@ -71,7 +71,7 @@ echo "[2-3] 컬렉션 정보 조회"
 COLL_JSON="$(curl -fsS "http://127.0.0.1:${QDRANT_HTTP_PORT}/collections/${QDRANT_COLLECTION}" 2>/dev/null || true)"
 
 if [ -z "$COLL_JSON" ] || ! printf '%s' "$COLL_JSON" | grep -q '"status":"ok"'; then
-    fail "컬렉션 '${QDRANT_COLLECTION}' 조회 실패 — 'python scripts/step4_init_qdrant.py' 먼저"
+    fail "컬렉션 '${QDRANT_COLLECTION}' 조회 실패 — 'python -m backend.jobs.init_qdrant' 먼저"
     echo ""
     echo "💥 컬렉션 없음 — 중단"
     exit 1

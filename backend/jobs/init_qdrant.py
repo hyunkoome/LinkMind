@@ -19,7 +19,6 @@ import sys
 from pathlib import Path
 
 # 프로젝트 루트를 sys.path 에 추가 (스크립트로 실행 시 필요)
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from backend.config import get_settings  # noqa: E402
 from backend.embedding.factory import get_embedding_provider  # noqa: E402

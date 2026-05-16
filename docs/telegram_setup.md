@@ -4,7 +4,7 @@ LinkMind 의 자료 유입 경로 중 하나. 사용자가 텔레그램 채널 (
 에 URL/텍스트를 던지면 watcher 가 받아 LinkMind 로 자동 ingest.
 
 **CLAUDE.md §3 NEVER 규정 준수**: LinkMind backend 안에 봇 코드를 두지 않음.
-실시간 수신은 `scripts/telegram_inbox_watcher.py` (별 process daemon) 가 담당하고,
+실시간 수신은 `ai_agents/telegram_inbox_watcher.py` (별 process daemon) 가 담당하고,
 backend.ingest.telegram 모듈은 단순 파서 + ingest helper 만 노출.
 
 ## 1. API ID/Hash 발급 (한 번)
@@ -35,7 +35,7 @@ TELEGRAM_INBOX_INVITE=https://t.me/+2ztAGOP93_Q3NzQ1
 ## 2. 첫 실행 — 인증 (한 번)
 
 ```bash
-bash scripts/telegram_inbox_watcher.sh
+bash ai_agents/telegram_inbox_watcher.sh
 ```
 
 대화식 단계:
@@ -51,15 +51,15 @@ bash scripts/telegram_inbox_watcher.sh
 
 ```bash
 # 포어그라운드 (디버그용)
-bash scripts/telegram_inbox_watcher.sh
+bash ai_agents/telegram_inbox_watcher.sh
 
 # 채널의 최근 50개 메시지도 함께 처리
-bash scripts/telegram_inbox_watcher.sh --backfill 50
+bash ai_agents/telegram_inbox_watcher.sh --backfill 50
 
 # 백그라운드 daemon
-bash scripts/telegram_inbox_watcher.sh --daemon
-bash scripts/telegram_inbox_watcher.sh --status   # pid 확인
-bash scripts/telegram_inbox_watcher.sh --stop
+bash ai_agents/telegram_inbox_watcher.sh --daemon
+bash ai_agents/telegram_inbox_watcher.sh --status   # pid 확인
+bash ai_agents/telegram_inbox_watcher.sh --stop
 
 # 로그 보기
 tail -f /tmp/telegram-watcher.log
@@ -73,7 +73,7 @@ watcher 가 새 메시지 도착 시:
 Telegram 채널
     │ NewMessage event
     ▼
-scripts/telegram_inbox_watcher.py
+ai_agents/telegram_inbox_watcher.py
     │ TelegramMessage dataclass
     ▼
 backend.ingest.telegram.ingest_telegram_message()

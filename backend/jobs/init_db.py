@@ -17,7 +17,6 @@ import sys
 from pathlib import Path
 
 # 프로젝트 루트를 sys.path에 추가 (scripts/ 폴더에서 실행해도 backend 모듈 import 가능)
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from backend.embedding.factory import get_embedding_provider          # noqa: E402
 from backend.embedding.qdrant_store import ensure_collection          # noqa: E402

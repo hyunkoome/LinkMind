@@ -159,7 +159,7 @@ docker exec "${CONTAINER_NAME}" ollama list 2>/dev/null | sed 's/^/    /'
 echo ""
 echo "다음 단계:"
 echo "  • Ollama 검증:              bash scripts/step3_check_ollama.sh"
-echo "  • Qdrant 컬렉션 생성:       python scripts/step4_init_qdrant.py"
+echo "  • Qdrant 컬렉션 생성:       python -m backend.jobs.init_qdrant"
 echo "  • LinkMind 백엔드 띄우기:  uvicorn backend.main:app --reload"
 echo "  • 다른 모델 추가 받기:     bash scripts/ollama_pull.sh <model>"
 echo "  • Ollama 채팅 UI:           http://localhost:3000  (OpenWebUI)"

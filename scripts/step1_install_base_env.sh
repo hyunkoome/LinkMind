@@ -180,6 +180,6 @@ echo "  source ${VENV_DIR}/bin/activate                # 현재 셸에 활성화
 echo "  bash scripts/step1_check_base_env.sh           # 설치 결과 sanity check"
 echo "  bash scripts/step2_2_setup_infra.sh              # docker compose 인프라"
 echo "  bash scripts/step3_setup_ollama.sh             # Ollama 컨테이너 + 모델 pull"
-echo "  python scripts/step4_init_qdrant.py            # bge-m3 1.4GB 첫 다운로드"
+echo "  python -m backend.jobs.init_qdrant            # bge-m3 1.4GB 첫 다운로드"
 echo "  uvicorn backend.main:app --reload              # 백엔드"
 echo "  streamlit run frontend/app.py                  # 프론트"

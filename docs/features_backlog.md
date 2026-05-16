@@ -114,7 +114,7 @@ TodoWrite 는 "현재 세션의 작업 단계" 추적용, 이 문서는 "기능 
   - source: 'auto' / 'manual' (UPSERT 우선순위로 manual 이 auto 안 덮어쓰지 못함)
 - `backend/utils/external_ids.py` — 표준 식별자 추출 + 정규화 (URL + 텍스트 모두). `ExternalId` dataclass + `extract_external_ids(url, text)` + `primary_external_id(ids)` (arxiv > doi > github > yt > ytpl 우선순위)
 - ingester 4종 (url/pdf/github/youtube) — ingest 시 source_url + 본문에서 external_ids 추출 → `source_metadata.external_ids` 채움 + `auto_link_topics(item, ids)` 호출. primary 는 confidence 1.0, cross-modal 단서는 0.7
-- `scripts/backfill_external_ids.py` — 기존 item 들에 소급 적용 (`source_metadata.external_ids` 키 유무로 idempotent, `--force` 재계산)
+- `backend.jobs.backfill_external_ids` — 기존 item 들에 소급 적용 (`source_metadata.external_ids` 키 유무로 idempotent, `--force` 재계산)
 
 ### 2.5.2 — API / UI ✅
 
@@ -128,7 +128,7 @@ TodoWrite 는 "현재 세션의 작업 단계" 추적용, 이 문서는 "기능 
 
 ### 2.5.3 — Topic description 자동 생성 ✅
 
-- `scripts/generate_topic_descriptions.py` — 자식 item 2개 이상인 topic 에 대해 (role, title, summary) 합쳐 LLM 으로 한국어 5-8 bullet 합성 → `topics.description`
+- `backend.jobs.generate_topic_descriptions` — 자식 item 2개 이상인 topic 에 대해 (role, title, summary) 합쳐 LLM 으로 한국어 5-8 bullet 합성 → `topics.description`
 - `_TOPIC_SYSTEM_PROMPT` 별도 — "같은 주제를 여러 modality 가 어떤 관점에서 다루는지" 명시
 - 검증: arxiv:2106.09685 (LoRA paper + GitHub) + arxiv:2511.20343 (AMB3R paper + GitHub + project page)
 
@@ -145,7 +145,7 @@ TodoWrite 는 "현재 세션의 작업 단계" 추적용, 이 문서는 "기능 
 - ✅ 검색 결과에 같은 topic 의 다른 modality 인라인 노출 — Streamlit Search 탭의
   hit 별 expander 안에 sibling item (role + url + 첫 줄 요약). primary topic
   (confidence 최대) 기준 fetch.
-- ✅ arxiv API 시드 (`scripts/seed_arxiv_metadata.py`) — export.arxiv.org 의 atom
+- ✅ arxiv API 시드 (`backend.jobs.seed_arxiv_metadata`) — export.arxiv.org 의 atom
   feed 로 `arxiv:<id>` topic 의 title / authors / published / summary / primary_category
   자동 보강. batch (한 호출에 최대 100 id) + `tags` 에 `arxiv-seeded` idempotent 마커.
   검증: 11개 arxiv topic 모두 paper 제목 정확히 갱신 (RoBERTa / DeBERTa / Adapter /
@@ -203,11 +203,11 @@ LinkMind-Inbox 텔레그램 채널 → 자동 ingest 풀 파이프라인. 사용
   Export 폴더 파서 (`parse_export_messages`, `ingest_telegram_export`).
 - `backend/ingest/telegram/__main__.py` — `python -m backend.ingest.telegram <path>`
   로 Telegram Desktop 의 result.json 폴더 일괄 import.
-- `scripts/telegram_inbox_watcher.py` — Telethon (사용자 계정) 기반 watcher daemon.
+- `ai_agents/telegram_inbox_watcher.py` — Telethon (사용자 계정) 기반 watcher daemon.
   첫 실행 시 SMS 인증, `volumes/telegram/inbox.session` 자동 생성. NewMessage event
   listener + `--backfill N` 옵션으로 채널 history 도 한 번에. `_ingest_successful`
   로 ingest 성공 판단 후 `msg.delete()` 호출 → 채널 자동 정리.
-- `scripts/telegram_inbox_watcher.sh` — bash wrapper. `--daemon` / `--restart`
+- `ai_agents/telegram_inbox_watcher.sh` — bash wrapper. `--daemon` / `--restart`
   idempotent (기존 process 자동 정리), `--stop` / `--status` / foreground.
 - `backend/config.py` — TELEGRAM_API_ID/HASH/SESSION_PATH/INBOX_INVITE/
   DELETE_AFTER_INGEST 필드 (시크릿/위치만 env, 런타임 선호 X).
