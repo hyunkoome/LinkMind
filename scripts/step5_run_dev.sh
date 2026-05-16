@@ -62,9 +62,11 @@ _stop_one() {
 }
 
 _start_backend() {
+    # idempotent — 이미 가동 중이면 정리 후 새로 띄움 (코드 변경 반영 + cache flush).
     if _pid_alive "$BACKEND_PIDFILE"; then
-        echo "ℹ️  backend 이미 가동 중 (pid=$(cat "$BACKEND_PIDFILE"), :$BACKEND_PORT)"
-        return
+        echo "ℹ️  기존 backend 정리 후 재기동 (pid=$(cat "$BACKEND_PIDFILE"))"
+        _stop_one "$BACKEND_PIDFILE" "backend"
+        sleep 1
     fi
     echo "▶️  backend (uvicorn) 기동 — :$BACKEND_PORT, log=$BACKEND_LOG"
     nohup "$VENV_PY" -m uvicorn backend.main:app \
@@ -75,9 +77,11 @@ _start_backend() {
 }
 
 _start_frontend() {
+    # idempotent — 동일.
     if _pid_alive "$FRONTEND_PIDFILE"; then
-        echo "ℹ️  frontend 이미 가동 중 (pid=$(cat "$FRONTEND_PIDFILE"), :$FRONTEND_PORT)"
-        return
+        echo "ℹ️  기존 frontend 정리 후 재기동 (pid=$(cat "$FRONTEND_PIDFILE"))"
+        _stop_one "$FRONTEND_PIDFILE" "frontend"
+        sleep 1
     fi
     echo "▶️  frontend (streamlit) 기동 — :$FRONTEND_PORT, log=$FRONTEND_LOG"
     LINKMIND_API_BASE="${LINKMIND_API_BASE:-http://localhost:$BACKEND_PORT}" \
@@ -104,15 +108,17 @@ _telegram_env_ready() {
 }
 
 _start_telegram() {
-    if _pid_alive "$TELEGRAM_PIDFILE"; then
-        echo "ℹ️  telegram watcher 이미 가동 중 (pid=$(cat "$TELEGRAM_PIDFILE"))"
-        return
-    fi
     if ! _telegram_env_ready; then
         echo "ℹ️  telegram watcher skip — TELEGRAM_API_ID/HASH 또는 session 미설정"
         echo "    준비:  docs/telegram_setup.md"
         echo "    첫 인증: bash ai_agents/telegram_inbox_watcher.sh (foreground, SMS 입력)"
         return
+    fi
+    # idempotent — pidfile + 외부 watcher process 모두 정리 후 새로 띄움 (race 방지).
+    if _pid_alive "$TELEGRAM_PIDFILE" || pgrep -f "ai_agents/telegram_inbox_watcher\.py" > /dev/null 2>&1; then
+        echo "ℹ️  기존 telegram watcher 정리 후 재기동"
+        _stop_telegram
+        sleep 1
     fi
     echo "▶️  telegram watcher 기동 — log=$TELEGRAM_LOG"
     nohup "$VENV_PY" ai_agents/telegram_inbox_watcher.py > "$TELEGRAM_LOG" 2>&1 &
