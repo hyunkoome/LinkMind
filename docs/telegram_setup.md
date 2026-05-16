@@ -108,13 +108,30 @@ python -m backend.ingest.telegram <export_dir> --force   # 재요약
 `backfill N` 보다 더 옛 메시지가 필요할 때 유용. parser 는 `telegram_export_sample.json`
 fixture 로 17 unit tests 검증됨.
 
-## 6. 트러블슈팅
+## 6. Inbox 패턴 — 처리된 메시지 자동 삭제
+
+`TELEGRAM_DELETE_AFTER_INGEST=true` (기본) 이면 ingest 가 성공한 메시지는 watcher
+가 채널에서 자동 삭제. 채널에는 **처리되지 않은 메시지** (LinkMind 가 못 받은 것,
+또는 LLM 요약 실패한 것) 만 남아 시각적으로 알 수 있음 — 로컬에서 LinkMind 가 잠시
+꺼져있던 동안 던진 메시지 / network glitch 등 추적 비용이 크게 줄어듦.
+
+성공 판단:
+- 메시지의 URL 들이 모두 에러 없이 ingest → 삭제
+- URL 없이 `source_type='telegram'` note 가 저장됨 → 삭제
+- 너무 짧은 메시지 (`< 20자` 와 URL 없음) 또는 ingest 에러 → 보존
+
+끄려면 `env/dev.env` 에:
+```bash
+TELEGRAM_DELETE_AFTER_INGEST=false
+```
+
+## 7. 트러블슈팅
 
 - **invite link 만료/유효하지 않음**: invite link 가 재생성됐으면 `TELEGRAM_INBOX_INVITE` 갱신
 - **session 인증 실패**: `volumes/telegram/inbox.session` 삭제 후 재실행 (다시 SMS 인증)
 - **`telethon` import 실패**: `.venv` 가 활성화됐는지, `pip install -r requirements.txt` 실행했는지
 
-## 7. 보안 노트
+## 8. 보안 노트
 
 - `TELEGRAM_API_ID/HASH` 와 `*.session` 은 사용자 계정 권한과 동등. 절대 commit 금지
   (`.gitignore` 에 `env/dev.env`, `volumes/` 둘 다 이미 있음)

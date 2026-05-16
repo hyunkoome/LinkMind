@@ -153,6 +153,62 @@ _ABSTRACT_END_RE = re.compile(r"\n\s*\n|" + _SECTION_HEADERS, re.IGNORECASE)
 _SECTION_ONLY_RE = re.compile(_SECTION_HEADERS, re.IGNORECASE)
 
 
+# PDF Title metadata 의 자동 생성 placeholder — paper 제목이 아님.
+_PLACEHOLDER_TITLE_RE = re.compile(
+    r"^(microsoft\s*word|untitled|paper|manuscript|temp|test|draft|"
+    r"document\d*|.*\.docx?$|.*\.tex$|.*\.indd$|.*\.fm$)",
+    re.IGNORECASE,
+)
+
+
+def _is_placeholder_title(t: str) -> bool:
+    """PDF metadata Title 이 실제 paper 제목인지, 자동 생성된 placeholder 인지."""
+    if not t or len(t) < 4:
+        return True
+    if _PLACEHOLDER_TITLE_RE.search(t.strip()):
+        return True
+    return False
+
+
+def _extract_pdf_title(info: dict, body: str) -> str | None:
+    """PDF Title 추출. 우선순위:
+
+    1) PDF metadata 의 Title (단 'Microsoft Word - foo.docx' 같은 placeholder 거름)
+    2) body 첫 ~30 줄 안에서 첫 의미있는 텍스트 (보통 PDF 첫 페이지의 paper title)
+       — 'Abstract' / 'arxiv:' 같은 마커 만나기 전까지, 너무 짧거나 숫자만 인 줄 skip
+    3) None — 호출자가 fallback 처리 (예: 요약 후 LLM 으로 보강)
+    """
+    raw = (info.get("Title") or info.get("/Title") or "").strip()
+    if raw and not _is_placeholder_title(raw):
+        return raw[:300]
+
+    # body 첫 부분에서 paper title 후보 — author/affiliation/abstract 마커 앞까지
+    for raw_line in body.splitlines()[:30]:
+        line = raw_line.strip()
+        if not line or len(line) < 8:
+            continue
+        # 'Abstract', 'arxiv:', 'doi:', '1. Introduction' 같은 마커 만나면 stop
+        if re.match(r"^(abstract|arxiv:|doi:|keywords?:|1\.\s+intro)",
+                    line, re.IGNORECASE):
+            break
+        # 너무 긴 줄 (paper title 은 보통 < 200자)
+        if len(line) > 250:
+            continue
+        # 숫자/page 번호만
+        if re.match(r"^[\d\.\s/-]+$", line):
+            continue
+        # affiliation / 이메일 / DOI prefix 줄
+        if re.match(r"^(.*@.*|.*affiliation|.*department|.*university)",
+                    line, re.IGNORECASE):
+            continue
+        # 'This paper has been accepted ...' 같은 헤더 (FAST-LIVO2 가 'IEEE' 헤더로 시작)
+        if re.match(r"^(this paper|©|copyright|ieee|acm|preprint)",
+                    line, re.IGNORECASE):
+            continue
+        return line[:300]
+    return None
+
+
 def _detect_abstract(text_in: str) -> str | None:
     """본문 앞 8000자 안에서 abstract 추출. 라벨 우선 → 다음 섹션 직전 단락 fallback.
 
@@ -323,7 +379,7 @@ async def ingest_pdf(
         raise ValueError(f"PDF 텍스트 추출 실패 또는 본문이 너무 짧습니다: {src}")
 
     info = pdf_meta.get("info", {}) or {}
-    title = (info.get("Title") or info.get("/Title") or "").strip() or None
+    title = _extract_pdf_title(info, body)
     abstract = _detect_abstract(body)
 
     # PDF 본문에서 arxiv id / DOI / GitHub repo / arxiv link 등 추출 — topic auto-link 단서.

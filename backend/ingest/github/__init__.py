@@ -86,6 +86,52 @@ def _detect_paper_links(text: str) -> list[str]:
     return list(dict.fromkeys(_PAPER_LINK_RE.findall(text or "")))
 
 
+def _clean_readme_html(md: str) -> str:
+    """GitHub README 안의 raw HTML tag 제거. <a href> 와 <img alt> 의 정보는 보존.
+
+    GitHub README 는 markdown 인데 종종 raw HTML (`<h2 style="...">`, `<a href>`,
+    `<img>`, `<center>`, `<details>`) 가 inline 으로 섞임. 그게 그대로 chunks/snippet
+    에 들어가면 검색 결과가 너저분하고 LLM 요약 입력도 노이즈. HTML 만 제거하고
+    안의 텍스트는 보존, `<a href>` 는 markdown 링크 형식으로 변환 — paper_links
+    검출 정규식이 그대로 동작하도록.
+    """
+    if not md:
+        return ""
+    try:
+        from bs4 import BeautifulSoup
+    except Exception as e:  # noqa: BLE001
+        logger.warning("bs4 import 실패 — HTML strip skip: %s", e)
+        return md
+
+    soup = BeautifulSoup(md, "lxml")
+
+    # <a href> → markdown 링크 (정보 보존). text 가 비어있으면 href 자체를 표시.
+    for a in soup.find_all("a"):
+        href = (a.get("href") or "").strip()
+        text = (a.get_text() or "").strip() or href
+        if href:
+            a.replace_with(f"[{text}]({href})")
+        else:
+            a.replace_with(text)
+
+    # <img alt="..."> → "[image: alt]". alt 없으면 제거.
+    for img in soup.find_all("img"):
+        alt = (img.get("alt") or "").strip()
+        if alt:
+            img.replace_with(f"[image: {alt}]")
+        else:
+            img.decompose()
+
+    # <code>/<pre> 의 내용은 inline code 로 (markdown 의 backtick 과 충돌 안 함)
+    for code in soup.find_all(["code", "pre"]):
+        code.replace_with(code.get_text() or "")
+
+    text = soup.get_text("\n")
+    # 연속 빈 줄 압축 (BeautifulSoup 출력이 종종 3+ 줄 생성)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
 async def ingest_github(
     url: str, *, analyze_now: bool = True, force: bool = False,
 ) -> dict[str, Any]:
@@ -120,7 +166,10 @@ async def ingest_github(
         except Exception as e:  # noqa: BLE001
             logger.warning("README decode 실패: %s", e)
 
+    # paper_links 는 raw README 기준으로 잡되 (모든 URL 형식 포함), raw_body 와
+    # LLM 요약 입력에는 HTML strip 한 cleaned text 를 사용 — 검색 snippet 도 깨끗.
     paper_links = _detect_paper_links(readme_text + " " + description)
+    readme_clean = _clean_readme_html(readme_text)
 
     # raw_body 는 "콘텐츠" 만 포함 — stars/forks 같이 시간에 따라 변하는 카운터는
     # source_metadata 에만. 그래야 raw_content_hash 가 안정 → force 재ingest 가
@@ -141,7 +190,9 @@ async def ingest_github(
     header.append(f"Default branch: {default_branch}")
     header.append("")
     header.append(f"## README ({readme_path or 'not found'})")
-    header.append(readme_text or "(no README)")
+    # raw_body 에는 HTML strip 한 cleaned README 사용 — chunks/snippet 깨끗 +
+    # LLM 요약 입력 노이즈 제거. 원본 markdown 은 source_metadata.readme_raw 에 보관.
+    header.append(readme_clean or "(no README)")
     raw_body = "\n".join(p for p in header if p is not None)
 
     # 라이선스를 해시태그 형태로 강제 주입 (요청사항). SPDX id 가 있으면 그걸,
@@ -191,6 +242,8 @@ async def ingest_github(
             "default_branch": default_branch,
             "paper_links": paper_links,
             "external_ids": [{"kind": x.kind, "value": x.value} for x in ext_ids],
+            "readme_raw_len": len(readme_text),  # 원본 길이 (디버깅)
+            "readme_clean_len": len(readme_clean),
         },
         analyze_now=analyze_now,
         force=force,

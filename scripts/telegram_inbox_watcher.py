@@ -110,6 +110,19 @@ async def _resolve_channel(client, invite_or_name: str):
     return await client.get_entity(invite_or_name)
 
 
+def _ingest_successful(result: dict) -> bool:
+    """ingest 가 의미있게 끝났는지 판단 — 채널 메시지 자동 삭제 트리거 조건.
+
+    - URL 들이 있고 모두 에러 없이 처리 → 성공
+    - 또는 note item 이 저장됨 → 성공
+    - 둘 다 아니거나 일부 URL 에 'error' 키 있음 → 성공 아님 (메시지 보존, 사용자 알아챔)
+    """
+    urls = result.get("urls_ingested") or []
+    if urls:
+        return all("error" not in u for u in urls)
+    return bool(result.get("note_item_id"))
+
+
 async def _handle_message(event):
     """Telethon NewMessage / iter_messages 가 주는 message 객체 → LinkMind."""
     msg = event.message if hasattr(event, "message") else event
@@ -147,10 +160,21 @@ async def _handle_message(event):
 
     urls = result.get("urls_ingested") or []
     note = result.get("note_item_id")
+    succeeded = _ingest_successful(result)
     logger.info(
-        "msg %s: urls=%d note=%s text=%r",
-        msg.id, len(urls), bool(note), text[:80],
+        "msg %s: urls=%d note=%s ok=%s text=%r",
+        msg.id, len(urls), bool(note), succeeded, text[:80],
     )
+
+    # inbox 패턴 — 처리 성공한 메시지는 채널에서 삭제. 처리 안 된 것 (실패 / 너무
+    # 짧음) 은 그대로 남아 사용자가 시각적으로 확인. 로컬 운영 시 "뭐가 들어갔나"
+    # 추적 비용을 줄이는 장치.
+    if succeeded and get_settings().telegram_delete_after_ingest:
+        try:
+            await msg.delete()
+            logger.info("msg %s ingest 성공 → 채널에서 삭제", msg.id)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("msg %s 삭제 실패 (권한/네트워크?): %s", msg.id, e)
 
 
 async def _backfill(client, channel, count: int):

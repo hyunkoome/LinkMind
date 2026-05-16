@@ -98,6 +98,9 @@ class Settings(BaseSettings):
     telegram_api_hash: str = Field(default="")     # my.telegram.org 에서 발급 (32자)
     telegram_session_path: str = Field(default="volumes/telegram/inbox.session")
     telegram_inbox_invite: str = Field(default="") # 채널 invite link 또는 채널명/ID
+    # ingest 성공 시 채널의 그 메시지를 자동 삭제 — 처리되지 않은 것만 채널에 남음
+    # (inbox 패턴). False 면 메시지 그대로 둠.
+    telegram_delete_after_ingest: bool = Field(default=True)
 
     # ─── Storage ──────────────────────────────────────────────────
     storage_backend: Literal["local", "minio"] = Field(default="local")
