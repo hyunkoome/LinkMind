@@ -124,9 +124,17 @@ def _ingest_successful(result: dict) -> bool:
 
 
 async def _handle_message(event):
-    """Telethon NewMessage / iter_messages 가 주는 message 객체 → LinkMind."""
-    msg = event.message if hasattr(event, "message") else event
-    text = (msg.message or "").strip()
+    """Telethon NewMessage event / iter_messages Message 둘 다 처리.
+
+    NewMessage.Event 는 `.message` 가 Message 객체 (raw),
+    iter_messages 가 yield 하는 건 Message 자체 — 그 객체의 `.message` 는 본문 str.
+    .id 속성 유무로 두 케이스 구분.
+    """
+    if hasattr(event, "message") and hasattr(event.message, "id"):
+        msg = event.message      # NewMessage event
+    else:
+        msg = event              # iter_messages 의 Message
+    text = (getattr(msg, "message", None) or getattr(msg, "text", None) or "").strip()
     if not text:
         # 사진/파일만 (텍스트 없음) — 일단 skip. 향후 attachment ingest 확장.
         return
