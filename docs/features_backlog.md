@@ -254,6 +254,34 @@ force push: `hyunkoo.dev@watanow.com` → `hyunkoome <hyunkookim.me@gmail.com>`.
 
 ---
 
+## RAG `/ask` 답변 품질 ✅ 완료 (2026-05-16)
+
+이전엔 `/ask` 의 답이 "SLAM 은 로봇이 위치 파악…" 같은 일반 LLM 정의 + `[1]` 인용
+정도 — 사용자가 가진 자료의 깊이 안 보임. archive 와 다를 바 없는 상태였음.
+
+수정:
+- `backend/api/ask.py` 의 context block 보강:
+  - 이전: `[i] title\nURL\nsnippet(300자)` 만
+  - 이후: `[i] title\nURL\nsource_type\nTags: #...\n요약: {item.summary 1500자 cap}\n관련 chunk: {snippet 400자 cap}`
+- `rag_system` prompt v3 (DB 의 prompts 테이블 + `backend/runtime_settings.RAG_SYSTEM_PROMPT_SEED` 둘 다):
+  - "답변 본문 + 이 자료들이 다루는 측면" 두 단락 강제
+  - "[Context] 의 구체적 사실/방법/한계 인용 우선, 일반 정의보다 자료 깊이 우선"
+  - "Context 의 자료를 반드시 인용. 인용 없는 답변은 안 됩니다."
+
+검증: "SLAM 이 뭐야?" 에 답이 "FAST-LIVO2 의 LiDAR-IMU-이미지 융합 / Multi-Cam SLAM
+의 adaptive initialization" 같은 자료 구체 인용 + "이 자료들이 다루는 측면" 단락
+포함. 인용 3개. 응답 시간 ~3분 (qwen2.5:14b — 별 wave 에서 가벼운 ask 모델 분리
+또는 streaming 도입 예정).
+
+남은 ask UX (Phase 2 후반 또는 4):
+- ask 전용 더 작은 모델 (qwen2.5:7b 또는 ask-tuned) — Settings 에 ingest_model /
+  ask_model 분리 필드
+- streaming response (Streamlit 첫 토큰부터 표시)
+- 궁극적으로 **sVLL LoRA 파인튜닝** (Phase 4) — 사용자 데이터 학습 모델로 ask 까지
+  처리. 학습 데이터 self-loop 완성.
+
+---
+
 ## Phase C wave-2 (다음) — Slack export 본격
 
 ### C1. Slack export ingest
