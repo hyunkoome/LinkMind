@@ -282,35 +282,36 @@ force push: `hyunkoo.dev@watanow.com` → `hyunkoome <hyunkookim.me@gmail.com>`.
 
 ---
 
-## Phase C wave-2 (다음) — Slack 워크스페이스 API ingest 본격
+## Phase C wave-2 (다음) — Slack 워크스페이스 일회성 backfill
 
-⚠️ **변경 (2026-05-16 외출 전 사용자 알림)**: 옛 `archive/slack_export/public_2026-05-14/`
-(182개 채널 slackdump export) 는 사용자가 삭제. wave-2 의 시작점은 **Slack API
-직접 호출로 현재 워크스페이스의 채널 메시지 전체를 ingest** 하는 것.
+⚠️ **변경 (2026-05-16 외출 전 사용자 알림)**:
+- 옛 `archive/slack_export/public_2026-05-14/` 폴더는 사용자가 삭제
+- 사용자가 **Slack 구독을 곧 해제 — 내일부터는 Slack 안 씀**
+- 즉 wave-2 는 **일회성 backfill** 만 의미. incremental sync / realtime watcher 불필요.
 
-구현 옵션 (다음 세션에 결정):
-- **A. slackdump 재 export** → `backend/ingest/slack/export_parser.py` 파싱
-  (검증된 패턴, 빠름. 다만 incremental sync 어려움 — 매번 full export)
-- **B. slack_sdk 직접 호출** → `backend/ingest/slack/api_ingester.py`
-  conversations.list / history / replies. Incremental sync (`oldest` 파라미터로
-  마지막 ts 이후만). 실시간 watcher 도 같은 코드 베이스에서.
-- **하이브리드**: A 로 초기 backfill (속도) + B 로 incremental + 실시간 (Phase D)
+**slackdump 셋업은 그대로 유지** (어제 검증된 환경):
+- alias `hkkim` 등록 + token/cookie 활성
+- `scripts/slack_export.sh` (export 자동화 wrapper, archive/ + latest symlink)
+- `docs/slack_setup.md` (절차 문서)
+- `env/dev.env` 의 `SLACK_USER_TOKEN` / `SLACK_D_COOKIE`
 
-권장: 옵션 B — Slack 의 데이터는 평소 지속 누적이라 incremental sync 가 본질. 한
-번 import 하고 끝나는 게 아니라 inbox watcher 처럼 계속 따라가야 함.
+**진행 순서** (다음 세션):
+1. `bash scripts/slack_export.sh` 로 새 export — workspace 전체, files=true
+2. `backend/ingest/slack/__init__.py` + `export_parser.py` 작성:
+   - slackdump standard 포맷 파싱 (channel 별 디렉토리, 날짜별 JSON)
+   - `SlackMessage` dataclass + `ingest_slack_message` (단일) + `ingest_slack_export`
+     (전체 폴더) — Telegram 패턴 일관
+   - thread 처리 (`thread_ts` → reply 묶음 → 한 item)
+   - URL 자동 라우팅 (telegram 흐름 재사용)
+   - 첨부 다운로드 (옵션)
+3. CLI: `python -m backend.ingest.slack <export_dir> [--channel <name>]`
+4. 단위 테스트 + 작은 fixture (채널 디렉토리 + 한 JSON 모사)
+5. 검증: `공부-컴퓨터비전` 단일 채널 → 워크스페이스 전체
 
-작업 (옵션 B 가정):
-- `backend/ingest/slack/__init__.py` — `SlackMessage` dataclass + 
-  `ingest_slack_message` (단일) + `ingest_slack_channel` (한 채널 전체 history) +
-  `ingest_slack_workspace` (모든 채널) — Telegram 패턴 일관
-- thread 처리 (`thread_ts` → reply 묶음), URL 자동 라우팅, 첨부 download
-- env: `SLACK_USER_TOKEN`, `SLACK_D_COOKIE` (이미 env/dev.env 에 있을 가능성)
-- `ai_agents/slack_realtime_watcher.py` (옵션, 추후) — Socket Mode 또는 RTM API
-- 단위 테스트 + 작은 fixture (channels.list / conversations.history 응답 모사)
+slack_sdk 직접 호출은 over-engineering — 구독 해제 후 코드 거의 dead 자산.
 
-검증:
-- `공부-컴퓨터비전` 같은 한 채널 먼저 (수십 메시지) — URL 라우팅 + thread 묶음 + topic 그룹핑
-- 그 다음 워크스페이스 전체 (182 채널 — 분당 1 채널 처리 시 ~3시간)
+모듈 자체는 향후 다른 Slack 워크스페이스 처리 또는 다시 쓸 때 재사용 가능 (Telegram
+ingest_telegram_export 와 같은 구조).
 
 
 ### C1. Slack export ingest
