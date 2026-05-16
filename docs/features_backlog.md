@@ -191,7 +191,49 @@ env 는 **인프라 위치** + **시크릿** 만. LLM 런타임 선호 (provider
 
 ---
 
-## Phase C — Slack / Telegram / Phase 2-3 본격
+## Phase C wave-1 — Telegram inbox ✅ 완료 (2026-05-16)
+
+LinkMind-Inbox 텔레그램 채널 → 자동 ingest 풀 파이프라인. 사용자가 채널에 URL/메모
+던지면 watcher 가 받아 LinkMind 로 흘려보내고, 성공 시 채널에서 메시지 자동 삭제
+(inbox 패턴 — 처리 안 된 것만 시각적으로 남음).
+
+- `backend/ingest/telegram/__init__.py` — TelegramMessage dataclass +
+  `ingest_telegram_message` (URL 있으면 host 별 ingester 자동 라우팅 + topic 그룹핑,
+  URL 없으면 `source_type='telegram'` note 저장 + external_ids/auto_link_topics 적용).
+  Export 폴더 파서 (`parse_export_messages`, `ingest_telegram_export`).
+- `backend/ingest/telegram/__main__.py` — `python -m backend.ingest.telegram <path>`
+  로 Telegram Desktop 의 result.json 폴더 일괄 import.
+- `scripts/telegram_inbox_watcher.py` — Telethon (사용자 계정) 기반 watcher daemon.
+  첫 실행 시 SMS 인증, `volumes/telegram/inbox.session` 자동 생성. NewMessage event
+  listener + `--backfill N` 옵션으로 채널 history 도 한 번에. `_ingest_successful`
+  로 ingest 성공 판단 후 `msg.delete()` 호출 → 채널 자동 정리.
+- `scripts/telegram_inbox_watcher.sh` — bash wrapper. `--daemon` / `--restart`
+  idempotent (기존 process 자동 정리), `--stop` / `--status` / foreground.
+- `backend/config.py` — TELEGRAM_API_ID/HASH/SESSION_PATH/INBOX_INVITE/
+  DELETE_AFTER_INGEST 필드 (시크릿/위치만 env, 런타임 선호 X).
+- `requirements.txt` — `telethon>=1.36.0` 추가.
+- `docs/telegram_setup.md` — API 발급 / 첫 인증 / 평소 사용 / inbox 패턴 / 트러블슈팅.
+- Tests (17건, default suite): `tests/test_telegram_parser.py` + fixture
+  `tests/resources/telegram_export_sample.json` (5 메시지 모사).
+
+동반 fix (Telegram 안정성 + 다른 ingester 공통 문제):
+- GitHub README **raw HTML strip** (`_clean_readme_html`) — `<h2>`, `<a href>`,
+  `<img>`, `<code>` 처리. paper_links 자동 검출 유지. chunks/snippet 노이즈 제거 +
+  LLM 요약 입력 정제. OmniVGGT-official 같은 HTML-heavy README 검증.
+- **PDF Title placeholder 거름** (`_extract_pdf_title`) — 'Microsoft Word - foo.docx',
+  'Untitled', `*.tex` 등 패턴 거름 + body 첫 줄에서 paper title fallback. FAST-LIVO2
+  같은 metadata 없는 PDF 도 title 정상.
+- watcher daemon `--daemon`/`--restart` 가 기존 process pkill + 새로 띄움 idempotent
+  (race / 옛 코드 잔존 방지).
+
+실 데이터 검증 (사용자 환경, RTX 4090 + qwen2.5:7b):
+- Live 흐름: arxiv URL / GitHub URL / 텍스트 메모 던짐 → 즉시 ingest + 채널 삭제.
+- backfill 흐름: 채널의 옛 메시지들 일괄 처리 + 모두 삭제 (채널이 비워짐).
+- HTML cleanup 효과: OmniVGGT-official → 한국어 596자 요약 + 10태그 (이전엔 NULL).
+
+---
+
+## Phase C wave-2 (다음) — Slack export 본격
 
 ### C1. Slack export ingest
 - `bash scripts/slack_export.sh` 로 slackdump 산출물 재수집
