@@ -233,6 +233,27 @@ LinkMind-Inbox 텔레그램 채널 → 자동 ingest 풀 파이프라인. 사용
 
 ---
 
+## 리팩토링 ✅ 완료 (2026-05-16) — scripts / backend.jobs / ai_agents 분리
+
+CLAUDE.md §3 NEVER ('backend 안에 봇 코드 X') 정신 유지하면서 폴더 의도 명확화.
+
+- `scripts/` = OS / 인프라 셋업 셸 스크립트 (.sh) 만. stepN_*, install_*, slack_export.
+- `backend/jobs/` = backend 모듈 호출하는 batch python (이전엔 scripts/.py).
+  `backfill_summary`, `backfill_external_ids`, `seed_arxiv_metadata`,
+  `generate_topic_descriptions`, `init_db`, `init_qdrant` (이전 step4_init_qdrant
+  이름 단순화). 호출: `python -m backend.jobs.<name>`. `sys.path.insert` hack 제거.
+- `ai_agents/` = LinkMind 의 client agent (backend 외부 — NEVER 정신).
+  `telegram_inbox_watcher` (.py + .sh). README 에 새 agent 추가 규칙.
+
+검증: 5 카테고리 (cpu/embedding/integration/llm/gpu) 전부 PASS, **135 tests**
+(이전 130 + `_ingest_successful` 5건). `bash scripts/step5_run_dev.sh --status`
+로 backend/frontend/telegram 셋 다 가동 OK.
+
+별도 wave 로 git author email 통일 — 34 commit history rewriting (filter-repo) +
+force push: `hyunkoo.dev@watanow.com` → `hyunkoome <hyunkookim.me@gmail.com>`.
+
+---
+
 ## Phase C wave-2 (다음) — Slack export 본격
 
 ### C1. Slack export ingest
