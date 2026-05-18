@@ -126,34 +126,30 @@ python -m backend.jobs.init_qdrant      # 컬렉션 생성
 bash scripts/step4_check_qdrant.sh       # 컬렉션 존재 + vector dim 일치 확인
 ```
 
-### 6. 백엔드 + Streamlit 동시 기동 (step5)
+### 6. 한 명령으로 전부 기동 (step5)
 
 ```bash
-# 한 셸 — backend (FastAPI :8000) + Streamlit (:8501) + telegram daemon 동시 백그라운드
-bash scripts/step5_run_dev.sh             # log: /tmp/linkmind-*.log
+# 넷 다 idempotent 자동 (기존 process 정리 후 재기동)
+bash scripts/step5_run_dev.sh             # backend + Streamlit + frontend_v2 + telegram
 bash scripts/step5_run_dev.sh --status    # pid + 포트 + 최근 로그
-bash scripts/step5_run_dev.sh --stop      # 셋 다 종료
-bash scripts/step5_run_dev.sh --foreground  # 포어그라운드 (Ctrl+C 종료)
-bash scripts/step5_run_dev.sh --no-telegram # backend + frontend 만
+bash scripts/step5_run_dev.sh --stop      # 넷 다 종료
+bash scripts/step5_run_dev.sh --no-telegram      # telegram 빼고 셋
+bash scripts/step5_run_dev.sh --no-frontend-v2   # Next.js 빼고 셋 (Phase 1-2 모드)
+bash scripts/step5_run_dev.sh --backend-only
+bash scripts/step5_run_dev.sh --frontend-v2-only
 
-# 또는 셸 둘
-uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
-streamlit run frontend/app.py             # http://localhost:8501
+# 첫 실행 시 frontend_v2/node_modules 가 없으면 자동으로 npm install (1-2분, 1회만).
+# Node 22+ 가 없으면 frontend_v2 만 silent skip.
 ```
 
-### 6-1. Next.js graph UI (Phase 2.5+, frontend_v2/)
+기동되는 서비스:
 
-**옵시디언의 3D Graph view 같은 WebGL 3D 그래프** (react-force-graph-3d + three.js, 옵시디언 3D Graph community plugin 과 동일 라이브러리) + modality viewer + user_notes 편집. Streamlit 과 병행.
-
-```bash
-cd frontend_v2
-npm install         # 첫 1회 (Node 22+ 필요)
-npm run dev         # http://localhost:3001
-# build: npm run build && npm run start
-```
-
-backend 가 :8000 에서 떠 있어야 함 (`bash scripts/step5_run_dev.sh`). API base URL 변경 시
-`NEXT_PUBLIC_API_BASE` env 로 override (`.env.local` 에).
+| 서비스 | URL | 역할 |
+|---|---|---|
+| FastAPI backend | http://localhost:8000 (`/docs` Swagger) | DB + 검색 + ingest + graph API |
+| Streamlit (frontend/) | http://localhost:8501 | 기존 Settings / Ingest / Search 탭 (Phase 1-2) |
+| **Next.js (frontend_v2/)** | **http://localhost:3001** | **3D graph view + modality viewer (Phase 2.5+)** |
+| Telegram daemon | (백그라운드) | LinkMind-Inbox 채널 listen + 자동 ingest |
 
 확인:
 
