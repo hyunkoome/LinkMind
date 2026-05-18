@@ -45,6 +45,7 @@ python-docx>=1.1.2                # DOCX 텍스트 추출 (Phase 2.5)
 python-pptx>=1.0.2                # PPTX 텍스트 추출 (Phase 2.5)
 charset-normalizer>=3.4.0         # TXT/MD 인코딩 자동 감지 (Phase 2.5)
 trafilatura>=2.0.0                # 웹 본문 추출 (블로그/뉴스)
+readability-lxml>=0.8.4           # trafilatura fallback (일부 블로그는 trafilatura 가 실패)
 youtube-transcript-api>=0.6.3     # YouTube 자막
 yt-dlp>=2024.10.0                 # YouTube 메타/플레이리스트
 telethon>=1.36.0                  # Telegram MTProto — scripts/telegram_inbox_watcher.py
