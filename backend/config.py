@@ -81,6 +81,11 @@ class Settings(BaseSettings):
     openrouter_api_key: str = Field(default="")
     openrouter_model: str = Field(default="")
 
+    # GitHub API 인증 — token 있으면 5000/hour, 없으면 60/hour (rate limit 큰 차이).
+    # https://github.com/settings/tokens 에서 personal access token (no scope 또는
+    # public_repo) 발급.
+    github_token: str = Field(default="")
+
     ollama_base_url: str = Field(default="http://ollama:11434")
     ollama_base_url_local: str = Field(default="http://localhost:11434")
     ollama_model: str = Field(default="qwen2.5:7b")

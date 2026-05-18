@@ -84,11 +84,24 @@ class ExtractedDoc:
 
 
 async def fetch_html(url: str, timeout: float = 30.0) -> str:
-    """주어진 URL 의 HTML 을 가져온다. 30xx 따라가고 비-2xx 는 raise."""
+    """주어진 URL 의 HTML 을 가져온다. 30xx 따라가고 비-2xx 는 raise.
+
+    User-Agent 는 일반 브라우저 모방 — URL shortener (t.ly, lnkd.in, bit.ly 등)
+    + 일부 사이트가 짧은/비표준 UA 를 봇으로 인식해 403 반환하는 케이스 회피.
+    """
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 "
+            "LinkMind/0.1 (+https://github.com/Real2Real-AI/LinkMind)"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+    }
     async with httpx.AsyncClient(
         follow_redirects=True,
         timeout=timeout,
-        headers={"User-Agent": "LinkMind/0.1 (+https://github.com/Real2Real-AI/LinkMind)"},
+        headers=headers,
     ) as client:
         r = await client.get(url)
         r.raise_for_status()

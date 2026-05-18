@@ -115,17 +115,40 @@ async def _ydl_extract_async(url: str, *, flat: bool = False) -> dict[str, Any]:
 
 
 def _fetch_transcript(video_id: str, languages: tuple[str, ...] = ("ko", "en")) -> str | None:
+    """youtube-transcript-api 로 자막 추출.
+
+    v1.0+ 부터 API breaking change — classmethod get_transcript 가 instance method
+    fetch 로 바뀜. 두 API 다 시도해서 호환성 유지.
+    """
     try:
         from youtube_transcript_api import YouTubeTranscriptApi
     except Exception as e:  # noqa: BLE001
         logger.warning("youtube-transcript-api import 실패: %s", e)
         return None
 
+    rows: list[dict[str, Any]] | None = None
     try:
-        rows = YouTubeTranscriptApi.get_transcript(video_id, languages=list(languages))
+        # v1.0+ — instance.fetch().to_raw_data()
+        api = YouTubeTranscriptApi()
+        if hasattr(api, "fetch"):
+            fetched = api.fetch(video_id, languages=list(languages))
+            # FetchedTranscript 객체 — to_raw_data() 가 [{text, start, duration}, ...]
+            if hasattr(fetched, "to_raw_data"):
+                rows = fetched.to_raw_data()
+            elif hasattr(fetched, "snippets"):
+                rows = [{"text": s.text, "start": s.start, "duration": s.duration}
+                        for s in fetched.snippets]
+        # 옛 API — classmethod get_transcript (v0.x)
+        elif hasattr(YouTubeTranscriptApi, "get_transcript"):
+            rows = YouTubeTranscriptApi.get_transcript(  # type: ignore[attr-defined]
+                video_id, languages=list(languages),
+            )
     except Exception as e:  # noqa: BLE001
         # 자막 비활성/없음/disabled by uploader 등 다양한 케이스. info 레벨로만.
         logger.info("자막 없음/실패 (video=%s): %s", video_id, e)
+        return None
+
+    if not rows:
         return None
     return "\n".join(r.get("text", "") for r in rows if r.get("text")).strip() or None
 

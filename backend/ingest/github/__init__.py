@@ -16,7 +16,6 @@ GitHub repository ingester.
 from __future__ import annotations
 
 import logging
-import os
 import re
 from typing import Any
 from urllib.parse import urlparse
@@ -24,6 +23,7 @@ from urllib.parse import urlparse
 import httpx
 from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
 
+from backend.config import get_settings
 from backend.db.connection import get_engine
 from backend.db.repository import find_item_by_hash, insert_item
 from backend.ingest.url import (
@@ -57,12 +57,14 @@ def parse_github_url(url: str) -> tuple[str, str]:
 
 
 def _headers() -> dict[str, str]:
+    """GitHub API headers — token 있으면 rate limit 5000/hour, 없으면 60/hour."""
     h = {
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
-        "User-Agent": "LinkMind/0.1",
+        # 일반 브라우저 UA 모방 — 일부 GitHub raw/contents endpoint 가 짧은 UA 거부
+        "User-Agent": "LinkMind/0.1 (+https://github.com/Real2Real-AI/LinkMind)",
     }
-    token = os.getenv("GITHUB_TOKEN", "").strip()
+    token = (get_settings().github_token or "").strip()
     if token:
         h["Authorization"] = f"Bearer {token}"
     return h
