@@ -46,6 +46,7 @@ from backend.ingest.pdf import (
     _sanitize_text,
     _save_pdf_figures,
 )
+from backend.utils.external_ids import extract_external_ids
 from backend.utils.hashing import sha256_text
 
 logger = logging.getLogger(__name__)
@@ -513,6 +514,16 @@ async def ingest_document(
                 "figures_saved": 0,
             }
 
+        # 본문에서 외부 ID (arxiv:xxx, doi:..., github:owner/repo, youtube id 등) 추출
+        # — graph topic auto-link 의 단서. PDF 논문 본문에 arxiv id 있으면 같은 arxiv
+        # topic 의 다른 modality (paper URL, GitHub repo) 와 자동으로 cluster.
+        ext_ids = extract_external_ids(text=raw_content[:20000]) if raw_content else []
+
+        merged_meta_with_ids = {
+            **merged_meta,
+            "external_ids": [{"kind": x.kind, "value": x.value} for x in ext_ids],
+        }
+
         item_id = await insert_item(
             session,
             source_type=resolved_source_type,
@@ -520,7 +531,7 @@ async def ingest_document(
             raw_content_hash=content_hash,
             source_id=source_id or file_hash,
             source_url=final_source_url,
-            source_metadata=merged_meta,
+            source_metadata=merged_meta_with_ids,
             title=title,
             source_created_at=None,
         )
@@ -529,6 +540,13 @@ async def ingest_document(
             file_hash=file_hash, file_size=file_size,
             mime_type=mime_type or "application/octet-stream",
             role="attachment",
+        )
+        # graph topic 자동 link (lazy import — backend.ingest.url 순환 의존 회피)
+        from backend.ingest.url import auto_link_topics
+
+        await auto_link_topics(
+            session, item_id=item_id, source_type=resolved_source_type,
+            title=title, ids=ext_ids,
         )
         # caption (텔레그램 등에서 함께 온 사용자 메모) → user_notes 자동
         if caption and caption.strip():

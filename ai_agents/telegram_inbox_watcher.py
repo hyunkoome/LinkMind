@@ -18,9 +18,17 @@ backend HTTP `/ask` 경유.
   만 시각적으로 확인). `is_ingest_successful` 판정은 ChannelAgent ABC 의 공통 헬퍼.
 
 사용:
-    python -m ai_agents.telegram_inbox_watcher                # 실시간 listen
-    python -m ai_agents.telegram_inbox_watcher --backfill 50  # 최근 50개도 처리 후 listen
-    python -m ai_agents.telegram_inbox_watcher --backfill 50 --no-listen  # backfill 만
+    python -m ai_agents.telegram_inbox_watcher                  # 자동 backfill (안 지워진
+                                                               # 모든 메시지) → listen
+    python -m ai_agents.telegram_inbox_watcher --no-backfill   # backfill 없이 listen 만
+    python -m ai_agents.telegram_inbox_watcher --backfill 50 --no-listen  # backfill 만 (50개)
+
+기본 동작 (Phase 2.5 wave-3, 2026-05-18~):
+- daemon 시작 시 채널에 남아있는 모든 메시지 자동 backfill (inbox 패턴 — 처리
+  성공한 메시지는 채널에서 자동 삭제되므로, "남아있다 = 아직 처리 안 됨").
+- backfill 끝나면 listen 시작 (이후 새 메시지 자동).
+- 매번 daemon 재시작 시 같은 흐름. 이미 처리된 메시지는 채널에 없으니 backfill skip.
+- ingested_at = ingest 시각 (현재). source_created_at = 텔레그램 메시지 원본 시각 (provenance).
 
 환경변수 (env/dev.env):
     TELEGRAM_API_ID         my.telegram.org 에서 발급
@@ -202,10 +210,24 @@ class TelegramChannelAgent(ChannelAgent):
         return 0
 
     async def _backfill(self, count: int) -> None:
-        logger.info("backfill 시작 — 최근 %d 개 메시지", count)
-        async for msg in self.client.iter_messages(self.channel, limit=count):
+        """채널의 메시지 backfill — 옛 → 새 순서 (queue 처럼).
+
+        count 가 0 이하면 skip. 큰 수 (예: 10000) 면 사실상 전체 처리.
+
+        inbox 패턴이라 이미 ingest 된 메시지는 채널에서 자동 삭제 — 다음 시작 시
+        backfill 대상은 "아직 처리 안 된 것" 만 자연스럽게 남음.
+
+        reverse=True 로 옛 메시지부터 처리 — 사용자가 채널에 던진 순서 보존.
+        """
+        if count <= 0:
+            logger.info("backfill skip (count=%d)", count)
+            return
+        logger.info("backfill 시작 — 최근 %d 개 메시지 (옛→새 순서)", count)
+        processed = 0
+        async for msg in self.client.iter_messages(self.channel, limit=count, reverse=True):
             await self._handle_message(msg)
-        logger.info("backfill 완료")
+            processed += 1
+        logger.info("backfill 완료 — %d 메시지 처리", processed)
 
     async def _handle_message(self, event_or_msg) -> None:
         """Telethon NewMessage event / iter_messages Message 둘 다 처리.
@@ -346,14 +368,24 @@ class TelegramChannelAgent(ChannelAgent):
             logger.debug("tmp_dir cleanup 실패 (무시): %s", e)
 
 
+# 사실상 무한 — inbox 채널이라 처리 후 자동 삭제, 남은 메시지 다 처리하는 게
+# default. 사용자 환경의 채널이 매우 크면 (>10000) `--backfill` 로 명시 override.
+_DEFAULT_BACKFILL = 10000
+
+
 if __name__ == "__main__":
     p = argparse.ArgumentParser(prog="telegram_inbox_watcher")
-    p.add_argument("--backfill", type=int, default=0,
-                   help="채널의 최근 N개 메시지를 먼저 ingest")
+    p.add_argument("--backfill", type=int, default=_DEFAULT_BACKFILL,
+                   help=f"채널의 최근 N개 메시지를 먼저 ingest (default {_DEFAULT_BACKFILL}, "
+                        "사실상 채널에 남아있는 모든 메시지)")
+    p.add_argument("--no-backfill", action="store_true",
+                   help="backfill 완전 skip (--backfill 0 과 같음)")
     p.add_argument("--no-listen", action="store_true",
                    help="backfill 만 하고 종료 (listen 단계 skip)")
     args = p.parse_args()
 
+    backfill_count = 0 if args.no_backfill else args.backfill
+
     agent = TelegramChannelAgent()
-    rc = asyncio.run(agent.run(backfill=args.backfill, listen=not args.no_listen))
+    rc = asyncio.run(agent.run(backfill=backfill_count, listen=not args.no_listen))
     sys.exit(rc)
