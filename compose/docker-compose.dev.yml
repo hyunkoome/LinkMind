@@ -8,7 +8,12 @@
 # Phase 2 서비스(tei, minio)는 profile로 게이트됨:
 #   docker compose -f docker-compose.dev.yml --profile phase2 up -d
 #
-# 데이터 영속성: ../volumes/ 하위에 bind mount. 컨테이너 삭제와 무관하게 유지.
+# 데이터 영속성: bind mount. 기본 ${VOLUMES_ROOT:-../volumes}/ (프로젝트 디렉토리 안).
+# 다른 위치 (예: 큰 디스크 /mnt/data/linkmind/) 로 옮기려면 env/dev.env 의
+# VOLUMES_ROOT 에 절대경로 지정. 모든 컨테이너 (postgres/qdrant/ollama/openwebui/
+# minio/redis/models) 의 bind mount root 가 한 번에 바뀜.
+#   예: VOLUMES_ROOT=/mnt/data/linkmind/volumes
+#   default: ../volumes (compose/ 디렉토리 기준 = 프로젝트 루트의 volumes/)
 # ============================================================================
 
 # GPU 사용 서비스(ollama, tei)는 nvidia-container-toolkit 필요.
@@ -30,7 +35,7 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - ../volumes/postgres:/var/lib/postgresql/data
+      - ${VOLUMES_ROOT:-../volumes}/postgres:/var/lib/postgresql/data
       # 초기 스키마 자동 적용
       - ../backend/db/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
     healthcheck:
@@ -53,7 +58,7 @@ services:
       - "6333:6333"       # REST API
       - "6334:6334"       # gRPC
     volumes:
-      - ../volumes/qdrant:/qdrant/storage
+      - ${VOLUMES_ROOT:-../volumes}/qdrant:/qdrant/storage
     healthcheck:
       # Qdrant 공식 이미지에는 wget/curl이 없을 수 있어 단순 TCP 체크 대신
       # 헬스 엔드포인트를 bash builtin으로 호출.
@@ -75,8 +80,8 @@ services:
     ports:
       - "11434:11434"
     volumes:
-      - ../volumes/ollama:/root/.ollama
-      - ../volumes/models:/models
+      - ${VOLUMES_ROOT:-../volumes}/ollama:/root/.ollama
+      - ${VOLUMES_ROOT:-../volumes}/models:/models
     environment:
       OLLAMA_HOST: 0.0.0.0
       OLLAMA_KEEP_ALIVE: "24h"
@@ -109,7 +114,7 @@ services:
       OLLAMA_BASE_URL: http://ollama:11434
       WEBUI_AUTH: "false"     # 로컬 단일 사용자 가정. 향후 외부 노출 시 활성화.
     volumes:
-      - ../volumes/openwebui:/app/backend/data
+      - ${VOLUMES_ROOT:-../volumes}/openwebui:/app/backend/data
     depends_on:
       ollama:
         condition: service_started
@@ -132,7 +137,7 @@ services:
     ports:
       - "8080:80"
     volumes:
-      - ../volumes/models:/data
+      - ${VOLUMES_ROOT:-../volumes}/models:/data
     command:
       - "--model-id=${EMBEDDING_MODEL:-BAAI/bge-m3}"
       - "--max-batch-tokens=16384"
@@ -162,7 +167,7 @@ services:
       MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
     volumes:
-      - ../volumes/minio:/data
+      - ${VOLUMES_ROOT:-../volumes}/minio:/data
     command: server /data --console-address ":9001"
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
@@ -183,7 +188,7 @@ services:
     ports:
       - "6379:6379"
     volumes:
-      - ../volumes/redis:/data
+      - ${VOLUMES_ROOT:-../volumes}/redis:/data
     command: redis-server --appendonly yes
     networks:
       - linkmind
