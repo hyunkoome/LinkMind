@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 
 import { searchSemantic } from "@/lib/api";
+import { useT } from "@/lib/i18n/context";
 import type { SearchHit, SearchResponse } from "@/types/graph";
 
 // graph UI 의 source_type 색상과 일관성
@@ -20,6 +21,7 @@ const SOURCE_COLOR: Record<string, string> = {
 };
 
 export default function SearchPage() {
+  const { t } = useT();
   const [query, setQuery] = useState("");
   const [topK, setTopK] = useState(20);
   const [pending, setPending] = useState(false);
@@ -44,18 +46,15 @@ export default function SearchPage() {
 
   return (
     <main className="h-full overflow-y-auto p-6 max-w-4xl mx-auto w-full">
-      <h1 className="text-xl font-semibold mb-1">Search</h1>
-      <p className="text-sm text-zinc-500 mb-6">
-        Qdrant 의미 검색 (벡터) — 동의어 / paraphrase 도 매칭. 빠른 graph subset
-        은 Graph 페이지의 사이드바 검색 (Postgres FTS) 사용.
-      </p>
+      <h1 className="text-xl font-semibold mb-1">{t.search.pageTitle}</h1>
+      <p className="text-sm text-zinc-500 mb-6">{t.search.pageSubtitle}</p>
 
       <form onSubmit={submit} className="mb-6 flex gap-2">
         <input
           type="text"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="예: 포인트클라우드 압축, attention mechanism, 3D Gaussian Splatting…"
+          placeholder={t.search.placeholder}
           className="flex-1 px-3 py-2 text-sm bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded focus:outline-none focus:ring-1 focus:ring-orange-500"
           disabled={pending}
         />
@@ -67,7 +66,7 @@ export default function SearchPage() {
         >
           {[5, 10, 20, 50, 100].map((n) => (
             <option key={n} value={n}>
-              top {n}
+              {t.search.topK} {n}
             </option>
           ))}
         </select>
@@ -76,22 +75,22 @@ export default function SearchPage() {
           disabled={pending || !query.trim()}
           className="px-4 py-2 text-sm bg-orange-500 hover:bg-orange-600 text-white rounded disabled:opacity-50"
         >
-          {pending ? "검색 중…" : "Search"}
+          {pending ? t.search.searching : t.search.searchBtn}
         </button>
       </form>
 
       {error && (
-        <div className="mb-4 text-sm text-red-500">에러: {error}</div>
+        <div className="mb-4 text-sm text-red-500">{t.common.error}: {error}</div>
       )}
 
       {response && (
         <div className="space-y-3">
           <div className="text-xs text-zinc-500">
-            <span className="font-mono">{response.query}</span> 결과 {response.hits.length} 건
+            <span className="font-mono">{response.query}</span> · {response.hits.length} {t.search.resultsCount}
           </div>
           {response.hits.length === 0 && !pending && (
             <div className="text-sm text-zinc-500 py-8 text-center">
-              매칭되는 자료 없음. 키워드를 바꾸거나 더 많은 자료를 ingest 하세요.
+              {t.search.noResults}
             </div>
           )}
           <ul className="space-y-3">
@@ -106,6 +105,7 @@ export default function SearchPage() {
 }
 
 function HitCard({ hit }: { hit: SearchHit }) {
+  const { t } = useT();
   const apiBase = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
   const color =
     SOURCE_COLOR[hit.source_type] ||
@@ -122,13 +122,13 @@ function HitCard({ hit }: { hit: SearchHit }) {
           {hit.source_type}
         </span>
         <span className="text-[10px] text-zinc-400 font-mono">
-          score {hit.score.toFixed(3)}
+          {t.search.hitScore} {hit.score.toFixed(3)}
         </span>
         <Link
           href={`/?item=${hit.item_id}`}
           className="ml-auto text-[10px] text-orange-600 dark:text-orange-400 hover:underline"
         >
-          → graph 에서 보기
+          {t.search.hitOpenInGraph}
         </Link>
       </div>
       <h3 className="text-sm font-medium break-words mb-1">

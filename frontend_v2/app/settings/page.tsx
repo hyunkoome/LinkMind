@@ -10,6 +10,7 @@ import {
   savePromptVersion,
   updateLLMSettings,
 } from "@/lib/api";
+import { useT } from "@/lib/i18n/context";
 import type {
   LLMSettings,
   ModelsListResponse,
@@ -20,6 +21,7 @@ const PROMPT_NAMES = ["summary_system", "rag_system"] as const;
 type PromptName = (typeof PROMPT_NAMES)[number];
 
 export default function SettingsPage() {
+  const { t } = useT();
   const [settings, setSettings] = useState<LLMSettings | null>(null);
   const [models, setModels] = useState<ModelsListResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -44,19 +46,16 @@ export default function SettingsPage() {
   }, [reload]);
 
   if (loading && !settings) {
-    return <main className="p-6 text-sm text-zinc-500">로딩 중…</main>;
+    return <main className="p-6 text-sm text-zinc-500">{t.common.loading}</main>;
   }
 
   return (
     <main className="h-full overflow-y-auto p-6 max-w-4xl mx-auto w-full">
-      <h1 className="text-xl font-semibold mb-1">Settings</h1>
-      <p className="text-sm text-zinc-500 mb-6">
-        LLM provider/model 런타임 설정 + system prompt 버전 관리. env/dev.env 는
-        시드 값이고 여기서 override 가 우선 (DB 의 app_settings + prompts 테이블).
-      </p>
+      <h1 className="text-xl font-semibold mb-1">{t.settings.pageTitle}</h1>
+      <p className="text-sm text-zinc-500 mb-6">{t.settings.pageSubtitle}</p>
 
       {error && (
-        <div className="mb-4 text-sm text-red-500">에러: {error}</div>
+        <div className="mb-4 text-sm text-red-500">{t.common.error}: {error}</div>
       )}
 
       {/* LLM provider/model */}
@@ -83,6 +82,7 @@ function LLMSection({
   models: ModelsListResponse | null;
   onChanged: () => void;
 }) {
+  const { t } = useT();
   const effective = (settings?.effective || {}) as Record<string, string | undefined>;
   const [provider, setProvider] = useState(effective.default_llm_provider || "ollama");
   const [ollamaModel, setOllamaModel] = useState(effective.ollama_model || "");
@@ -127,24 +127,24 @@ function LLMSection({
 
   return (
     <section className="mb-8 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded p-4">
-      <h2 className="text-sm font-medium mb-3">LLM Provider / Model</h2>
+      <h2 className="text-sm font-medium mb-3">{t.settings.llmSectionTitle}</h2>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
         <label className="block">
-          <span className="text-xs text-zinc-500">Default provider</span>
+          <span className="text-xs text-zinc-500">{t.settings.defaultProvider}</span>
           <select
             value={provider}
             onChange={(e) => setProvider(e.target.value)}
             className="mt-1 w-full px-2 py-1.5 bg-zinc-50 dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded"
           >
-            <option value="ollama">ollama (로컬, MVP)</option>
+            <option value="ollama">{t.settings.providerOllama}</option>
             <option value="vllm">vllm (로컬, 2-10x 빠름)</option>
-            <option value="openai">openai</option>
-            <option value="claude">claude (anthropic)</option>
+            <option value="openai">{t.settings.providerOpenAI}</option>
+            <option value="claude">{t.settings.providerClaude}</option>
           </select>
         </label>
         <label className="block">
           <span className="text-xs text-zinc-500">
-            Ollama model{" "}
+            {t.settings.ollamaModel}{" "}
             {ollamaError && (
               <span className="text-red-400">({ollamaError})</span>
             )}
@@ -167,28 +167,28 @@ function LLMSection({
               type="text"
               value={ollamaModel}
               onChange={(e) => setOllamaModel(e.target.value)}
-              placeholder="qwen2.5:14b"
+              placeholder={t.settings.ollamaModelPlaceholder}
               className="mt-1 w-full px-2 py-1.5 bg-zinc-50 dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded"
             />
           )}
         </label>
         <label className="block">
-          <span className="text-xs text-zinc-500">OpenAI model</span>
+          <span className="text-xs text-zinc-500">{t.settings.openaiModel}</span>
           <input
             type="text"
             value={openaiModel}
             onChange={(e) => setOpenaiModel(e.target.value)}
-            placeholder="gpt-4o-mini"
+            placeholder={t.settings.openaiModelPlaceholder}
             className="mt-1 w-full px-2 py-1.5 bg-zinc-50 dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded"
           />
         </label>
         <label className="block">
-          <span className="text-xs text-zinc-500">Anthropic model</span>
+          <span className="text-xs text-zinc-500">{t.settings.anthropicModel}</span>
           <input
             type="text"
             value={anthropicModel}
             onChange={(e) => setAnthropicModel(e.target.value)}
-            placeholder="claude-haiku-4-5"
+            placeholder={t.settings.anthropicModelPlaceholder}
             className="mt-1 w-full px-2 py-1.5 bg-zinc-50 dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded"
           />
         </label>
@@ -226,16 +226,14 @@ function LLMSection({
         </label>
       </div>
       <div className="mt-3 flex items-center justify-between">
-        <div className="text-[10px] text-zinc-400">
-          빈 값 → env 기본값으로 복귀 (override 해제)
-        </div>
+        <div className="text-[10px] text-zinc-400">{t.settings.emptyValueHint}</div>
         <button
           type="button"
           onClick={save}
           disabled={saving}
           className="px-3 py-1.5 text-xs bg-orange-500 hover:bg-orange-600 text-white rounded disabled:opacity-50"
         >
-          {saving ? "저장 중…" : "저장"}
+          {saving ? t.common.saving : t.settings.saveBtn}
         </button>
       </div>
     </section>
@@ -248,6 +246,8 @@ function PromptSection({
   name: PromptName;
   onChanged: () => void;
 }) {
+  const { t, locale } = useT();
+  const localeForDate = locale === "ko" ? "ko-KR" : "en-US";
   const [versions, setVersions] = useState<PromptVersion[]>([]);
   const [draft, setDraft] = useState("");
   const [note, setNote] = useState("");
@@ -305,16 +305,16 @@ function PromptSection({
   return (
     <section className="mb-8 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded p-4">
       <h2 className="text-sm font-medium mb-2">
-        Prompt · <code className="text-orange-600 dark:text-orange-400">{name}</code>
+        {t.settings.promptSectionTitle} · <code className="text-orange-600 dark:text-orange-400">{name}</code>
         {active && (
           <span className="ml-2 text-[10px] text-zinc-500">
-            active: {active.version}
+            {t.settings.promptActiveLabel} {active.version}
           </span>
         )}
       </h2>
 
       {loading ? (
-        <div className="text-xs text-zinc-500">로딩 중…</div>
+        <div className="text-xs text-zinc-500">{t.common.loading}</div>
       ) : (
         <>
           <textarea
@@ -329,7 +329,7 @@ function PromptSection({
               type="text"
               value={note}
               onChange={(e) => setNote(e.target.value)}
-              placeholder="변경 사유 (선택)"
+              placeholder={t.settings.promptNotePlaceholder}
               className="flex-1 px-2 py-1 text-xs bg-zinc-50 dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded"
             />
             <button
@@ -338,14 +338,14 @@ function PromptSection({
               disabled={busy || !draft.trim() || draft === active?.content}
               className="px-3 py-1 text-xs bg-orange-500 hover:bg-orange-600 text-white rounded disabled:opacity-50"
             >
-              {busy ? "저장 중…" : "새 버전 저장 + 활성화"}
+              {busy ? t.common.saving : t.settings.promptSaveBtn}
             </button>
           </div>
 
           {versions.length > 1 && (
             <details className="mt-3">
               <summary className="text-[10px] uppercase tracking-wider text-zinc-500 cursor-pointer">
-                버전 히스토리 ({versions.length})
+                {t.settings.promptHistoryLabel} ({versions.length})
               </summary>
               <ul className="mt-2 space-y-1">
                 {versions.map((v) => (
@@ -363,7 +363,7 @@ function PromptSection({
                       {v.version}
                     </span>
                     <span className="text-zinc-500 text-[10px]">
-                      {new Date(v.created_at).toLocaleDateString("ko-KR")}
+                      {new Date(v.created_at).toLocaleDateString(localeForDate)}
                     </span>
                     {v.note && <span className="text-zinc-600 dark:text-zinc-400">{v.note}</span>}
                     <span className="ml-auto flex gap-2">
@@ -372,7 +372,7 @@ function PromptSection({
                         onClick={() => setDraft(v.content)}
                         className="text-[10px] text-blue-600 dark:text-blue-400 hover:underline"
                       >
-                        편집창에 불러오기
+                        {t.settings.promptLoadIntoEditor}
                       </button>
                       {!v.is_active && (
                         <button
@@ -381,7 +381,7 @@ function PromptSection({
                           disabled={busy}
                           className="text-[10px] text-orange-600 dark:text-orange-400 hover:underline disabled:opacity-50"
                         >
-                          이 버전 활성화
+                          {t.settings.promptActivate}
                         </button>
                       )}
                     </span>

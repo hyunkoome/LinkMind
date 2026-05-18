@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 
 import { fileUrl, getItem, patchItem } from "@/lib/api";
+import { useT } from "@/lib/i18n/context";
 import type { ItemAttachment, ItemDetail } from "@/types/graph";
 
 interface ItemDetailsProps {
@@ -23,12 +24,38 @@ function modalityOf(source_type: string): Modality {
   return "other";
 }
 
+const COLLAPSED_LS_KEY = "linkmind:itemdetails-collapsed";
+
 export default function ItemDetails({ itemId, onClose }: ItemDetailsProps) {
+  const { t, locale } = useT();
   const [item, setItem] = useState<ItemDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notesDraft, setNotesDraft] = useState<string>("");
   const [saving, setSaving] = useState(false);
+  const [collapsed, setCollapsedState] = useState(false);
+
+  const localeForDate = locale === "ko" ? "ko-KR" : "en-US";
+
+  // localStorage 의 collapsed 상태 복원
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const saved = window.localStorage.getItem(COLLAPSED_LS_KEY);
+      if (saved === "1") setCollapsedState(true);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const setCollapsed = (v: boolean) => {
+    setCollapsedState(v);
+    try {
+      window.localStorage.setItem(COLLAPSED_LS_KEY, v ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  };
 
   useEffect(() => {
     if (!itemId) {
@@ -74,11 +101,37 @@ export default function ItemDetails({ itemId, onClose }: ItemDetailsProps) {
     }
   };
 
+  // 패널 접힘 — 얇은 strip 만 표시, 클릭하면 펼침
+  if (collapsed) {
+    return (
+      <aside
+        className="w-8 shrink-0 h-full border-l border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 flex items-start justify-center cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition"
+        onClick={() => setCollapsed(false)}
+        title={t.itemDetails.collapseShow}
+      >
+        <div className="mt-3 text-xs text-zinc-400 [writing-mode:vertical-rl] rotate-180">
+          ⟨ {t.itemDetails.collapseShow}
+        </div>
+      </aside>
+    );
+  }
+
   if (!itemId) {
     return (
-      <aside className="w-96 shrink-0 h-full border-l border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 flex items-center justify-center text-sm text-zinc-400 p-6 text-center">
-        <div>
-          노드를 클릭하면<br />item 상세가 표시됩니다
+      <aside className="w-96 shrink-0 h-full border-l border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 flex flex-col">
+        <header className="shrink-0 p-3 flex items-center justify-end gap-2 border-b border-zinc-200 dark:border-zinc-800">
+          <button
+            type="button"
+            onClick={() => setCollapsed(true)}
+            className="text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 text-sm"
+            title={t.itemDetails.collapseHide}
+            aria-label={t.itemDetails.collapseHide}
+          >
+            ⟩
+          </button>
+        </header>
+        <div className="flex-1 flex items-center justify-center text-sm text-zinc-400 p-6 text-center">
+          <div>{t.itemDetails.placeholder}</div>
         </div>
       </aside>
     );
@@ -88,21 +141,34 @@ export default function ItemDetails({ itemId, onClose }: ItemDetailsProps) {
     <aside className="w-96 shrink-0 h-full overflow-y-auto border-l border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900">
       <header className="sticky top-0 bg-white dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800 p-3 flex items-center justify-between z-10">
         <div className="text-xs uppercase tracking-wider text-zinc-500">
-          {item ? `${item.source_type} · ${item.is_read ? "✓ read" : "● unread"}` : "loading…"}
+          {item
+            ? `${item.source_type} · ${item.is_read ? t.itemDetails.read : t.itemDetails.unread.split(" ")[0]}`
+            : t.itemDetails.loadingItem}
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 text-lg leading-none"
-          aria-label="닫기"
-        >
-          ✕
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => setCollapsed(true)}
+            className="text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 text-sm"
+            title={t.itemDetails.collapseHide}
+            aria-label={t.itemDetails.collapseHide}
+          >
+            ⟩
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 text-lg leading-none"
+            aria-label={t.common.close}
+          >
+            ✕
+          </button>
+        </div>
       </header>
 
-      {loading && <div className="p-4 text-sm text-zinc-500">불러오는 중…</div>}
+      {loading && <div className="p-4 text-sm text-zinc-500">{t.itemDetails.loadingItem}</div>}
       {error && (
-        <div className="p-4 text-sm text-red-500">에러: {error}</div>
+        <div className="p-4 text-sm text-red-500">{t.common.error}: {error}</div>
       )}
 
       {item && (
@@ -138,24 +204,24 @@ export default function ItemDetails({ itemId, onClose }: ItemDetailsProps) {
                   : "bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-300 font-medium"
               } disabled:opacity-50`}
             >
-              {item.is_read ? "✓ 읽음" : "● 안 읽음 (클릭 → 읽음)"}
+              {item.is_read ? t.itemDetails.read : t.itemDetails.unread}
             </button>
           </div>
 
           {/* 사용자 메모 — user_notes 편집 (PATCH BackgroundTask 로 LLM 키워드 자동) */}
           <section>
             <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1 flex items-center justify-between">
-              <span>내 메모 / 아이디어</span>
+              <span>{t.itemDetails.notesLabel}</span>
               {item.user_notes_updated_at && (
                 <span className="normal-case text-zinc-400">
-                  {new Date(item.user_notes_updated_at).toLocaleString("ko-KR")}
+                  {new Date(item.user_notes_updated_at).toLocaleString(localeForDate)}
                 </span>
               )}
             </div>
             <textarea
               value={notesDraft}
               onChange={(e) => setNotesDraft(e.target.value)}
-              placeholder="이 자료에 대한 메모, 아이디어, 활용 방안 등을 자유롭게…"
+              placeholder={t.itemDetails.notesPlaceholder}
               rows={4}
               className="w-full text-xs px-2 py-1.5 bg-zinc-50 dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded focus:outline-none focus:ring-1 focus:ring-orange-500 resize-y"
             />
@@ -165,7 +231,7 @@ export default function ItemDetails({ itemId, onClose }: ItemDetailsProps) {
               disabled={saving || notesDraft === (item.user_notes || "")}
               className="mt-1 px-3 py-1 text-xs bg-orange-500 hover:bg-orange-600 text-white rounded disabled:opacity-40"
             >
-              저장 (LLM 키워드 자동 추출)
+              {t.itemDetails.notesSaveBtn}
             </button>
           </section>
 
@@ -173,7 +239,7 @@ export default function ItemDetails({ itemId, onClose }: ItemDetailsProps) {
           {item.tags.length > 0 && (
             <section>
               <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1">
-                Tags
+                {t.itemDetails.tagsLabel}
               </div>
               <div className="flex flex-wrap gap-1">
                 {item.tags.map((tag) => (
@@ -192,7 +258,7 @@ export default function ItemDetails({ itemId, onClose }: ItemDetailsProps) {
           {item.summary && (
             <section>
               <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1">
-                요약
+                {t.itemDetails.summaryLabel}
               </div>
               <div className="text-xs text-zinc-700 dark:text-zinc-300 whitespace-pre-wrap leading-relaxed bg-zinc-50 dark:bg-zinc-800 p-2 rounded">
                 {item.summary}
@@ -207,7 +273,7 @@ export default function ItemDetails({ itemId, onClose }: ItemDetailsProps) {
           {item.attachments.length > 0 && (
             <section>
               <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1">
-                Attachments ({item.attachments.length})
+                {t.itemDetails.attachmentsLabel} ({item.attachments.length})
               </div>
               <AttachmentList attachments={item.attachments} />
             </section>
@@ -216,7 +282,7 @@ export default function ItemDetails({ itemId, onClose }: ItemDetailsProps) {
           {/* raw_content — expandable */}
           <details>
             <summary className="text-[10px] uppercase tracking-wider text-zinc-500 cursor-pointer hover:text-zinc-700">
-              raw content ({item.raw_content.length.toLocaleString()} chars)
+              {t.itemDetails.rawContentLabel} ({item.raw_content.length.toLocaleString()} {t.itemDetails.rawContentChars})
             </summary>
             <pre className="mt-2 text-[10px] leading-relaxed whitespace-pre-wrap bg-zinc-50 dark:bg-zinc-800 p-2 rounded max-h-96 overflow-y-auto">
               {item.raw_content}
@@ -226,9 +292,9 @@ export default function ItemDetails({ itemId, onClose }: ItemDetailsProps) {
           {/* metadata */}
           <section className="text-[10px] text-zinc-400 space-y-0.5 pt-2 border-t border-zinc-200 dark:border-zinc-800">
             <div>id: <code className="text-zinc-500">{item.id}</code></div>
-            <div>ingested: {new Date(item.ingested_at).toLocaleString("ko-KR")}</div>
+            <div>{t.itemDetails.ingestedAt}: {new Date(item.ingested_at).toLocaleString(localeForDate)}</div>
             {item.read_at && (
-              <div>first read: {new Date(item.read_at).toLocaleString("ko-KR")}</div>
+              <div>{t.itemDetails.firstReadAt}: {new Date(item.read_at).toLocaleString(localeForDate)}</div>
             )}
           </section>
         </div>
@@ -242,6 +308,7 @@ export default function ItemDetails({ itemId, onClose }: ItemDetailsProps) {
 // ──────────────────────────────────────────────────────────────
 
 function ModalityViewer({ item }: { item: ItemDetail }) {
+  const { t } = useT();
   const modality = modalityOf(item.source_type);
 
   // PDF 의 figures — attachments role='figure'
@@ -251,7 +318,7 @@ function ModalityViewer({ item }: { item: ItemDetail }) {
     return (
       <section>
         <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1">
-          PDF
+          {t.itemDetails.modality.pdf}
         </div>
         {item.source_url && (
           <a
@@ -262,13 +329,13 @@ function ModalityViewer({ item }: { item: ItemDetail }) {
             rel="noreferrer noopener"
             className="block mb-2 text-xs text-blue-600 dark:text-blue-400 hover:underline"
           >
-            📄 원본 PDF 열기
+            {t.itemDetails.modality.pdfOpenOriginal}
           </a>
         )}
         {figures.length > 0 && (
           <div>
             <div className="text-[10px] text-zinc-500 mb-1">
-              Figures ({figures.length})
+              {t.itemDetails.modality.pdfFigures} ({figures.length})
             </div>
             <div className="grid grid-cols-2 gap-1">
               {figures.map((fig) => (
@@ -304,7 +371,8 @@ function ModalityViewer({ item }: { item: ItemDetail }) {
     return (
       <section>
         <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1">
-          YouTube {item.source_type === "youtube_playlist" && "(playlist)"}
+          {t.itemDetails.modality.youtube}{" "}
+          {item.source_type === "youtube_playlist" && t.itemDetails.modality.youtubePlaylist}
         </div>
         {thumbnail && (
           <img
@@ -320,7 +388,7 @@ function ModalityViewer({ item }: { item: ItemDetail }) {
             rel="noreferrer noopener"
             className="text-xs text-red-600 dark:text-red-400 hover:underline"
           >
-            ▶ YouTube 열기
+            {t.itemDetails.modality.youtubeOpen}
           </a>
         )}
       </section>
@@ -331,7 +399,7 @@ function ModalityViewer({ item }: { item: ItemDetail }) {
     return (
       <section>
         <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1">
-          GitHub
+          {t.itemDetails.modality.github}
         </div>
         {item.source_url && (
           <a
@@ -340,7 +408,7 @@ function ModalityViewer({ item }: { item: ItemDetail }) {
             rel="noreferrer noopener"
             className="text-xs text-purple-600 dark:text-purple-400 hover:underline"
           >
-            🔗 repo 열기
+            {t.itemDetails.modality.githubOpenRepo}
           </a>
         )}
       </section>

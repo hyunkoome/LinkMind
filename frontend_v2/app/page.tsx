@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import GraphView from "@/components/GraphView";
 import ItemDetails from "@/components/ItemDetails";
+import Legend from "@/components/Legend";
 import TopicsTree from "@/components/TopicsTree";
 import {
   getGraphTopics,
@@ -123,8 +124,11 @@ export default function HomePage() {
           selectedId={selectedNodeFullId}
         />
 
-        {/* graph 상단 toolbar — 통계 + (subset 일 때) prominent 한 '전체로' 버튼 */}
-        <div className="absolute top-3 left-3 right-3 flex items-center justify-between gap-2 pointer-events-none">
+        {/* Legend — 우상단 floating. 색상/노드 의미 (사용자 요청). */}
+        <Legend />
+
+        {/* graph 상단 toolbar — 통계만 (좌측). 전체 복귀는 sidebar 의 강조 버튼이 main path. */}
+        <div className="absolute top-3 left-3 z-10 pointer-events-none">
           <div className="pointer-events-auto text-xs px-2 py-1 bg-white/80 dark:bg-zinc-900/80 backdrop-blur rounded shadow-sm">
             {loading ? (
               <span className="text-zinc-500">{t.common.loading}</span>
@@ -145,23 +149,6 @@ export default function HomePage() {
               </span>
             )}
           </div>
-          <button
-            type="button"
-            onClick={() => {
-              setSearchQuery("");
-              setSelectedItemId(null);
-              setSelectedNodeFullId(null);
-              void loadAllTopics();
-            }}
-            className={`pointer-events-auto text-xs px-3 py-1.5 backdrop-blur rounded shadow-sm transition ${
-              isSubsetView
-                ? "bg-orange-500 hover:bg-orange-600 text-white font-medium animate-pulse"
-                : "bg-white/80 dark:bg-zinc-900/80 hover:bg-orange-100 dark:hover:bg-orange-900/30"
-            }`}
-            title={isSubsetView ? t.graph.subsetView : t.graph.refreshAll}
-          >
-            {isSubsetView ? t.graph.backToAll : t.graph.refreshAll}
-          </button>
         </div>
       </main>
 
