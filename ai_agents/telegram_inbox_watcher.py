@@ -140,10 +140,14 @@ class TelegramChannelAgent(ChannelAgent):
 
     name = "telegram"
 
-    def __init__(self) -> None:
+    def __init__(self, *, analyze_now: bool = True) -> None:
         self.settings: Settings | None = None
         self.client = None       # telethon.TelegramClient — setup 이후 채워짐
         self.channel = None      # telethon entity — setup 이후 채워짐
+        # analyze_now=False → backfill 빠른 모드. raw + chunks 까지만 저장, summary
+        # 와 LLM 태그 추출은 skip. 채널 빠르게 비우는 게 우선일 때 사용. 그 후
+        # python -m backend.jobs.backfill_summary 로 일괄 summary 생성.
+        self.analyze_now = analyze_now
 
     async def setup(self) -> None:
         """env 검증 + Telethon client start + 채널 resolve."""
@@ -279,7 +283,9 @@ class TelegramChannelAgent(ChannelAgent):
         )
 
         try:
-            result: dict[str, Any] = await ingest_telegram_message(tm, analyze_now=True)
+            result: dict[str, Any] = await ingest_telegram_message(
+                tm, analyze_now=self.analyze_now,
+            )
         except Exception as e:  # noqa: BLE001
             logger.exception("ingest 실패 (msg=%s): %s", msg.id, e)
             self._cleanup_tmp_dir(tmp_dir)
@@ -382,10 +388,14 @@ if __name__ == "__main__":
                    help="backfill 완전 skip (--backfill 0 과 같음)")
     p.add_argument("--no-listen", action="store_true",
                    help="backfill 만 하고 종료 (listen 단계 skip)")
+    p.add_argument("--fast", action="store_true",
+                   help="LLM 요약/태그 skip — raw + chunks (임베딩) 까지만 저장. "
+                        "채널을 빠르게 비우고 싶을 때 (1메시지 ~2-3초). "
+                        "그 후 `python -m backend.jobs.backfill_summary` 로 일괄 summary 생성.")
     args = p.parse_args()
 
     backfill_count = 0 if args.no_backfill else args.backfill
 
-    agent = TelegramChannelAgent()
+    agent = TelegramChannelAgent(analyze_now=not args.fast)
     rc = asyncio.run(agent.run(backfill=backfill_count, listen=not args.no_listen))
     sys.exit(rc)

@@ -10,11 +10,13 @@ import {
   getItemNeighborhood,
   searchGraph,
 } from "@/lib/api";
+import { useT } from "@/lib/i18n/context";
 import type { GraphResponse } from "@/types/graph";
 
 const EMPTY: GraphResponse = { nodes: [], edges: [] };
 
 export default function HomePage() {
+  const { t } = useT();
   const [graph, setGraph] = useState<GraphResponse>(EMPTY);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -125,21 +127,21 @@ export default function HomePage() {
         <div className="absolute top-3 left-3 right-3 flex items-center justify-between gap-2 pointer-events-none">
           <div className="pointer-events-auto text-xs px-2 py-1 bg-white/80 dark:bg-zinc-900/80 backdrop-blur rounded shadow-sm">
             {loading ? (
-              <span className="text-zinc-500">loading…</span>
+              <span className="text-zinc-500">{t.common.loading}</span>
             ) : error ? (
-              <span className="text-red-500">error: {error}</span>
+              <span className="text-red-500">{t.common.error}: {error}</span>
             ) : (
               <span className="text-zinc-700 dark:text-zinc-300">
                 {isSubsetView && (
                   <span className="text-orange-600 dark:text-orange-400 font-medium mr-1">
-                    🔍 부분 view ·
+                    {t.graph.subsetView} ·
                   </span>
                 )}
-                {graph.nodes.filter((n) => n.data.type === "topic").length} topics
+                {graph.nodes.filter((n) => n.data.type === "topic").length} {t.graph.topics}
                 {" · "}
-                {graph.nodes.filter((n) => n.data.type === "item").length} items
+                {graph.nodes.filter((n) => n.data.type === "item").length} {t.graph.items}
                 {" · "}
-                {graph.edges.length} edges
+                {graph.edges.length} {t.graph.edges}
               </span>
             )}
           </div>
@@ -156,9 +158,9 @@ export default function HomePage() {
                 ? "bg-orange-500 hover:bg-orange-600 text-white font-medium animate-pulse"
                 : "bg-white/80 dark:bg-zinc-900/80 hover:bg-orange-100 dark:hover:bg-orange-900/30"
             }`}
-            title={isSubsetView ? "현재 부분 view — 클릭으로 전체 그래프 복귀" : "전체 그래프 새로고침"}
+            title={isSubsetView ? t.graph.subsetView : t.graph.refreshAll}
           >
-            {isSubsetView ? "← 전체 그래프로 복귀" : "🔄 전체 그래프"}
+            {isSubsetView ? t.graph.backToAll : t.graph.refreshAll}
           </button>
         </div>
       </main>

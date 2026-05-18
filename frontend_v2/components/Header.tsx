@@ -3,22 +3,29 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-const NAV = [
-  { href: "/", label: "Graph", icon: "🔮" },
-  { href: "/ingest", label: "Ingest", icon: "📥" },
-  { href: "/search", label: "Search", icon: "🔍" },
-  { href: "/settings", label: "Settings", icon: "⚙️" },
+import { useT } from "@/lib/i18n/context";
+
+const NAV_HREFS = [
+  { href: "/", icon: "🔮", key: "graph" as const },
+  { href: "/ingest", icon: "📥", key: "ingest" as const },
+  { href: "/search", icon: "🔍", key: "search" as const },
+  { href: "/settings", icon: "⚙️", key: "settings" as const },
 ];
 
 export default function Header() {
   const pathname = usePathname();
+  const { locale, setLocale, t } = useT();
+
   return (
     <header className="shrink-0 h-12 border-b border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 flex items-center px-4 gap-1">
-      <Link href="/" className="text-base font-semibold text-orange-600 dark:text-orange-400 mr-4">
-        LinkMind
+      <Link
+        href="/"
+        className="text-base font-semibold text-orange-600 dark:text-orange-400 mr-4"
+      >
+        {t.app.title}
       </Link>
       <nav className="flex gap-1">
-        {NAV.map((item) => {
+        {NAV_HREFS.map((item) => {
           const active =
             item.href === "/"
               ? pathname === "/"
@@ -34,13 +41,44 @@ export default function Header() {
               }`}
             >
               <span className="mr-1">{item.icon}</span>
-              {item.label}
+              {t.nav[item.key]}
             </Link>
           );
         })}
       </nav>
-      <div className="ml-auto text-[10px] text-zinc-400">
-        Phase 2.5 · self-contained personal AI
+
+      <div className="ml-auto flex items-center gap-2">
+        {/* Language toggle */}
+        <div
+          className="flex items-center text-[10px] bg-zinc-100 dark:bg-zinc-800 rounded p-0.5"
+          aria-label={t.locale.toggleAria}
+        >
+          <button
+            type="button"
+            onClick={() => setLocale("ko")}
+            className={`px-2 py-0.5 rounded transition ${
+              locale === "ko"
+                ? "bg-orange-500 text-white font-medium"
+                : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"
+            }`}
+          >
+            한
+          </button>
+          <button
+            type="button"
+            onClick={() => setLocale("en")}
+            className={`px-2 py-0.5 rounded transition ${
+              locale === "en"
+                ? "bg-orange-500 text-white font-medium"
+                : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"
+            }`}
+          >
+            EN
+          </button>
+        </div>
+        <div className="text-[10px] text-zinc-400 hidden md:block">
+          Phase 2.5 · {t.app.tagline}
+        </div>
       </div>
     </header>
   );
