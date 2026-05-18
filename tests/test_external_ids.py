@@ -101,6 +101,41 @@ def test_github_from_text_multiple():
     assert "baz/qux" in out
 
 
+def test_github_attachment_url_not_repo():
+    """github.com/user-attachments/assets/<uuid> 는 attachment URL — repo 아님."""
+    url = "https://github.com/user-attachments/assets/abc-123-def"
+    assert github_repo_from_url(url) is None
+
+
+def test_github_orgs_path_not_repo():
+    """github.com/orgs/<org> 는 org 페이지 — repo 아님."""
+    assert github_repo_from_url("https://github.com/orgs/anthropic/teams") is None
+
+
+def test_github_reserved_owners_rejected():
+    """settings / sponsors / search 등 system path 도 owner 로 인식 X."""
+    for path in ("settings/profile", "sponsors/foo", "search/results",
+                 "marketplace/actions", "explore/topics"):
+        assert github_repo_from_url(f"https://github.com/{path}") is None
+
+
+def test_github_invalid_owner_starts_with_hyphen():
+    """username 규칙: 시작/끝 hyphen X."""
+    assert github_repo_from_url("https://github.com/-bad/repo") is None
+    assert github_repo_from_url("https://github.com/bad-/repo") is None
+
+
+def test_github_repos_from_text_skips_attachments():
+    """텍스트 안의 attachment URL 도 추출 결과에 안 들어감 (PDF/README 본문 파싱 시)."""
+    text = """좋은 자료: https://github.com/microsoft/LoRA
+    캡처: https://github.com/user-attachments/assets/uuid-xxx
+    다른 repo: https://github.com/foo/bar"""
+    repos = github_repos_from_text(text)
+    assert "microsoft/LoRA" in repos
+    assert "foo/bar" in repos
+    assert not any(r.startswith("user-attachments/") for r in repos)
+
+
 # ── youtube ─────────────────────────────────────────────────
 
 

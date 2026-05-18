@@ -132,8 +132,39 @@ def dois_from_text(text: str, *, limit: int = 10) -> list[str]:
 # ──────────────────────────────────────────────────────────────
 
 
+# GitHub 의 reserved path — 실제 user/org 아님. owner 자리에 이런 게 오면 skip.
+# `github.com/user-attachments/assets/<uuid>` 같은 attachment URL 이 잘못 owner/repo
+# 로 인식되어 의미 없는 topic 이 자동 생성되던 버그 차단.
+_GITHUB_RESERVED_OWNERS = {
+    "user-attachments", "orgs", "sponsors", "marketplace", "enterprise",
+    "features", "pricing", "login", "join", "logout", "signup",
+    "settings", "search", "topics", "trending", "collections", "explore",
+    "events", "notifications", "new", "about", "site", "contact",
+    "security", "github", "apps", "oauth", "account", "dashboard",
+    "issues", "pulls", "actions", "starred", "watching", "stars",
+    "readme", "assets", "raw", "media", "codespaces", "discussions",
+    "sponsored", "skills",
+}
+
+
+def _is_valid_github_owner(owner: str) -> bool:
+    """GitHub username/org 규칙: alphanumeric + hyphen, 시작/끝 hyphen X, max 39, reserved X."""
+    if not owner:
+        return False
+    if owner.lower() in _GITHUB_RESERVED_OWNERS:
+        return False
+    if len(owner) > 39:
+        return False
+    if owner.startswith("-") or owner.endswith("-"):
+        return False
+    return all(c.isalnum() or c == "-" for c in owner)
+
+
 def github_repo_from_url(url: str) -> str | None:
-    """github.com/<owner>/<repo> → 'owner/repo' (.git suffix 제거, 추가 path 무시)."""
+    """github.com/<owner>/<repo> → 'owner/repo' (.git suffix 제거, 추가 path 무시).
+
+    owner 가 GitHub 의 system path (user-attachments / orgs / settings 등) 이면 None.
+    """
     if not url:
         return None
     u = urlparse(url)
@@ -146,6 +177,8 @@ def github_repo_from_url(url: str) -> str | None:
     owner, repo = parts[0], parts[1]
     if repo.endswith(".git"):
         repo = repo[:-4]
+    if not _is_valid_github_owner(owner):
+        return None
     # owner/repo 만 — 대소문자 보존 (GitHub display 그대로)
     return f"{owner}/{repo}"
 
@@ -167,6 +200,10 @@ def github_repos_from_text(text: str, *, limit: int = 10) -> list[str]:
         repo = repo.rstrip(".,;:!?)]}>")
         if repo.endswith(".git"):
             repo = repo[:-4]
+        # owner 가 GitHub reserved (user-attachments 등) 면 skip — 실제 repo 아님
+        owner = repo.split("/", 1)[0]
+        if not _is_valid_github_owner(owner):
+            continue
         # repo path 자체에 '/' 가 한 번만 있어야 (extra path 가 잡혔으면 첫 owner/repo 만).
         parts = repo.split("/")
         if len(parts) < 2 or not parts[0] or not parts[1]:
