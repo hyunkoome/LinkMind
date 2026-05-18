@@ -140,13 +140,18 @@ class TelegramChannelAgent(ChannelAgent):
 
     name = "telegram"
 
-    def __init__(self, *, analyze_now: bool = True) -> None:
+    def __init__(self, *, analyze_now: bool = False) -> None:
+        """default 가 analyze_now=False (사용자 architecture 비판 2026-05-18 반영).
+
+        텔레그램은 사용자 입력 channel — 채널 빠르게 비우는 게 우선. raw + 채널
+        삭제만 즉시, chunks (embedding) + summary (LLM) 는 backend 의 analysis_worker
+        가 백그라운드로 천천히 처리. step5_run_dev.sh 한 명령으로 다 자동 동작.
+
+        analyze_now=True 명시 시 옛 동기 동작 — 1메시지당 ~30-60초. 보통 안 씀.
+        """
         self.settings: Settings | None = None
         self.client = None       # telethon.TelegramClient — setup 이후 채워짐
         self.channel = None      # telethon entity — setup 이후 채워짐
-        # analyze_now=False → backfill 빠른 모드. raw + chunks 까지만 저장, summary
-        # 와 LLM 태그 추출은 skip. 채널 빠르게 비우는 게 우선일 때 사용. 그 후
-        # python -m backend.jobs.backfill_summary 로 일괄 summary 생성.
         self.analyze_now = analyze_now
 
     async def setup(self) -> None:

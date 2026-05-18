@@ -273,9 +273,20 @@ def _normalize_tags(raw: list[str]) -> list[str]:
 
 
 async def ingest_url(
-    url: str, *, analyze_now: bool = True, force: bool = False,
+    url: str, *,
+    analyze_now: bool = True,
+    summarize: bool | None = None,
+    force: bool = False,
 ) -> dict[str, Any]:
     """URL 하나를 fetch + extract + DB 저장 + (옵션) 임베딩/요약.
+
+    옵션 (3단계 분리, deferred processing 지원):
+    - analyze_now=False: raw + topic link 만. chunks/summary 둘 다 skip. 보통 안 씀.
+    - analyze_now=True, summarize=False: raw + chunks (embedding, 검색 가능) 까지 즉시.
+                                          summary 만 백그라운드 worker 가 나중에 생성.
+                                          → 텔레그램 backfill 빠르게 (1메시지 ~2-3초)
+    - analyze_now=True, summarize=True (default): 모두 즉시 — 동기 처리.
+    - summarize=None 이면 analyze_now 와 같은 값 (backward compat).
 
     force=True 면 동일 hash 의 기존 item 이 있어도 skip 하지 않고 분석 결과
     (summary, tags, source_metadata, title) 만 재계산해서 덮어쓴다. raw_content /
@@ -283,13 +294,13 @@ async def ingest_url(
 
     영구 실패 (HTTP 4xx, 본문 추출 실패) 시 fallback — URL 자체만 raw 로 보존하는
     "url-only" item 저장. 5xx / network error 는 raise (재시도 가능).
-    이렇게 하면 텔레그램 인박스의 메시지가 영구 실패 URL 이라도 처리되어 채널에서
-    삭제됨 → backfill 무한 재시도 방지. graph 에는 빈 노드로 보존 → 사용자가 수동
-    archive.org / 다른 URL 로 재시도 가능.
 
     Returns: {"item_id": ..., "created": bool, "refreshed": bool, "chunks_indexed": int,
               "summary_generated": bool, "tags": [...], "title": ...}
     """
+    # backward compat — summarize 미지정 이면 analyze_now 따름.
+    if summarize is None:
+        summarize = analyze_now
     try:
         html = await fetch_html(url)
     except httpx.HTTPStatusError as e:
@@ -380,8 +391,11 @@ async def ingest_url(
         summary_text: str | None = None
         final_tags: list[str] = []
         if analyze_now:
+            # embedding 은 빠름 (~1-2초) — 검색 기능 위해 즉시 처리
             chunks_indexed = await _embed_and_index(session, item_id=item_id, text=doc.body)
-            # 요약은 옵션 — LLM 가 다운/미설정이어도 raw + embedding 은 이미 저장됨.
+        if summarize:
+            # summary 는 LLM 호출 (~30-60초) — summarize=False 면 skip,
+            # 백그라운드 worker (lifespan) 가 summary IS NULL 인 row 처리.
             summary_text, final_tags = await _generate_and_save_summary(
                 session,
                 item_id=item_id,
