@@ -48,6 +48,18 @@ export default function ItemDetails({ itemId, onClose }: ItemDetailsProps) {
     }
   }, []);
 
+  // itemId 가 새로 들어오면 자동으로 패널 펼침 (사용자가 노드 클릭한 의도)
+  useEffect(() => {
+    if (itemId) {
+      setCollapsedState(false);
+      try {
+        window.localStorage.setItem(COLLAPSED_LS_KEY, "0");
+      } catch {
+        /* ignore */
+      }
+    }
+  }, [itemId]);
+
   const setCollapsed = (v: boolean) => {
     setCollapsedState(v);
     try {

@@ -135,9 +135,21 @@ def _clean_readme_html(md: str) -> str:
 
 
 async def ingest_github(
-    url: str, *, analyze_now: bool = True, force: bool = False,
+    url: str, *,
+    analyze_now: bool = True,
+    force: bool = False,
+    caption: str | None = None,
 ) -> dict[str, Any]:
-    owner, repo = parse_github_url(url)
+    # owner-only URL (예: https://github.com/graphdeco-inria) 는 repo 가 없어
+    # repo API 호출 불가 — url ingest 로 폴백 (organization page 의 HTML 만이라도 보존).
+    try:
+        owner, repo = parse_github_url(url)
+    except ValueError:
+        logger.info("GitHub URL 에 repo 가 없어 url ingest 로 폴백: %s", url)
+        from backend.ingest.url import ingest_url
+        return await ingest_url(
+            url, analyze_now=analyze_now, force=force, caption=caption,
+        )
     canonical = f"https://github.com/{owner}/{repo}"
 
     async with httpx.AsyncClient(follow_redirects=True) as client:
@@ -250,6 +262,7 @@ async def ingest_github(
         analyze_now=analyze_now,
         force=force,
         external_ids=ext_ids,
+        caption=caption,
     )
 
 
@@ -271,6 +284,7 @@ async def _save_with_summary(
     analyze_now: bool,
     force: bool = False,
     external_ids: list[ExternalId] | None = None,
+    caption: str | None = None,
 ) -> dict[str, Any]:
     if not doc.body or len(doc.body.strip()) < 50:
         raise ValueError("본문이 너무 짧아 저장할 수 없습니다")
@@ -283,6 +297,13 @@ async def _save_with_summary(
             session, source_type=source_type, content_hash=content_hash,
         )
         if existing is not None:
+            # 새 caption 이면 user_notes append (dedup 에서도 사용자 메모 보존)
+            if caption and caption.strip():
+                from backend.db.repository import append_item_user_notes
+                await append_item_user_notes(
+                    session, item_id=existing, new_note=caption.strip(),
+                )
+                await session.commit()
             if not force:
                 return {"item_id": str(existing), "created": False, "chunks_indexed": 0}
             refreshed = await refresh_existing_item_analysis(
@@ -319,6 +340,12 @@ async def _save_with_summary(
             await auto_link_topics(
                 session, item_id=item_id, source_type=source_type,
                 title=doc.title, ids=external_ids,
+            )
+        # caption (텔레그램 등에서 같이 온 사용자 메모) → user_notes
+        if caption and caption.strip():
+            from backend.db.repository import append_item_user_notes
+            await append_item_user_notes(
+                session, item_id=item_id, new_note=caption.strip(),
             )
         await session.commit()
 

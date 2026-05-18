@@ -18,6 +18,7 @@ from backend.ingest.telegram import (
     TelegramMessage,
     _extract_text,
     _find_urls,
+    _strip_urls_for_caption,
     _telegram_permalink,
     parse_export_messages,
 )
@@ -66,6 +67,39 @@ def test_telegram_permalink_private_channel():
 def test_telegram_permalink_returns_none_for_missing():
     assert _telegram_permalink(None, 1) is None
     assert _telegram_permalink("123", None) is None
+
+
+# ── caption helper (Phase 2.5 wave-3) ──────────────────────
+
+
+def test_strip_urls_for_caption_keeps_user_note():
+    """URL 과 같이 온 사용자 메모는 caption 으로 살아남아야 한다."""
+    text = "https://arxiv.org/abs/2106.09685 LoRA 논문 — 어댑터 fine-tuning 핵심"
+    assert _strip_urls_for_caption(text) == "LoRA 논문 — 어댑터 fine-tuning 핵심"
+
+
+def test_strip_urls_for_caption_multiple_urls():
+    text = "https://a.com 좋은 자료 https://b.com 두 번째 링크"
+    out = _strip_urls_for_caption(text)
+    # URL 두 개가 제거되고 사이의 메모 단어들이 단일 공백으로 연결
+    assert "좋은 자료" in out
+    assert "두 번째 링크" in out
+    assert "https" not in out
+
+
+def test_strip_urls_for_caption_url_only_returns_empty():
+    """URL 만 있고 메모 없으면 빈 문자열 — note 만들 만큼의 의미 없음."""
+    assert _strip_urls_for_caption("https://arxiv.org/abs/2106.09685") == ""
+
+
+def test_strip_urls_for_caption_too_short_returns_empty():
+    """잔여 텍스트가 5자 미만이면 caption 가치 없음 (noise)."""
+    assert _strip_urls_for_caption("https://x.com 음") == ""
+
+
+def test_strip_urls_for_caption_empty_input():
+    assert _strip_urls_for_caption("") == ""
+    assert _strip_urls_for_caption("   ") == ""
 
 
 # ── parse_export_messages (실 fixture) ──────────────────────

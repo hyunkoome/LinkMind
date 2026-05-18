@@ -362,12 +362,18 @@ async def _save_pdf_figures(
 
 
 async def ingest_pdf(
-    src: str | Path, *, analyze_now: bool = True, force: bool = False,
+    src: str | Path, *,
+    analyze_now: bool = True,
+    force: bool = False,
+    caption: str | None = None,
 ) -> dict[str, Any]:
     """PDF 한 건 처리. src 는 로컬 파일 경로 또는 https URL.
 
     force=True 면 동일 hash 기존 item 의 summary/tags/source_metadata 만 재계산
     (raw_content/chunks/attachments 는 그대로).
+
+    caption: 텔레그램 등에서 PDF URL 과 같이 온 사용자 메모. user_notes 에 append
+    (idempotent — 같은 caption 두 번이면 dedup. Phase 2.5 wave-3 정책).
     """
     data, external_url = await _load_pdf_bytes(src)
     file_path, file_hash, file_size = save_bytes(data)
@@ -411,6 +417,12 @@ async def ingest_pdf(
             if force and analyze_now:
                 figures_saved_existing = await _save_pdf_figures(
                     session, item_id=existing, data=data,
+                )
+            # 새 caption 이면 user_notes append (dedup 에서도 사용자 메모 보존)
+            if caption and caption.strip():
+                from backend.db.repository import append_item_user_notes
+                await append_item_user_notes(
+                    session, item_id=existing, new_note=caption.strip(),
                 )
             await session.commit()
             if not force:
@@ -475,6 +487,12 @@ async def ingest_pdf(
             session, item_id=item_id, source_type="pdf",
             title=title, ids=ext_ids,
         )
+        # caption (텔레그램에서 PDF 와 같이 온 사용자 메모) → user_notes
+        if caption and caption.strip():
+            from backend.db.repository import append_item_user_notes
+            await append_item_user_notes(
+                session, item_id=item_id, new_note=caption.strip(),
+            )
         await session.commit()
 
         chunks_indexed = 0

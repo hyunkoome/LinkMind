@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+import ThemeToggle from "@/components/ThemeToggle";
 import { useT } from "@/lib/i18n/context";
 
 const NAV_HREFS = [
@@ -48,6 +49,9 @@ export default function Header() {
       </nav>
 
       <div className="ml-auto flex items-center gap-2">
+        {/* Theme toggle — Next.js dev tools 의 Theme 메뉴 대체 */}
+        <ThemeToggle />
+
         {/* Language toggle */}
         <div
           className="flex items-center text-[10px] bg-zinc-100 dark:bg-zinc-800 rounded p-0.5"

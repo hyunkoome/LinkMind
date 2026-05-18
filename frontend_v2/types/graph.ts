@@ -2,14 +2,20 @@
 // 변경 시 두 곳 모두 동기화.
 
 export interface GraphNodeData {
-  id: string;                    // "topic:<uuid>" | "item:<uuid>"
+  id: string;                    // "topic:<uuid>" | "item:<uuid>" | "category:<uuid>"
   label: string;
-  type: "topic" | "item";
-  // topic 전용
+  type: "topic" | "item" | "category";
+  // topic / category 공통
   slug?: string;
+  // topic 전용
   title?: string | null;
   item_count?: number;
   primary_external_id?: Record<string, string>;
+  // category 전용 (Phase 2.5 wave-3)
+  topic_count?: number;
+  color?: string | null;
+  pinned?: boolean;
+  synonyms?: string[];
   // item 전용
   source_type?: string;          // pdf / url / youtube / github / document / telegram / ...
   source_url?: string | null;

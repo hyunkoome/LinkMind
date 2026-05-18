@@ -81,6 +81,9 @@ def parse_youtube_url(url: str) -> dict[str, str | None]:
         vid = u.path.split("/shorts/", 1)[1].split("/")[0] or None
     elif u.path.startswith("/embed/"):
         vid = u.path.split("/embed/", 1)[1].split("/")[0] or None
+    elif u.path.startswith("/live/"):
+        # 라이브 스트림 URL — 끝나면 일반 video 처럼 다룬다 (yt-dlp 가 자동 처리)
+        vid = u.path.split("/live/", 1)[1].split("/")[0] or None
 
     if vid and qs.get("list"):
         return {"kind": "playlist", "video_id": vid, "playlist_id": qs["list"][0]}
@@ -268,7 +271,10 @@ async def _download_and_save_thumbnail(
 
 
 async def ingest_youtube_video(
-    video_url: str, *, analyze_now: bool = True, force: bool = False,
+    video_url: str, *,
+    analyze_now: bool = True,
+    force: bool = False,
+    caption: str | None = None,
 ) -> dict[str, Any]:
     parsed = parse_youtube_url(video_url)
     video_id = parsed.get("video_id")
@@ -339,6 +345,7 @@ async def ingest_youtube_video(
         analyze_now=analyze_now,
         force=force,
         external_ids=ext_ids,
+        user_caption=caption,
     )
 
     # 썸네일 저장 — 멀티모달 학습 데이터 (Phase 4 sVLL). 신규/force refresh 시 시도.
@@ -357,7 +364,10 @@ async def ingest_youtube_video(
 
 
 async def ingest_youtube_playlist(
-    playlist_url: str, *, analyze_now: bool = True, force: bool = False,
+    playlist_url: str, *,
+    analyze_now: bool = True,
+    force: bool = False,
+    caption: str | None = None,
 ) -> dict[str, Any]:
     parsed = parse_youtube_url(playlist_url)
     playlist_id = parsed.get("playlist_id")
@@ -416,6 +426,7 @@ async def ingest_youtube_playlist(
         analyze_now=analyze_now,
         force=force,
         external_ids=ext_ids,
+        user_caption=caption,
     )
 
     # 플레이리스트도 yt-dlp 가 대표 썸네일 (보통 첫 영상) 을 제공.
@@ -441,14 +452,21 @@ def _safe_json_dump(data: dict[str, Any]) -> str:
 
 
 async def ingest_youtube(
-    url: str, *, analyze_now: bool = True, force: bool = False,
+    url: str, *,
+    analyze_now: bool = True,
+    force: bool = False,
+    caption: str | None = None,
 ) -> dict[str, Any]:
     """URL 의 형태 (video / playlist) 자동 판별 후 적절한 ingester 호출."""
     parsed = parse_youtube_url(url)
     if parsed["kind"] == "playlist":
-        return await ingest_youtube_playlist(url, analyze_now=analyze_now, force=force)
+        return await ingest_youtube_playlist(
+            url, analyze_now=analyze_now, force=force, caption=caption,
+        )
     if parsed["kind"] == "video":
-        return await ingest_youtube_video(url, analyze_now=analyze_now, force=force)
+        return await ingest_youtube_video(
+            url, analyze_now=analyze_now, force=force, caption=caption,
+        )
     raise ValueError(f"YouTube URL 형식을 판별할 수 없습니다: {url}")
 
 
@@ -465,7 +483,11 @@ async def _save_with_summary(
     analyze_now: bool,
     force: bool = False,
     external_ids: list[ExternalId] | None = None,
+    user_caption: str | None = None,
 ) -> dict[str, Any]:
+    """user_caption: 텔레그램 등에서 같이 온 사용자 메모 (user_notes 로 append).
+    이름은 user_caption — 같은 모듈의 attachment caption (썸네일 alt-text) 과 구분.
+    """
     if not doc.body or len(doc.body.strip()) < 50:
         raise ValueError("본문이 너무 짧아 저장할 수 없습니다")
 
@@ -477,6 +499,13 @@ async def _save_with_summary(
             session, source_type=source_type, content_hash=content_hash,
         )
         if existing is not None:
+            # 새 caption 이면 user_notes append (dedup 에서도 사용자 메모 보존)
+            if user_caption and user_caption.strip():
+                from backend.db.repository import append_item_user_notes
+                await append_item_user_notes(
+                    session, item_id=existing, new_note=user_caption.strip(),
+                )
+                await session.commit()
             if not force:
                 return {"item_id": str(existing), "created": False, "chunks_indexed": 0}
             refreshed = await refresh_existing_item_analysis(
@@ -513,6 +542,12 @@ async def _save_with_summary(
             await auto_link_topics(
                 session, item_id=item_id, source_type=source_type,
                 title=doc.title, ids=external_ids,
+            )
+        # user_caption (텔레그램 등에서 같이 온 사용자 메모) → user_notes
+        if user_caption and user_caption.strip():
+            from backend.db.repository import append_item_user_notes
+            await append_item_user_notes(
+                session, item_id=item_id, new_note=user_caption.strip(),
             )
         await session.commit()
 

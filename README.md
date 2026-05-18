@@ -108,14 +108,30 @@ bash scripts/step2_2_setup_infra.sh --phase2     # + TEI / MinIO
 bash scripts/step2_2_setup_infra.sh --recreate   # 컨테이너 강제 재생성
 ```
 
-### 4. Ollama 모델 (step3)
+### 4. LLM 런타임 (step3) — Ollama 또는 vLLM
 
-env/dev.env 의 `OLLAMA_MODEL` 을 컨테이너로 pull + 동작 검증:
+**Ollama** (가벼움, 다양 모델 swap):
 
 ```bash
 bash scripts/step3_setup_ollama.sh       # 기본 모델 pull
 bash scripts/step3_check_ollama.sh       # 컨테이너/API/모델 존재/generate dry run
 ```
+
+**vLLM** (Phase 2.5 wave-4 부터 default — Ollama 대비 ~30x throughput, qwen2.5:14b
+3분 → vllm/Qwen2.5-7B 7초 검증). docker-compose `profile: vllm` 활성화:
+
+```bash
+docker compose --env-file env/dev.env -f compose/docker-compose.dev.yml \
+    --profile vllm up -d vllm                              # 첫 부팅 — 모델 HF Hub
+                                                            # 다운로드 15GB (~10-20분)
+# Settings UI 에서 provider=vllm 또는 PUT /settings/llm
+curl -s -X PUT http://localhost:8000/settings/llm \
+     -H 'content-type: application/json' \
+     -d '{"default_llm_provider":"vllm","vllm_model":"Qwen/Qwen2.5-7B-Instruct"}'
+```
+
+`env/dev.env.example` 의 `VLLM_MODEL`, `VLLM_GPU_MEM_UTIL` 참조. healthcheck
+`start_period: 1800s` (30분 — 첫 다운로드 + cudagraph capture 충분).
 
 ### 5. Qdrant 컬렉션 (step4)
 
@@ -274,8 +290,8 @@ LinkMind 는 backend (`backend/`) + multi-channel gateway (`ai_agents/`) + Strea
 | **2.5 wave-2** | arxiv API seed (title/abstract 자동), 검색 결과의 multi-modal 인라인 노출, manual link autocomplete | ✅ 완료 |
 | **C wave-1 (Telegram inbox)** | Telethon daemon, 채널 메시지 → 자동 ingest + URL 라우팅 + topic 매핑, 처리 후 채널에서 자동 삭제 (inbox 패턴) | ✅ 완료 (실 환경 검증) |
 | **리팩토링** | `scripts/` 는 .sh 만 / `backend/jobs/` batch python / `ai_agents/` client agent — 5 카테고리 135 tests | ✅ 완료 |
-| **2.5 wave-3 (단일 self-contained, 2026-05-18)** | (1) §3 재정의 + §14 신규 (AGPL+Privacy+SaaS path) + docs/agent_architecture.md (2) `ai_agents/base.py` ChannelAgent ABC + telegram refactor (3) items 스키마 user_notes/is_read/read_at + GET/PATCH /items/{id} + LLM 키워드 추출 BackgroundTask (4) `backend/ingest/document/` 통합 추출 (PDF + DOCX/PPTX/TXT/MD, 한국어 cp949) (5) 텔레그램 첨부 자동 ingest + caption → user_notes 자동 (6) VOLUMES_ROOT env (compose bind mount root 설정 가능) (7) graph backend `/graph/*` — cytoscape.js 호환 JSON | 🚧 진행 중 (194 tests, backend 완성) |
-| **2.5 wave-3 남은 작업** | end-to-end 검증 — 실 환경에서 텔레그램 PDF/DOCX 첨부 + caption→user_notes + graph UI 노드 클릭 → modality viewer → user_notes 편집 → LLM 키워드 자동 → tags 갱신 풀체인 | 🚧 사용자 검증 대기 |
+| **2.5 wave-3 (단일 self-contained, 2026-05-18)** | (1) §3 재정의 + §14 신규 (AGPL+Privacy+SaaS path) + docs/agent_architecture.md (2) `ai_agents/base.py` ChannelAgent ABC + telegram refactor (3) items 스키마 user_notes/is_read/read_at + GET/PATCH /items/{id} + LLM 키워드 추출 BackgroundTask (4) `backend/ingest/document/` 통합 추출 (PDF + DOCX/PPTX/TXT/MD, 한국어 cp949) (5) 텔레그램 첨부 자동 ingest + caption → user_notes 자동 (6) VOLUMES_ROOT env (compose bind mount root 설정 가능) (7) graph backend `/graph/*` — cytoscape.js 호환 JSON | ✅ 완료 |
+| **2.5 wave-4 (categories 레이어 + Union 그래프 + Theme, 2026-05-18~19)** | (1) **fallback topic** — external_id 없는 url 도 자체 topic 자동 (193 backfill, Houdini 같은 키워드도 카테고리로 살아남음) (2) **categories 스키마** + auto_link_categories job (61 카테고리 + 796 link, items.tags 빈도 ≥3) (3) **3-tier graph endpoint** — `/graph/categories`·`/graph/category/{slug}`·`/graph/topic/{uuid}` (4) **caption append 정책** — 모든 ingest 에 caption 파라미터, `append_item_user_notes` idempotent + timestamp 구분자 (5) **vLLM 가동** — Ollama → vLLM (qwen2.5:14b 3분 → vllm/Qwen2.5-7B 7초, 30x), `default_llm_provider: vllm` (6) **frontend 대개편** — i18n (한/EN 토글), 3-tier sidebar 트리 (cat ▸ topic ▸ item), 색상 그룹화 (Articles=녹/Video=빨/Code=보/Web=파/Note=시안), 양방향 highlight (`relatedIds`), Union 그래프 (`mergeGraph` 유니온 스테이션 hub-spoke), NodeDetails 통합 패널, ItemDetails 자동 expand, ThemeToggle (☀️/🌙/🖥 system + localStorage), Legend 그룹별 + 선택 상태 안내, navigation history (← 이전 / ← 전체) (7) 6개 텔레그램 fail 메시지 자동 처리 (url-only fetch_error key, youtube /live/, github owner-only fallback) (8) 181 topics title cleanup (cross-modal 차용 버그) | ✅ 완료 |
 | C wave-2 (Slack workspace ingest) | Slack export 재수집 → 워크스페이스 전체 채널 ingest + thread/첨부 (사용자가 Slack 구독 해제 예정 → 일회성 backfill) | 보류 |
 | 2 후반 (AI 카테고리/feedback/dataset exporter) | AI 카테고리 강화, feedback 테이블, dataset exporter (JSONL) | |
 | 3 | 이미지/OCR/멀티모달 RAG, TEI 임베딩 전환, MinIO object storage, `ai_agents/` 채널 확장 (Slack/WhatsApp/Discord), 자가학습 (auto prompt/ingester 개선) | |

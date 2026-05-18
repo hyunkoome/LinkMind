@@ -498,11 +498,12 @@ async def ingest_document(
                 mime_type=mime_type or "application/octet-stream",
                 role="attachment",
             )
-            # 새 caption 이면 user_notes 도 갱신 (raw 자체는 dedup 으로 같음)
+            # 새 caption 이면 user_notes 에 append (기존 메모 보존, idempotent —
+            # 같은 caption 두 번 들어와도 dedup. Phase 2.5 wave-3 정책)
             if caption and caption.strip():
-                from backend.db.repository import update_item_user_notes
-                await update_item_user_notes(
-                    session, item_id=existing, user_notes=caption.strip(),
+                from backend.db.repository import append_item_user_notes
+                await append_item_user_notes(
+                    session, item_id=existing, new_note=caption.strip(),
                 )
             await session.commit()
             return {
@@ -552,11 +553,12 @@ async def ingest_document(
             session, item_id=item_id, source_type=resolved_source_type,
             title=title, ids=ext_ids,
         )
-        # caption (텔레그램 등에서 함께 온 사용자 메모) → user_notes 자동
+        # caption (텔레그램 등에서 함께 온 사용자 메모) → user_notes 자동.
+        # 새 item 이라 기존 메모 없음 — append 도 같은 결과지만 일관성 위해 동일 API.
         if caption and caption.strip():
-            from backend.db.repository import update_item_user_notes
-            await update_item_user_notes(
-                session, item_id=item_id, user_notes=caption.strip(),
+            from backend.db.repository import append_item_user_notes
+            await append_item_user_notes(
+                session, item_id=item_id, new_note=caption.strip(),
             )
         await session.commit()
 

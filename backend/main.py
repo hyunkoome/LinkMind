@@ -18,7 +18,18 @@ from fastapi.middleware.cors import CORSMiddleware
 import asyncio
 
 from backend import runtime_settings
-from backend.api import ask, files, graph, health, ingest, items, search, settings as settings_api, topics
+from backend.api import (
+    ask,
+    categories,
+    files,
+    graph,
+    health,
+    ingest,
+    items,
+    search,
+    settings as settings_api,
+    topics,
+)
 from backend.config import get_settings
 from backend.db.connection import close_engine, get_engine
 from backend.jobs.analysis_worker import run_analysis_worker
@@ -64,11 +75,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         logger.info("LinkMind 종료 — analysis_worker 정리 + DB 엔진 close")
         worker_stop.set()
+        # LLM 호출 중일 수 있어 60초까지 graceful 대기. 그 후 force cancel.
+        # (cancel 시 in-flight DB transaction 은 rollback 됨 — 다음 시작 시 그 item 재처리)
         try:
-            await asyncio.wait_for(worker_task, timeout=10.0)
+            await asyncio.wait_for(worker_task, timeout=60.0)
         except asyncio.TimeoutError:
-            logger.warning("analysis_worker timeout — force cancel")
+            logger.warning("analysis_worker timeout (60s) — force cancel")
             worker_task.cancel()
+            try:
+                await worker_task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
         except Exception as e:  # noqa: BLE001
             logger.warning("analysis_worker 종료 중 예외: %s", e)
         await close_engine()
@@ -100,6 +117,7 @@ app.include_router(files.router, prefix="/files", tags=["files"])
 app.include_router(topics.router, prefix="/topics", tags=["topics"])
 app.include_router(items.router, prefix="/items", tags=["items"])
 app.include_router(graph.router, prefix="/graph", tags=["graph"])
+app.include_router(categories.router, prefix="/categories", tags=["categories"])
 
 
 @app.get("/")

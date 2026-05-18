@@ -209,12 +209,16 @@ async def get_item_full(session: AsyncSession, item_id: UUID) -> dict[str, Any] 
 async def update_item_user_notes(
     session: AsyncSession, *, item_id: UUID, user_notes: str | None,
 ) -> bool:
-    """user_notes + user_notes_updated_at 갱신.
+    """user_notes + user_notes_updated_at 갱신 (덮어쓰기).
 
     `user_notes=""` (빈 문자열) 면 NULL 로 정규화 (DB 일관성). user_notes_updated_at
     은 변경 있을 때만 now() 로 자동.
 
     Returns: True 면 row 변경됨, False 면 id 가 없거나 변경 없음.
+
+    Note: 텔레그램·인박스 등에서 "같은 URL 에 새 caption" 시나리오는
+    `append_item_user_notes` 를 써서 기존 메모를 보존한다. 이 함수는 사용자가
+    UI 로 명시 편집할 때 등 의도적 덮어쓰기 경로용.
     """
     normalized = user_notes if user_notes else None
     res = await session.execute(
@@ -226,6 +230,45 @@ async def update_item_user_notes(
               AND COALESCE(user_notes, '') IS DISTINCT FROM COALESCE(:notes, '')
         """),
         {"id": item_id, "notes": normalized},
+    )
+    return (res.rowcount or 0) > 0
+
+
+async def append_item_user_notes(
+    session: AsyncSession, *, item_id: UUID, new_note: str | None,
+) -> bool:
+    """user_notes 에 새 caption 추가 — 기존 메모 보존 (Phase 2.5 wave-3 정책).
+
+    같은 URL/파일을 텔레그램에 다시 던지면서 새 caption 을 붙이면, 기존 메모를
+    덮지 않고 timestamp 구분자와 함께 append. 학습 데이터 비전 (§1) 상 사용자의
+    누적 메모는 사라지면 안 됨.
+
+    동작:
+      - new_note 가 빈/None 이면 no-op (False)
+      - 기존 user_notes 가 NULL/빈 이면 그대로 set (timestamp 안 붙임)
+      - 기존 user_notes 안에 같은 new_note 가 이미 들어있으면 no-op (idempotent —
+        텔레그램 retry 안전)
+      - 그 외에는 `<기존>\n\n--- YYYY-MM-DD HH:MM ---\n<new_note>` 로 append
+
+    Returns: True 면 row 변경됨, False 면 변경 없음.
+    """
+    if not new_note or not new_note.strip():
+        return False
+    note = new_note.strip()
+    res = await session.execute(
+        text("""
+            UPDATE items
+            SET user_notes = CASE
+                    WHEN COALESCE(user_notes, '') = '' THEN :note
+                    ELSE user_notes || E'\n\n--- ' ||
+                         to_char(now(), 'YYYY-MM-DD HH24:MI') ||
+                         E' ---\n' || :note
+                END,
+                user_notes_updated_at = now()
+            WHERE id = :id
+              AND POSITION(:note IN COALESCE(user_notes, '')) = 0
+        """),
+        {"id": item_id, "note": note},
     )
     return (res.rowcount or 0) > 0
 
@@ -506,6 +549,196 @@ async def list_topics(
         """),
         {"lim": limit},
     )
+    return [dict(r) for r in res.mappings().all()]
+
+
+# ──────────────────────────────────────────────────────────────
+# categories  +  topic_categories  (키워드 카테고리 노드 계층)
+# ──────────────────────────────────────────────────────────────
+
+
+async def find_category_by_slug(
+    session: AsyncSession, *, slug: str,
+) -> dict[str, Any] | None:
+    """slug 로 category 1개 조회 + topic_count / item_count 동봉.
+
+    list_categories 와 동일한 집계를 한 카테고리에 대해서만 수행 — graph expand
+    응답의 카테고리 노드가 0/0 으로 표시되던 버그 (Phase 2.5 wave-3) 해결.
+    """
+    res = await session.execute(
+        text("""
+            SELECT c.id, c.slug, c.label, c.description, c.synonyms, c.color,
+                   c.pinned, c.created_at, c.updated_at,
+                   COUNT(DISTINCT tc.topic_id) AS topic_count,
+                   COUNT(DISTINCT it.item_id)  AS item_count
+              FROM categories c
+              LEFT JOIN topic_categories tc ON tc.category_id = c.id
+              LEFT JOIN item_topics it ON it.topic_id = tc.topic_id
+             WHERE c.slug = :slug
+             GROUP BY c.id
+        """),
+        {"slug": slug},
+    )
+    row = res.mappings().first()
+    return dict(row) if row else None
+
+
+async def upsert_category(
+    session: AsyncSession, *,
+    slug: str,
+    label: str,
+    description: str | None = None,
+    synonyms: list[str] | None = None,
+    color: str | None = None,
+    pinned: bool = False,
+) -> UUID:
+    """category INSERT or UPDATE — slug UNIQUE 충돌 시 label/synonyms 등 update.
+
+    synonyms 는 union (기존 synonyms ∪ 새 synonyms) — 사용자가 추가하면 잃지 않음.
+    label/description/color/pinned 는 새 값으로 덮어쓰기 (명시적 갱신 의도).
+    """
+    res = await session.execute(
+        text("""
+            INSERT INTO categories (slug, label, description, synonyms, color, pinned)
+            VALUES (:slug, :label, :desc, :syn, :color, :pinned)
+            ON CONFLICT (slug) DO UPDATE
+                SET label = EXCLUDED.label,
+                    description = COALESCE(EXCLUDED.description, categories.description),
+                    synonyms = (
+                        SELECT array_agg(DISTINCT s)
+                          FROM unnest(categories.synonyms || EXCLUDED.synonyms) AS s
+                         WHERE s IS NOT NULL AND s <> ''
+                    ),
+                    color = COALESCE(EXCLUDED.color, categories.color),
+                    pinned = EXCLUDED.pinned
+            RETURNING id
+        """),
+        {
+            "slug": slug, "label": label, "desc": description,
+            "syn": synonyms or [], "color": color, "pinned": pinned,
+        },
+    )
+    return res.scalar_one()
+
+
+async def list_categories(
+    session: AsyncSession, *, limit: int = 1000,
+) -> list[dict[str, Any]]:
+    """카테고리 + 그 안의 topic 수 + item 수 (graph 노드 크기 결정).
+
+    그래프에서 카테고리 노드의 size 는 topic 수에 비례 — 큰 카테고리 (많은 자료)
+    가 시각적으로 눈에 띄게.
+    """
+    res = await session.execute(
+        text("""
+            SELECT c.id, c.slug, c.label, c.description, c.synonyms, c.color,
+                   c.pinned, c.created_at, c.updated_at,
+                   COUNT(DISTINCT tc.topic_id) AS topic_count,
+                   COUNT(DISTINCT it.item_id)  AS item_count
+              FROM categories c
+              LEFT JOIN topic_categories tc ON tc.category_id = c.id
+              LEFT JOIN item_topics it ON it.topic_id = tc.topic_id
+             GROUP BY c.id
+             ORDER BY c.pinned DESC, topic_count DESC, c.updated_at DESC
+             LIMIT :lim
+        """),
+        {"lim": limit},
+    )
+    return [dict(r) for r in res.mappings().all()]
+
+
+async def list_topics_in_category(
+    session: AsyncSession, *, category_id: UUID, limit: int = 500,
+) -> list[dict[str, Any]]:
+    """특정 카테고리에 속한 topic 들 — UI 에서 카테고리 노드 클릭 시 expand."""
+    res = await session.execute(
+        text("""
+            SELECT t.id, t.slug, t.title, t.primary_external_id, t.tags,
+                   t.created_at, t.updated_at,
+                   COUNT(it.item_id) AS item_count
+              FROM topic_categories tc
+              JOIN topics t ON t.id = tc.topic_id
+              LEFT JOIN item_topics it ON it.topic_id = t.id
+             WHERE tc.category_id = :cid
+             GROUP BY t.id
+             ORDER BY item_count DESC, t.updated_at DESC
+             LIMIT :lim
+        """),
+        {"cid": category_id, "lim": limit},
+    )
+    return [dict(r) for r in res.mappings().all()]
+
+
+async def link_topic_to_category(
+    session: AsyncSession, *,
+    topic_id: UUID,
+    category_id: UUID,
+    source: str = "auto",
+    confidence: float = 1.0,
+) -> bool:
+    """topic ↔ category 매핑. 이미 있으면 source/confidence 갱신 (manual > auto).
+
+    Returns: True 면 row 변경 (insert 또는 update), False 면 동일.
+    """
+    res = await session.execute(
+        text("""
+            INSERT INTO topic_categories (topic_id, category_id, source, confidence)
+            VALUES (:t, :c, :src, :conf)
+            ON CONFLICT (topic_id, category_id) DO UPDATE
+                SET source = CASE
+                        WHEN EXCLUDED.source = 'manual' OR topic_categories.source = 'auto'
+                        THEN EXCLUDED.source ELSE topic_categories.source
+                    END,
+                    confidence = GREATEST(topic_categories.confidence, EXCLUDED.confidence)
+        """),
+        {"t": topic_id, "c": category_id, "src": source, "conf": confidence},
+    )
+    return (res.rowcount or 0) > 0
+
+
+async def list_categories_for_topic(
+    session: AsyncSession, *, topic_id: UUID,
+) -> list[dict[str, Any]]:
+    """topic 한 개에 매핑된 categories — UI 에서 topic 노드 hover 시 표시."""
+    res = await session.execute(
+        text("""
+            SELECT c.id, c.slug, c.label, c.color, c.pinned,
+                   tc.source, tc.confidence
+              FROM topic_categories tc
+              JOIN categories c ON c.id = tc.category_id
+             WHERE tc.topic_id = :tid
+             ORDER BY c.pinned DESC, c.label
+        """),
+        {"tid": topic_id},
+    )
+    return [dict(r) for r in res.mappings().all()]
+
+
+async def list_topic_category_links(
+    session: AsyncSession, *, category_ids: list[UUID] | None = None,
+) -> list[dict[str, Any]]:
+    """graph 빌드용 — category ↔ topic 엣지 dump.
+
+    category_ids 명시하면 그 카테고리들의 link 만, 없으면 전체.
+    """
+    if category_ids is not None:
+        if not category_ids:
+            return []
+        res = await session.execute(
+            text("""
+                SELECT topic_id, category_id, source, confidence
+                  FROM topic_categories
+                 WHERE category_id = ANY(:ids)
+            """),
+            {"ids": category_ids},
+        )
+    else:
+        res = await session.execute(
+            text("""
+                SELECT topic_id, category_id, source, confidence
+                  FROM topic_categories
+            """),
+        )
     return [dict(r) for r in res.mappings().all()]
 
 

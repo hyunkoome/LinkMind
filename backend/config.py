@@ -70,7 +70,7 @@ class Settings(BaseSettings):
     #     탭에서 관리. 아래 *_model / default_llm_provider 의 Field default 는 DB 가
     #     비어 있을 때만 사용되는 fallback (이전에는 env 도 override 했지만 dead).
     #   - DEFAULT_LLM_MODEL env 는 제거됨 (provider 별 *_model 이 있어 의미 모호).
-    default_llm_provider: Literal["openai", "claude", "ollama"] = Field(default="ollama")
+    default_llm_provider: Literal["openai", "claude", "ollama", "vllm"] = Field(default="vllm")
 
     openai_api_key: str = Field(default="")
     openai_model: str = Field(default="gpt-4o-mini")

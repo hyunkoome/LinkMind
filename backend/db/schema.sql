@@ -287,3 +287,52 @@ ALTER TABLE items ADD COLUMN IF NOT EXISTS read_at                 TIMESTAMPTZ;
 -- unread 빠른 조회 (graph UI 의 inbox 강조). partial index 라 작음.
 CREATE INDEX IF NOT EXISTS idx_items_unread ON items (ingested_at DESC)
     WHERE is_read = FALSE;
+
+
+-- ============================================================================
+-- 2026-05-18 — Phase 2.5 wave-3: categories (키워드 카테고리 노드 계층)
+-- ----------------------------------------------------------------------------
+-- 기존: items.tags (LLM 자동 해시태그, raw) + topics (지식 단위 묶음)
+-- 추가: categories — items.tags 의 정규화 layer.
+--   - 같은 의미의 다른 표기 (`#3DGS`, `#gaussian-splatting`, `#3D-GS`) 를
+--     하나의 category 로 통합 → graph 에서 카테고리 노드가 토픽들을 묶음.
+--   - synonyms[] 로 매칭 (auto_link 가 tags ∩ synonyms 검색).
+--   - 그래프 3-tier: category → topic → item (DAG, category-topic 은 M:N).
+--
+-- 학습 데이터 비전(§1): items.tags 의 raw 해시태그는 무손실 보존
+-- (LLM 출력 그대로). categories 는 그 위의 정규화 view — 깨져도 raw 복구 가능.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS categories (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    slug TEXT UNIQUE NOT NULL,             -- 'gaussian-splatting' (URL/매칭 키, lowercase)
+    label TEXT NOT NULL,                   -- '3D Gaussian Splatting' (UI 표시)
+    description TEXT,
+    synonyms TEXT[] DEFAULT '{}',          -- ['3dgs', '3d-gs', 'gaussian splatting', ...]
+    color TEXT,                            -- 그래프 노드 색 (HEX, 예: '#ff8800')
+    pinned BOOLEAN NOT NULL DEFAULT FALSE, -- 사용자 즐겨찾기 (UI 상단 노출)
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_categories_synonyms ON categories USING GIN (synonyms);
+CREATE INDEX IF NOT EXISTS idx_categories_pinned ON categories(pinned) WHERE pinned = TRUE;
+
+DROP TRIGGER IF EXISTS categories_set_updated_at ON categories;
+CREATE TRIGGER categories_set_updated_at
+    BEFORE UPDATE ON categories
+    FOR EACH ROW EXECUTE FUNCTION trg_set_updated_at();
+
+
+-- topic_categories : topics ↔ categories many-to-many.
+-- source: 'auto' (synonyms 매칭) / 'manual' (UI 에서 사용자 지정) / 'llm-cluster' (Phase 3).
+CREATE TABLE IF NOT EXISTS topic_categories (
+    topic_id    UUID NOT NULL REFERENCES topics(id)     ON DELETE CASCADE,
+    category_id UUID NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+    source      TEXT NOT NULL DEFAULT 'auto',
+    confidence  REAL NOT NULL DEFAULT 1.0,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (topic_id, category_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_topic_categories_topic ON topic_categories(topic_id);
+CREATE INDEX IF NOT EXISTS idx_topic_categories_category ON topic_categories(category_id);

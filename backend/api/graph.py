@@ -23,11 +23,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.connection import get_session
 from backend.db.repository import (
     get_item_full,
+    list_categories,
     list_item_topic_links,
     list_items_for_topic,
     list_items_summary,
+    list_topic_category_links,
     list_topics,
     list_topics_for_item,
+    list_topics_in_category,
     search_items_by_text,
 )
 from backend.schemas.models import GraphEdge, GraphNode, GraphResponse
@@ -87,6 +90,42 @@ def item_to_node(item: dict[str, Any]) -> GraphNode:
             "has_notes": bool(item.get("has_notes")),
             "ingested_at": item["ingested_at"].isoformat()
             if item.get("ingested_at") else None,
+        }
+    )
+
+
+def category_to_node(category: dict[str, Any]) -> GraphNode:
+    """category row → cytoscape 노드. id 는 'category:<uuid>'.
+
+    label: label 우선, 없으면 slug. size 는 item_count 기반 (frontend 가 처리).
+    """
+    return GraphNode(
+        data={
+            "id": f"category:{category['id']}",
+            "label": category.get("label") or category.get("slug") or "(untitled)",
+            "type": "category",
+            "slug": category.get("slug"),
+            "color": category.get("color"),
+            "pinned": bool(category.get("pinned")),
+            "topic_count": int(category.get("topic_count") or 0),
+            "item_count": int(category.get("item_count") or 0),
+            "synonyms": list(category.get("synonyms") or []),
+        }
+    )
+
+
+def topic_category_link_to_edge(link: dict[str, Any]) -> GraphEdge:
+    """topic_categories row → cytoscape 엣지. id 'edge:cat:<cat>:<topic>'."""
+    cat_id = link["category_id"]
+    topic_id = link["topic_id"]
+    return GraphEdge(
+        data={
+            "id": f"edge:cat:{cat_id}:{topic_id}",
+            "source": f"category:{cat_id}",
+            "target": f"topic:{topic_id}",
+            "role": "category",
+            "confidence": float(link.get("confidence") or 1.0),
+            "link_source": link.get("source") or "auto",
         }
     )
 
@@ -151,15 +190,178 @@ def build_graph_response(
 # ──────────────────────────────────────────────────────────────
 
 
+@router.get("/categories", response_model=GraphResponse)
+async def graph_all_categories(
+    limit: int = Query(default=500, ge=1, le=5000),
+    session: AsyncSession = Depends(get_session),
+) -> GraphResponse:
+    """카테고리 노드 + 그에 속한 topic 노드 + category↔topic 엣지.
+
+    UI 의 카테고리-우선 view (Phase 2.5 wave-3) — 사용자가 키워드 카테고리를
+    먼저 본 후 클릭으로 그 안의 topic 들 expand. item 은 포함 X (lazy load).
+    """
+    cats = await list_categories(session, limit=limit)
+    if not cats:
+        return GraphResponse(nodes=[], edges=[])
+
+    cat_ids = [c["id"] for c in cats]
+    cat_topic_links = await list_topic_category_links(session, category_ids=cat_ids)
+
+    # topic 들 (UI 가 그 안의 item 들은 별도 expand 요청 — 가벼움)
+    topic_ids = list({lk["topic_id"] for lk in cat_topic_links})
+    topics = await list_topics(session, limit=20000)  # 전체에서 매칭만 — id 별 lookup
+    topic_by_id = {str(t["id"]): t for t in topics}
+    topics_in_view = [topic_by_id[str(tid)] for tid in topic_ids if str(tid) in topic_by_id]
+
+    # cytoscape 변환
+    nodes: list[GraphNode] = []
+    seen: set[str] = set()
+    for c in cats:
+        n = category_to_node(c)
+        if n.data["id"] not in seen:
+            seen.add(n.data["id"])
+            nodes.append(n)
+    for t in topics_in_view:
+        n = topic_to_node(t)
+        if n.data["id"] not in seen:
+            seen.add(n.data["id"])
+            nodes.append(n)
+
+    edges: list[GraphEdge] = []
+    seen_edges: set[str] = set()
+    for lk in cat_topic_links:
+        e = topic_category_link_to_edge(lk)
+        if e.data["id"] not in seen_edges:
+            seen_edges.add(e.data["id"])
+            edges.append(e)
+    return GraphResponse(nodes=nodes, edges=edges)
+
+
+@router.get("/category/{category_slug}", response_model=GraphResponse)
+async def graph_category_expand(
+    category_slug: str,
+    session: AsyncSession = Depends(get_session),
+) -> GraphResponse:
+    """특정 카테고리 클릭 시 expand — 그 카테고리의 topic + 각 topic 의 item.
+
+    노드: category 1 + 그 안의 topic N + 각 topic 의 item M.
+    엣지: category→topic, item→topic 두 종류.
+    """
+    from backend.db.repository import find_category_by_slug
+    cat = await find_category_by_slug(session, slug=category_slug)
+    if not cat:
+        return GraphResponse(nodes=[], edges=[])
+
+    topics = await list_topics_in_category(session, category_id=cat["id"])
+    if not topics:
+        return GraphResponse(
+            nodes=[category_to_node(cat)], edges=[],
+        )
+
+    topic_ids = [t["id"] for t in topics]
+    item_topic_links = await list_item_topic_links(session, topic_ids=topic_ids)
+    item_ids = list({lk["item_id"] for lk in item_topic_links})
+    items = await list_items_summary(session, item_ids=item_ids)
+
+    # cytoscape 변환 — category 1 + topics + items + 두 종류 엣지
+    nodes: list[GraphNode] = [category_to_node(cat)]
+    seen: set[str] = {nodes[0].data["id"]}
+    for t in topics:
+        n = topic_to_node(t)
+        if n.data["id"] not in seen:
+            seen.add(n.data["id"])
+            nodes.append(n)
+    for it in items:
+        n = item_to_node(it)
+        if n.data["id"] not in seen:
+            seen.add(n.data["id"])
+            nodes.append(n)
+
+    edges: list[GraphEdge] = []
+    seen_edges: set[str] = set()
+    # category → topic 엣지 (이 카테고리에 속한 topic 들과 연결)
+    for t in topics:
+        eid = f"edge:cat:{cat['id']}:{t['id']}"
+        if eid in seen_edges:
+            continue
+        seen_edges.add(eid)
+        edges.append(GraphEdge(data={
+            "id": eid,
+            "source": f"category:{cat['id']}",
+            "target": f"topic:{t['id']}",
+            "role": "category",
+            "confidence": 1.0,
+            "link_source": "auto",
+        }))
+    # item → topic 엣지
+    for lk in item_topic_links:
+        e = link_to_edge(lk)
+        if e.data["id"] not in seen_edges:
+            seen_edges.add(e.data["id"])
+            edges.append(e)
+    return GraphResponse(nodes=nodes, edges=edges)
+
+
+@router.get("/topic/{topic_id}", response_model=GraphResponse)
+async def graph_topic_expand(
+    topic_id: UUID,
+    session: AsyncSession = Depends(get_session),
+) -> GraphResponse:
+    """특정 토픽 클릭 시 expand — 그 토픽 1개 + 그 안의 모든 item.
+
+    노드: topic 1 + 모든 item N. 엣지: item→topic.
+    sidebar 토픽 클릭 시 frontend 가 호출 → 그 토픽의 자료들이 그래프에 보임.
+    """
+    item_topic_links = await list_item_topic_links(session, topic_ids=[topic_id])
+    item_ids = list({lk["item_id"] for lk in item_topic_links})
+    items = await list_items_summary(session, item_ids=item_ids)
+
+    # topic 자체 fetch (raw — list_topics 와 같은 모양으로)
+    from sqlalchemy import text as _txt
+    res = await session.execute(
+        _txt("""
+            SELECT t.id, t.slug, t.title, t.primary_external_id, t.tags,
+                   t.created_at, t.updated_at,
+                   COUNT(it.item_id) AS item_count
+              FROM topics t
+              LEFT JOIN item_topics it ON it.topic_id = t.id
+             WHERE t.id = :tid
+             GROUP BY t.id
+        """),
+        {"tid": topic_id},
+    )
+    topic_row = res.mappings().first()
+    if not topic_row:
+        return GraphResponse(nodes=[], edges=[])
+
+    topic_node = topic_to_node(dict(topic_row))
+    nodes: list[GraphNode] = [topic_node]
+    seen: set[str] = {topic_node.data["id"]}
+    for it in items:
+        n = item_to_node(it)
+        if n.data["id"] not in seen:
+            seen.add(n.data["id"])
+            nodes.append(n)
+
+    edges: list[GraphEdge] = []
+    seen_edges: set[str] = set()
+    for lk in item_topic_links:
+        e = link_to_edge(lk)
+        if e.data["id"] not in seen_edges:
+            seen_edges.add(e.data["id"])
+            edges.append(e)
+    return GraphResponse(nodes=nodes, edges=edges)
+
+
 @router.get("/topics", response_model=GraphResponse)
 async def graph_all_topics(
-    limit: int = Query(default=100, ge=1, le=500),
+    limit: int = Query(default=5000, ge=1, le=20000),
     session: AsyncSession = Depends(get_session),
 ) -> GraphResponse:
     """모든 topic + 그 topic 들에 속한 item 노드 + 엣지.
 
-    graph UI 의 메인 view — 시작 화면. limit=100 (topic 기준) — 그 안의
-    item 모두 펼침. 1000+ topic 환경에선 limit 조정.
+    graph UI 의 메인 view — 시작 화면. default=5000 (topic 기준) — 그 안의
+    item 모두 펼침. 사용자 누적 자료가 많아지면 max 20000 까지 허용.
     """
     topics = await list_topics(session, limit=limit)
     if not topics:

@@ -139,8 +139,9 @@ services:
       test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/8000' || exit 1"]
       interval: 30s
       timeout: 10s
-      retries: 10
-      start_period: 300s                # 첫 모델 다운로드 시간 고려 (5분)
+      retries: 60                       # start_period 동안 fail 도 무시되니 retries 는 안정 후 용
+      start_period: 1800s               # 첫 모델 다운로드 (HF 15GB, unauth slow) + cudagraph capture
+                                        # 5분으론 부족해 unhealthy → restart loop. 30분 보장.
     ipc: host                           # vLLM 권장 — shared memory 최적화
     networks:
       - linkmind

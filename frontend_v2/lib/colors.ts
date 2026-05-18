@@ -1,18 +1,35 @@
 // 그래프 노드 + 사이드바 표시 색상 — 한 곳에 모아 GraphView/TopicsTree/Search 등이 공유.
 // 색상 의미가 일관돼야 사용자가 graph 와 list 사이를 시각적으로 매칭 가능.
+//
+// 그룹 (Phase 2.5 wave-3, 사용자 요구 — 같은 의미는 같은 색 계열):
+//   📄 Articles (녹색): pdf, arxiv, doi, document, paperswithcode — 모두 "글 자료"
+//   🎥 Video    (빨강): youtube, youtube_playlist, yt, ytpl       — 동영상
+//   💻 Code    (보라): github                                      — 소스 코드
+//   🌐 Web     (파랑): url                                          — 일반 웹
+//   💬 Note    (시안): telegram, slack, manual                     — 짧은 메모
+// 그룹 안에서 미세 명도 차로 modality 구분 (PDF=진녹, arxiv=중녹, document=연녹).
 
-// item 의 source_type 별 색상 (Tailwind palette 의 500 톤, dark 배경 친화)
+// item 의 source_type 별 색상
 export const SOURCE_TYPE_COLORS: Record<string, string> = {
-  pdf: "#ef4444",              // red — 논문/문서
-  url: "#3b82f6",              // blue — 일반 웹
-  arxiv: "#10b981",            // green — arxiv abstract
-  github: "#8b5cf6",           // purple — GitHub repo
-  youtube: "#dc2626",          // dark red — YouTube 단일
-  youtube_playlist: "#b91c1c", // 더 진한 red — playlist
-  document: "#f59e0b",         // amber — DOCX/PPTX/TXT/MD
-  telegram: "#06b6d4",         // cyan — 텔레그램 note
-  slack: "#a855f7",            // violet — Slack
-  manual: "#71717a",           // zinc — 수동 입력
+  // 📄 Articles — 녹색 계열
+  pdf: "#059669",              // 진녹 (논문 PDF 본문)
+  arxiv: "#10b981",            // 녹  (arxiv abstract)
+  document: "#34d399",         // 연녹 (DOCX/PPTX/TXT/MD)
+
+  // 🎥 Video — 빨강 계열
+  youtube: "#dc2626",          // 빨강 (단일 영상)
+  youtube_playlist: "#b91c1c", // 진빨강 (playlist)
+
+  // 💻 Code — 보라
+  github: "#8b5cf6",
+
+  // 🌐 Web — 파랑
+  url: "#3b82f6",
+
+  // 💬 Note — 시안 계열
+  telegram: "#06b6d4",
+  slack: "#0891b2",            // 진시안 (Slack 메시지)
+  manual: "#67e8f9",           // 연시안 (수동 입력)
 };
 
 export const DEFAULT_NODE_COLOR = "#71717a";
@@ -22,18 +39,20 @@ export function sourceTypeColor(source: string | undefined | null): string {
   return SOURCE_TYPE_COLORS[source] || DEFAULT_NODE_COLOR;
 }
 
-// topic 노드 색상 — primary_external_id.kind 별. graph 와 TopicsTree 둘 다 같은 색.
-// kind 가 없으면 default orange (LinkMind 의 brand 색).
+// topic 노드 색상 — primary_external_id.kind 별 (같은 그룹 색 일관)
 export const TOPIC_KIND_COLORS: Record<string, string> = {
-  arxiv: "#10b981",            // green (arxiv item 색상과 일관)
-  doi: "#06b6d4",              // cyan (DOI publication)
-  github: "#8b5cf6",            // purple (GitHub topic — repo cluster)
-  yt: "#dc2626",                // red (YouTube video cluster)
-  ytpl: "#b91c1c",              // dark red (playlist cluster)
-  paperswithcode: "#10b981",    // green (paper 와 동일)
+  // 📄 Articles
+  arxiv: "#10b981",
+  doi: "#34d399",               // 연녹 (DOI publication)
+  paperswithcode: "#059669",    // 진녹 (paper + code 묶음)
+  // 🎥 Video
+  yt: "#dc2626",
+  ytpl: "#b91c1c",
+  // 💻 Code
+  github: "#8b5cf6",
 };
 
-export const DEFAULT_TOPIC_COLOR = "#f97316";   // orange — LinkMind brand
+export const DEFAULT_TOPIC_COLOR = "#f97316";   // orange — LinkMind brand (외부 ID 없는 fallback)
 
 export function topicKindColor(
   primaryExternalId: Record<string, string> | null | undefined,
@@ -42,6 +61,54 @@ export function topicKindColor(
   if (!kind) return DEFAULT_TOPIC_COLOR;
   return TOPIC_KIND_COLORS[kind] || DEFAULT_TOPIC_COLOR;
 }
+
+// ─── 그룹 정의 (Legend 가 사용) ────────────────────────────────────
+// "이 색은 어떤 의미 그룹인지" 한눈에 보이도록.
+export interface ColorGroup {
+  key: string;
+  label: { ko: string; en: string };
+  groupColor: string;     // 그룹 대표 색 (Legend 헤더)
+  sourceTypes: string[];  // 이 그룹에 속한 source_type
+  topicKinds: string[];   // 이 그룹에 속한 topic kind
+}
+
+export const COLOR_GROUPS: ColorGroup[] = [
+  {
+    key: "articles",
+    label: { ko: "📄 논문 · 문서", en: "📄 Articles" },
+    groupColor: "#10b981",
+    sourceTypes: ["pdf", "arxiv", "document"],
+    topicKinds: ["arxiv", "doi", "paperswithcode"],
+  },
+  {
+    key: "video",
+    label: { ko: "🎥 동영상", en: "🎥 Video" },
+    groupColor: "#dc2626",
+    sourceTypes: ["youtube", "youtube_playlist"],
+    topicKinds: ["yt", "ytpl"],
+  },
+  {
+    key: "code",
+    label: { ko: "💻 코드", en: "💻 Code" },
+    groupColor: "#8b5cf6",
+    sourceTypes: ["github"],
+    topicKinds: ["github"],
+  },
+  {
+    key: "web",
+    label: { ko: "🌐 웹 페이지", en: "🌐 Web" },
+    groupColor: "#3b82f6",
+    sourceTypes: ["url"],
+    topicKinds: [],
+  },
+  {
+    key: "note",
+    label: { ko: "💬 메모", en: "💬 Note" },
+    groupColor: "#06b6d4",
+    sourceTypes: ["telegram", "slack", "manual"],
+    topicKinds: [],
+  },
+];
 
 // 사람이 읽기 좋은 label — source_type / topic kind 의 한국어/영어 설명
 export const SOURCE_TYPE_LABEL: Record<string, { ko: string; en: string }> = {

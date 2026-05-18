@@ -125,6 +125,24 @@ def _find_urls(text: str) -> list[str]:
     return out
 
 
+def _strip_urls_for_caption(text: str) -> str:
+    """텍스트에서 URL 들을 제거하고 남은 메모 부분만 반환 — caption 후보.
+
+    "https://arxiv.org/abs/xxx 좋은 논문" → "좋은 논문"
+    "이건 그냥 https://x.com/post 그리고 https://y.com" → "이건 그냥  그리고"
+    여러 공백/줄바꿈은 단일 공백으로 정규화. 짧으면 (5자 미만) 의미 없는 캡션으로
+    간주 — 빈 문자열 반환. 학습 데이터 비전 (§1) 상 손실되어도 무방한 noise.
+    """
+    if not text:
+        return ""
+    stripped = _URL_RE.sub(" ", text)
+    # whitespace 정규화 (연속 공백 → 단일 공백, 양끝 strip)
+    stripped = " ".join(stripped.split())
+    if len(stripped) < 5:
+        return ""
+    return stripped
+
+
 # ──────────────────────────────────────────────────────────────
 # 단일 메시지 ingest
 # ──────────────────────────────────────────────────────────────
@@ -152,7 +170,17 @@ async def ingest_telegram_message(
     """
     urls = _find_urls(message.text)
     attachments = message.attachments or []
-    caption = message.text.strip() if attachments and message.text else None
+    # caption (사용자 메모) 후보 (Phase 2.5 wave-3):
+    #  - attachments 있으면: text 전체 (URL 도 같이 있을 수 있지만 첨부 캡션은
+    #    원본 그대로가 자연스러움)
+    #  - attachments 없고 URL 만 있으면: text 에서 URL 들 제거한 나머지가 caption
+    #  - 어느 쪽도 없으면 None (note 로 별도 저장됨)
+    if attachments and message.text:
+        caption = message.text.strip()
+    elif urls and message.text:
+        caption = _strip_urls_for_caption(message.text) or None
+    else:
+        caption = None
 
     result: dict[str, Any] = {
         "msg_id": str(message.msg_id),
@@ -174,13 +202,21 @@ async def ingest_telegram_message(
             kind = _classify_url(url)
             try:
                 if kind == "youtube":
-                    r = await ingest_youtube(url, analyze_now=analyze_now, force=force)
+                    r = await ingest_youtube(
+                        url, analyze_now=analyze_now, force=force, caption=caption,
+                    )
                 elif kind == "github":
-                    r = await ingest_github(url, analyze_now=analyze_now, force=force)
+                    r = await ingest_github(
+                        url, analyze_now=analyze_now, force=force, caption=caption,
+                    )
                 elif kind == "pdf":
-                    r = await ingest_pdf(url, analyze_now=analyze_now, force=force)
+                    r = await ingest_pdf(
+                        url, analyze_now=analyze_now, force=force, caption=caption,
+                    )
                 else:
-                    r = await ingest_url(url, analyze_now=analyze_now, force=force)
+                    r = await ingest_url(
+                        url, analyze_now=analyze_now, force=force, caption=caption,
+                    )
             except Exception as e:  # noqa: BLE001
                 logger.warning(
                     "telegram URL ingest 실패 (msg=%s, url=%s): %s: %s",

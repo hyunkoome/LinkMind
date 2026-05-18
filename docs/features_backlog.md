@@ -335,3 +335,101 @@ ingest_telegram_export 와 같은 구조).
 - MinIO object storage 전환 (Phase 2 후반)
 - sVLL LoRA 파인튜닝 (Phase 4 — LLaMA-Factory + Qwen2-VL 등), vLLM 서빙
 - Continuous training loop (Phase 5)
+
+---
+
+## Phase D — ✅ wave-4 완료 (2026-05-18 ~ 19) — categories 레이어 + Union 그래프 + UX 완성
+
+### D1. fallback topic + cross-modal 데이터 정리 ✅
+- `auto_link_topics` 의 fallback — external_id 없는 url 도 `url:item:<uuid>` slug 의
+  자체 topic 자동 생성. 그래프에 모든 자료가 일급 시민.
+- 기존 193 orphan items 일괄 backfill topic 생성.
+- cross-modal title 차용 버그 fix (line 602: `title or x.slug` → `x.slug`) — github
+  README 의 arxiv 링크 30개가 다 repo title 차용하던 데이터 중복 해결.
+- 181 topics title cleanup (같은 title 다중 topic 그룹의 첫 번째만 유지).
+
+### D2. categories 신규 스키마 + 자동 시드 + 매핑 ✅
+- 스키마 (`backend/db/schema.sql`):
+  - `categories` (id/slug/label/description/synonyms/color/pinned)
+  - `topic_categories` M:N (source/confidence)
+- repository helper 7개 (`backend/db/repository.py`).
+- `backend/api/categories.py` — GET list/detail, POST upsert/manual link.
+- `backend/jobs/auto_link_categories.py` — items.tags 빈도 ≥ 3 분석 → 61 카테고리 자동
+  시드 + 796 link 생성. dry-run 지원.
+- `find_category_by_slug` 가 topic_count/item_count 동봉 — graph expand 응답의 카테고리
+  노드 0/0 표시 버그 해결.
+
+### D3. 3-tier graph endpoint ✅
+- `/graph/categories` — 카테고리 + topic (시작 view, item 제외 — 가벼움)
+- `/graph/category/{slug}` — 카테고리 expand (카테고리 1 + topic + item)
+- `/graph/topic/{uuid}` — 토픽 expand (토픽 1 + 모든 item)
+- graph limit 100 → 5000 (max 20000).
+
+### D4. caption append 정책 ✅
+- url/pdf/github/youtube/document/telegram 모든 ingest 에 `caption` 파라미터.
+- `append_item_user_notes` 헬퍼 — idempotent (같은 caption 두 번이면 dedup) +
+  timestamp 구분자 (`--- YYYY-MM-DD HH:MM ---`).
+- 같은 URL 새 caption 재공유 시 user_notes 에 누적 (덮어쓰기 X).
+- `_strip_urls_for_caption` — URL 만 있고 메모 같이 온 경우 메모 추출.
+- 단위 + integration 테스트 (`tests/integration/test_user_notes_append.py` 4 case).
+
+### D5. ingest fail 케이스 6건 자동 처리 ✅
+- url-only fallback 의 result key `error` → `fetch_error` (watcher 의
+  is_ingest_successful 가 success 로 인식 — medium 403, stibee 200 본문 추출 실패 등).
+- url-only 시 자동 user_notes 메모 (archive.org 시도 안내).
+- YouTube `/live/{id}` URL pattern 추가.
+- GitHub owner-only URL (예: `github.com/graphdeco-inria`) fallback → url ingest.
+
+### D6. vLLM 전환 ✅
+- 신규 `backend/llm/vllm_provider.py` (OpenAI 호환 client).
+- docker-compose `profile: vllm`, healthcheck start_period 1800s (모델 다운로드 + cudagraph capture).
+- env `VLLM_MODEL` (Qwen/Qwen2.5-7B-Instruct), `VLLM_GPU_MEM_UTIL=0.75` 검증.
+- `default_llm_provider`: ollama → vllm. 249 NULL summary 자동 backfill (~30분).
+- 결과: qwen2.5:14b 3분 → vllm/Qwen2.5-7B 7초 (**~30x 빠름**).
+
+### D7. Frontend 대개편 (Next.js 16 + React 19 + Tailwind v4) ✅
+- **i18n 시스템** — `LocaleProvider` + `useT()` hook, ko/en dict, localStorage 보존.
+- **3-tier sidebar 트리** (`TopicsTree`) — 카테고리 (▸/▾) → 토픽 (▸/▾) → 아이템.
+- **색상 그룹화** (`lib/colors.ts`) — 📄 Articles=녹 · 🎥 Video=빨 · 💻 Code=보 ·
+  🌐 Web=파 · 💬 Note=시안. 그룹별 modality 미세 명도 차.
+- **selected/related 시각** — 원래 색 정체성 유지 + 사이즈 (1.7×/1.3×/1.0×) +
+  non-related 65% darken. 흰색 강제 X.
+- **양방향 highlight (`relatedIds`)** — sidebar ↔ graph 동기화 (page.tsx useMemo).
+  같은 묶음 (topic + items, category + topics) 자동 강조 + 카테고리 자동 expand +
+  scrollIntoView.
+- **Union 그래프 (`mergeGraph`)** — 유니온 스테이션 hub-spoke. 클릭 시 그 노드의
+  친구들을 기존 그래프에 union 추가 (교체 X). cross-category 시각화 가능.
+- **컨텍스트 유지 분기** — `topicHasItemsInGraph` / `categoryHasTopicsInGraph` 헬퍼.
+  graph 에 이미 친구 있으면 highlight 만 (fetch X), 없으면 union fetch.
+- **handleNodeClick / handleSidebarSelect 통일** — graph 클릭과 sidebar 클릭이 같은
+  동작 (이전엔 비대칭).
+- **NodeDetails 컴포넌트** — item/topic/category 통합 detail 패널 + 외부 링크 새창.
+- **ItemDetails 자동 expand** — itemId 변경 시 collapsed=false.
+- **navigation history** — "← 이전" / "← 전체" 두 버튼 (`HistoryFrame` stack).
+- **ThemeToggle** — ☀️ light / 🌙 dark / 🖥 system + localStorage + OS prefers
+  실시간 반영 + flash-of-wrong-theme 방지 (layout.tsx head inline script).
+  Tailwind v4 `@custom-variant dark` 로 `.dark` 클래스 기반.
+- **Next.js devIndicators 끔** — 좌하단 N 버튼 제거.
+- **Legend 그룹별 섹션** + 선택 상태 안내 + 좌상단 통계 라벨 아래 inline 배치.
+- **fullId 일관성 fix** — TopicsTree mismatch 4건 (사이드바 highlight + sub-list 동작).
+- **graph 카메라 zoom 안정성** — force layout 미완료 시 250ms × 6회 재시도.
+
+---
+
+## Phase D 다음 (wave-5 후보)
+
+### D8. cross-modality matching (자동 자료 묶기) ⏳
+같은 자료의 paper + code + video 가 별 topic 으로 흩어진 케이스 자동 묶기.
+단서: title 유사도, README paper link, arxiv abstract 의 github link, 사용자 caption
+매칭. 옵션 (a) LLM cluster job, (b) 사용자 manual merge UI, (c) external_id 추출 강화.
+
+### D9. arxiv title 재시드 ⏳
+wave-4 의 cross-modal title fix 후 arxiv:* topic 들의 title 이 slug 그대로.
+`seed_arxiv_metadata` 재실행으로 진짜 paper title 보강.
+
+### D10. llm_wiki 아키텍처 도입 ⏳
+karpathy 의 llm_wiki + vlm_wiki + multi-agent + 자가학습. 일반 RAG 대신 wiki 페이지
+단위 (topic = wiki 페이지). [[project-llm-wiki-arch]] memory 참조.
+
+### D11. 카테고리 UI 편집 ⏳
+synonyms 추가, 색 지정, pinned 토글, manual link/unlink.

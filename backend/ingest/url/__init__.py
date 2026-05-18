@@ -277,6 +277,7 @@ async def ingest_url(
     analyze_now: bool = True,
     summarize: bool | None = None,
     force: bool = False,
+    caption: str | None = None,
 ) -> dict[str, Any]:
     """URL 하나를 fetch + extract + DB 저장 + (옵션) 임베딩/요약.
 
@@ -291,6 +292,10 @@ async def ingest_url(
     force=True 면 동일 hash 의 기존 item 이 있어도 skip 하지 않고 분석 결과
     (summary, tags, source_metadata, title) 만 재계산해서 덮어쓴다. raw_content /
     chunks 는 동일 hash 라 의미상 같으므로 건드리지 않는다 (loss-less + 비용 최소).
+
+    caption: 텔레그램·인박스에서 URL 과 같이 온 사용자 메모. dedup/새 item 모두
+    `user_notes` 에 append (기존 메모 보존, 같은 caption 두 번이면 idempotent).
+    Phase 2.5 wave-3 정책 — §1 학습 데이터 비전상 사용자 메모 누락 금지.
 
     영구 실패 (HTTP 4xx, 본문 추출 실패) 시 fallback — URL 자체만 raw 로 보존하는
     "url-only" item 저장. 5xx / network error 는 raise (재시도 가능).
@@ -312,7 +317,9 @@ async def ingest_url(
                 "URL %s → %d (영구 실패, url-only 저장): %s",
                 url, status, type(e).__name__,
             )
-            return await _save_url_only(url, error=f"HTTP {status}", force=force)
+            return await _save_url_only(
+                url, error=f"HTTP {status}", force=force, caption=caption,
+            )
         raise
 
     doc = extract_doc(html, url=url)
@@ -320,7 +327,9 @@ async def ingest_url(
         # 200 OK 였지만 trafilatura + readability 모두 본문 추출 실패 (JS rendered,
         # 비표준 HTML 등). URL only 로 보존.
         logger.info("URL %s 200 OK 이지만 본문 추출 실패 (url-only 저장)", url)
-        return await _save_url_only(url, error="본문 추출 실패", force=force)
+        return await _save_url_only(
+            url, error="본문 추출 실패", force=force, caption=caption,
+        )
 
     # 외부 식별자 (arxiv_id / doi / github_repo / yt video_id 등) — URL + 본문 모두에서.
     ext_ids = extract_external_ids(url=url, text=doc.body)
@@ -334,7 +343,14 @@ async def ingest_url(
             session, source_type="url", content_hash=content_hash
         )
         if existing is not None:
+            # 새 caption 이면 user_notes 에 append (dedup 시에도 사용자 메모는 보존)
+            if caption and caption.strip():
+                from backend.db.repository import append_item_user_notes
+                await append_item_user_notes(
+                    session, item_id=existing, new_note=caption.strip(),
+                )
             if not force:
+                await session.commit()
                 return {"item_id": str(existing), "created": False, "chunks_indexed": 0}
             refreshed = await refresh_existing_item_analysis(
                 session,
@@ -385,6 +401,12 @@ async def ingest_url(
             session, item_id=item_id, source_type="url",
             title=doc.title, ids=ext_ids,
         )
+        # caption (텔레그램 등에서 URL 과 같이 온 사용자 메모) → user_notes append
+        if caption and caption.strip():
+            from backend.db.repository import append_item_user_notes
+            await append_item_user_notes(
+                session, item_id=item_id, new_note=caption.strip(),
+            )
         await session.commit()
 
         chunks_indexed = 0
@@ -413,7 +435,7 @@ async def ingest_url(
 
 
 async def _save_url_only(
-    url: str, *, error: str, force: bool = False,
+    url: str, *, error: str, force: bool = False, caption: str | None = None,
 ) -> dict[str, Any]:
     """본문 추출 실패한 URL 을 'url-only' 로 저장 — graph 에 빈 노드로 보존.
 
@@ -428,6 +450,10 @@ async def _save_url_only(
 
     dedup: 같은 URL 두 번 던지면 같은 raw_content hash → 두 번째는 created=False.
     사용자가 archive.org 또는 다른 mirror URL 로 던지면 새 item 으로 저장.
+
+    user_notes: caption (사용자 메모) 과 별개로, 자동으로 "본문 자동 추출 실패
+    (HTTP …). 원본 URL 만 보존. archive.org 시도 권장" 안내를 append. 사용자가
+    graph 에서 url-only 노드를 보면 즉시 무슨 일인지 파악.
     """
     placeholder_text = (
         f"[url-only fallback — 본문 추출 실패]\n"
@@ -437,6 +463,10 @@ async def _save_url_only(
         f"URL 을 시도하거나, 이 노드를 graph 에서 삭제 후 재공유하세요."
     )
     content_hash = sha256_text(placeholder_text)
+    auto_note = (
+        f"⚠️ 본문 자동 추출 실패 ({error}). "
+        f"원본 링크만 보존됨 — archive.org 또는 다른 mirror 로 다시 시도해보세요."
+    )
 
     # URL hostname 을 title 로 (예: medium.com — 어떤 사이트인지 즉시 인지)
     try:
@@ -454,21 +484,24 @@ async def _save_url_only(
         existing = await find_item_by_hash(
             session, source_type="url", content_hash=content_hash,
         )
-        if existing is not None and not force:
-            return {
-                "item_id": str(existing),
-                "created": False,
-                "url_only": True,
-                "error": error,
-            }
-
         if existing is not None:
-            # force 면 dedup 무시하고 새 item 안 만듦 — 이미 url-only 라 재계산 의미 X
+            # url-only fallback 이라도 새 caption 있으면 user_notes 에 append.
+            # force 무관 — 본문은 어차피 placeholder 라 재계산할 게 없어 동일 처리.
+            from backend.db.repository import append_item_user_notes
+            if caption and caption.strip():
+                await append_item_user_notes(
+                    session, item_id=existing, new_note=caption.strip(),
+                )
+            # auto note 도 append (idempotent — 같은 에러로 재시도 시 dedup)
+            await append_item_user_notes(
+                session, item_id=existing, new_note=auto_note,
+            )
+            await session.commit()
             return {
                 "item_id": str(existing),
                 "created": False,
                 "url_only": True,
-                "error": error,
+                "fetch_error": error,
             }
 
         item_id = await insert_item(
@@ -496,13 +529,23 @@ async def _save_url_only(
             _sql_text("UPDATE items SET tags = :tags WHERE id = :id"),
             {"id": item_id, "tags": ["url-only", "fetch-failed"]},
         )
+        # caption (텔레그램에서 url-only 라도 같이 온 사용자 메모 보존)
+        from backend.db.repository import append_item_user_notes
+        if caption and caption.strip():
+            await append_item_user_notes(
+                session, item_id=item_id, new_note=caption.strip(),
+            )
+        # auto note — 사용자가 graph 에서 url-only 노드 클릭 시 즉시 안내 메시지 확인
+        await append_item_user_notes(
+            session, item_id=item_id, new_note=auto_note,
+        )
         await session.commit()
 
         return {
             "item_id": str(item_id),
             "created": True,
             "url_only": True,
-            "error": error,
+            "fetch_error": error,
             "title": title,
         }
 
@@ -521,13 +564,35 @@ async def auto_link_topics(
     (cross-modal 단서, 예: GitHub README 의 arxiv 링크) 도 topic 으로 매핑 — 단,
     그 단서들은 confidence 를 낮춰서 사용자 confirm 여지를 둠.
 
+    **Fallback** (Phase 2.5 wave-3): external_id 가 하나도 없는 url (일반 블로그,
+    회사 페이지 등) 이라도 자체 topic 1개 생성. slug=`url:item:<uuid>`. 그래야:
+      - 그래프에서 topic 노드로 등장 (item 만 있는 자료가 보이지 않던 문제)
+      - 카테고리 link 가능 (items.tags 가 곧 topic.tags 가 되니 자동 매칭)
+    Houdini 같은 키워드 카테고리도 정상으로 살아남는다.
+
     Returns: 매핑된 topics 목록 [{topic_id, slug, role, ...}].
     """
-    if not ids:
-        return []
-    primary = primary_external_id(ids)
+    primary = primary_external_id(ids) if ids else None
+
+    # external_id 가 하나도 없을 때 fallback — item 자체 slug 의 topic
     if primary is None:
-        return []
+        fallback_slug = f"url:item:{item_id}"
+        fb_title = title or fallback_slug
+        topic, _ = await find_or_create_topic(
+            session,
+            slug=fallback_slug,
+            title=fb_title,
+            primary_external_id=None,
+        )
+        await link_item_to_topic(
+            session,
+            item_id=item_id,
+            topic_id=topic["id"],
+            role="primary",
+            confidence=1.0,
+            source="auto",
+        )
+        return [{**topic, "role": "primary", "confidence": 1.0}]
 
     matched: list[dict[str, Any]] = []
     # 1차: primary external_id 로 main topic
@@ -549,6 +614,13 @@ async def auto_link_topics(
     matched.append({**topic, "role": main_role, "confidence": 1.0})
 
     # 2차: 다른 external_id 들 — 보조 단서 (cross-modal). primary 와 같은 slug 면 skip.
+    #
+    # **중요**: cross-modal topic 의 title 은 부모 item 의 title 을 빌려오면 안 된다.
+    # 예) github repo README 에 arxiv 링크 30개 → 30개 arxiv topic 다 repo 의 title
+    #     로 잘못 들어가는 데이터 중복 버그 (Phase 2.5 wave-3, 2026-05-18).
+    # 정답: side topic 은 자기 slug 만으로 시작 — 진짜 title 은 그 자료를 직접 ingest
+    # 하거나 (예: arxiv URL 던지면 arxiv 의 진짜 title) 또는 seed_arxiv_metadata
+    # 같은 job 으로 외부 API 에서 보강.
     for x in ids:
         if x.slug == primary.slug:
             continue
@@ -556,7 +628,7 @@ async def auto_link_topics(
         side_topic, _ = await find_or_create_topic(
             session,
             slug=x.slug,
-            title=title or x.slug,
+            title=x.slug,
             primary_external_id={"kind": x.kind, "value": x.value},
         )
         await link_item_to_topic(

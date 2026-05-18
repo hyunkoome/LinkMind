@@ -29,7 +29,24 @@ export default function RootLayout({
     <html
       lang="ko"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      suppressHydrationWarning
     >
+      <head>
+        {/* 초기 dark class 결정 — body 렌더 전에 inline script 로 flash of wrong theme 방지 */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
+              try {
+                var t = localStorage.getItem('linkmind:theme');
+                var d = (t === 'dark') || (t !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+                if (d) document.documentElement.classList.add('dark');
+                else document.documentElement.classList.remove('dark');
+                if (t === 'light' || t === 'dark') document.documentElement.classList.add(t);
+              } catch(e) {}
+            `,
+          }}
+        />
+      </head>
       <body className="min-h-screen h-screen bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100 flex flex-col">
         <LocaleProvider>
           <Header />
