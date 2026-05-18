@@ -147,9 +147,10 @@ bash scripts/step5_run_dev.sh --frontend-v2-only
 | 서비스 | URL | 역할 |
 |---|---|---|
 | FastAPI backend | http://localhost:8000 (`/docs` Swagger) | DB + 검색 + ingest + graph API |
-| Streamlit (frontend/) | http://localhost:8501 | 기존 Settings / Ingest / Search 탭 (Phase 1-2) |
-| **Next.js (frontend_v2/)** | **http://localhost:3001** | **3D graph view + modality viewer (Phase 2.5+)** |
+| **Next.js (frontend_v2/)** | **http://localhost:3001** | Graph (3D) · Ingest · Search · Settings 일원화 UI |
 | Telegram daemon | (백그라운드) | LinkMind-Inbox 채널 listen + 자동 ingest |
+
+> Streamlit (frontend/) 은 Phase 2.5 wave-3 에서 폐기 — Settings/Ingest/Search 가 frontend_v2 페이지로 마이그레이션됨. 폴더 자체는 회고용으로 남기지만 step5 가 시작 안 함.
 
 확인:
 

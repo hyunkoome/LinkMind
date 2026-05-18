@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+
+import Header from "@/components/Header";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -14,7 +16,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "LinkMind — Personal AI Engine",
-  description: "그래프 기반 personal knowledge OS — Phase 2.5 graph UI",
+  description: "Personal knowledge OS — 3D graph + 자동 ingest + sVLL 학습 데이터 누적",
 };
 
 export default function RootLayout({
@@ -27,8 +29,9 @@ export default function RootLayout({
       lang="ko"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-screen h-screen bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
-        {children}
+      <body className="min-h-screen h-screen bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100 flex flex-col">
+        <Header />
+        <div className="flex-1 min-h-0">{children}</div>
       </body>
     </html>
   );

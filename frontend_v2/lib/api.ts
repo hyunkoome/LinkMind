@@ -5,6 +5,14 @@ import type {
   GraphResponse,
   ItemDetail,
   ItemUpdateRequest,
+  LLMSettings,
+  LLMSettingsUpdate,
+  ModelsListResponse,
+  PromptVersion,
+  SearchRequest,
+  SearchResponse,
+  UrlIngestRequest,
+  UrlIngestResponse,
 } from "@/types/graph";
 
 const API_BASE =
@@ -55,6 +63,83 @@ export async function patchItem(
 // 첨부 파일 inline URL (PDF viewer 등) — backend 의 /files/{hash}
 export function fileUrl(fileHash: string): string {
   return `${API_BASE}/files/${fileHash}`;
+}
+
+// ── Settings ────────────────────────────────────────────────────
+
+export async function getLLMSettings(): Promise<LLMSettings> {
+  return fetchJSON<LLMSettings>(`/settings/llm`);
+}
+
+export async function updateLLMSettings(body: LLMSettingsUpdate): Promise<LLMSettings> {
+  return fetchJSON<LLMSettings>(`/settings/llm`, {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function listModels(): Promise<ModelsListResponse> {
+  return fetchJSON<ModelsListResponse>(`/settings/llm/models`);
+}
+
+export async function listPromptVersions(name: string): Promise<PromptVersion[]> {
+  return fetchJSON<PromptVersion[]>(`/settings/prompts/${name}/versions`);
+}
+
+export async function savePromptVersion(
+  name: string, body: { content: string; note?: string },
+): Promise<PromptVersion> {
+  return fetchJSON<PromptVersion>(`/settings/prompts/${name}`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function activatePromptVersion(
+  name: string, version: string,
+): Promise<PromptVersion> {
+  return fetchJSON<PromptVersion>(`/settings/prompts/${name}/activate`, {
+    method: "POST",
+    body: JSON.stringify({ version }),
+  });
+}
+
+// ── Ingest ──────────────────────────────────────────────────────
+
+export async function ingestAuto(body: UrlIngestRequest): Promise<UrlIngestResponse> {
+  return fetchJSON<UrlIngestResponse>(`/ingest/auto`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function uploadPdf(
+  file: File, force = false,
+): Promise<UrlIngestResponse> {
+  const form = new FormData();
+  form.append("file", file);
+  const params = new URLSearchParams({
+    analyze_now: "true",
+    force: force ? "true" : "false",
+  });
+  const res = await fetch(`${API_BASE}/ingest/pdf/upload?${params}`, {
+    method: "POST",
+    body: form,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`${res.status} ${res.statusText}: ${text}`);
+  }
+  return res.json();
+}
+
+// ── Search (Qdrant 의미 검색 — graph 의 FTS 와 별개) ────────────
+
+export async function searchSemantic(body: SearchRequest): Promise<SearchResponse> {
+  return fetchJSON<SearchResponse>(`/search`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 }
 
 export { API_BASE };
