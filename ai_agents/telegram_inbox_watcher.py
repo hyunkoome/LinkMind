@@ -35,6 +35,7 @@ import argparse
 import asyncio
 import logging
 import sys
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -49,6 +50,7 @@ if str(_ROOT) not in sys.path:
 from ai_agents.base import ChannelAgent  # noqa: E402
 from backend.config import Settings, get_settings  # noqa: E402
 from backend.ingest.telegram import (  # noqa: E402
+    TelegramAttachment,
     TelegramMessage,
     ingest_telegram_message,
 )
@@ -208,6 +210,9 @@ class TelegramChannelAgent(ChannelAgent):
     async def _handle_message(self, event_or_msg) -> None:
         """Telethon NewMessage event / iter_messages Message 둘 다 처리.
 
+        Phase 2.5 wave-3 — 첨부 (PDF/DOCX/PPTX/TXT/MD/이미지/zip 등) 자동 download
+        후 ingest_document 로 보냄. 텍스트 + 첨부 + URL 모두 가능 (한 메시지에).
+
         NewMessage.Event 는 `.message` 가 Message 객체, iter_messages 는 Message
         자체. `hasattr(event, "message") and hasattr(event.message, "id")` 로 구분.
         """
@@ -217,8 +222,11 @@ class TelegramChannelAgent(ChannelAgent):
             msg = event_or_msg             # iter_messages 의 Message
 
         text = (getattr(msg, "message", None) or getattr(msg, "text", None) or "").strip()
-        if not text:
-            # 사진/파일만 (텍스트 없음) — 일단 skip. 향후 attachment ingest 확장.
+        attachments_local, tmp_dir = await self._download_attachments(msg)
+
+        # 텍스트도 없고 첨부도 없으면 skip (Telegram 의 system message / reaction 등)
+        if not text and not attachments_local:
+            self._cleanup_tmp_dir(tmp_dir)
             return
 
         sender = await msg.get_sender()
@@ -245,29 +253,97 @@ class TelegramChannelAgent(ChannelAgent):
                 f"https://t.me/c/{channel_id.lstrip('-').removeprefix('100')}/{msg.id}"
                 if channel_id else None
             ),
+            attachments=attachments_local,
         )
 
         try:
             result: dict[str, Any] = await ingest_telegram_message(tm, analyze_now=True)
         except Exception as e:  # noqa: BLE001
             logger.exception("ingest 실패 (msg=%s): %s", msg.id, e)
+            self._cleanup_tmp_dir(tmp_dir)
             return
+        finally:
+            # storage 는 sha256 dedup 으로 영구 복사됐으므로 tmp 정리 안전.
+            self._cleanup_tmp_dir(tmp_dir)
 
         urls = result.get("urls_ingested") or []
+        atts = result.get("attachments_ingested") or []
         note = result.get("note_item_id")
         succeeded = self.is_ingest_successful(result)
         logger.info(
-            "msg %s: urls=%d note=%s ok=%s text=%r",
-            msg.id, len(urls), bool(note), succeeded, text[:80],
+            "msg %s: urls=%d attach=%d note=%s ok=%s text=%r",
+            msg.id, len(urls), len(atts), bool(note), succeeded, text[:80],
         )
 
-        # inbox 패턴 — 성공한 메시지는 채널에서 삭제.
+        # inbox 패턴 — 모든 ingest 가 성공해야만 채널에서 삭제.
+        # is_ingest_successful 이 urls + attachments + note 의 error 부재 확인 (§ChannelAgent).
         if succeeded and self.settings and self.settings.telegram_delete_after_ingest:
             try:
                 await msg.delete()
                 logger.info("msg %s ingest 성공 → 채널에서 삭제", msg.id)
             except Exception as e:  # noqa: BLE001
                 logger.warning("msg %s 삭제 실패 (권한/네트워크?): %s", msg.id, e)
+
+    async def _download_attachments(
+        self, msg,
+    ) -> tuple[list[TelegramAttachment], Path | None]:
+        """Telethon msg 에서 첨부 파일들을 임시 디렉토리에 download.
+
+        Photo / Document (PDF/DOCX/이미지/zip 등) 모두 download_media 로 동일하게
+        받음. web_preview (URL preview) 는 첨부 아님 — msg.file 이 None 이거나
+        webpage 타입이라 자동 skip.
+
+        반환: (TelegramAttachment list, 임시 디렉토리 경로 or None)
+        """
+        file_obj = getattr(msg, "file", None)
+        if file_obj is None:
+            return [], None
+
+        # web preview 는 file 객체가 None 이거나 attribute 없음 — 위에서 걸러짐.
+        tmp_dir = Path(tempfile.mkdtemp(prefix="linkmind_tg_"))
+        try:
+            downloaded_path = await msg.download_media(file=str(tmp_dir))
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "msg %s 첨부 download 실패 (%s: %s) — 메시지 보존",
+                msg.id, type(e).__name__, e,
+            )
+            self._cleanup_tmp_dir(tmp_dir)
+            return [], None
+
+        if not downloaded_path:
+            self._cleanup_tmp_dir(tmp_dir)
+            return [], None
+
+        dp = Path(downloaded_path)
+        if not dp.exists():
+            self._cleanup_tmp_dir(tmp_dir)
+            return [], None
+
+        mime_type = getattr(file_obj, "mime_type", None)
+        file_name = getattr(file_obj, "name", None) or dp.name
+        file_size = dp.stat().st_size
+
+        return [
+            TelegramAttachment(
+                file_path=str(dp),
+                file_name=file_name,
+                mime_type=mime_type,
+                size=file_size,
+            )
+        ], tmp_dir
+
+    @staticmethod
+    def _cleanup_tmp_dir(tmp_dir: Path | None) -> None:
+        """임시 다운로드 디렉토리 + 안의 파일 정리. storage 는 이미 복사됨."""
+        if not tmp_dir:
+            return
+        try:
+            for child in tmp_dir.iterdir():
+                child.unlink(missing_ok=True)
+            tmp_dir.rmdir()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("tmp_dir cleanup 실패 (무시): %s", e)
 
 
 if __name__ == "__main__":

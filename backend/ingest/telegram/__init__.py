@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
@@ -52,17 +52,32 @@ _URL_RE = re.compile(
 
 
 @dataclass
+class TelegramAttachment:
+    """텔레그램 메시지에 함께 온 파일 첨부 (Phase 2.5 wave-3).
+
+    watcher 가 Telethon download_media 로 임시 경로에 받은 후 채워서 ingest 로 전달.
+    임시 파일은 ingest 완료 후 watcher 가 정리 (storage 에 이미 sha256 dedup 으로 복사됨).
+    """
+
+    file_path: str          # 다운로드된 로컬 경로 (임시 디렉토리)
+    file_name: str          # 원 파일명 (예: "report.pdf"). None 이면 watcher 가 mime 으로 생성.
+    mime_type: str | None   # Telethon msg.file.mime_type
+    size: int               # bytes
+
+
+@dataclass
 class TelegramMessage:
     """파서 / watcher 가 채우는 표준 메시지 dataclass."""
 
     msg_id: int | str
     date: datetime | None              # 메시지 시각 (UTC 가 가능하면 그것으로)
-    text: str                          # 본문 (포맷 entity 제거된 평문)
+    text: str                          # 본문 (포맷 entity 제거된 평문). attachments 가 있으면 캡션 역할.
     sender: str | None = None          # 'from' 표시명
     sender_id: str | None = None       # 'from_id' (Telegram user/peer id)
     channel: str | None = None         # 채널 이름 (export 파일의 'name')
     channel_id: str | None = None      # 채널 id (peer id)
     permalink: str | None = None       # 'https://t.me/c/<id>/<msg>' 형태 (private 도)
+    attachments: list[TelegramAttachment] = field(default_factory=list)   # Phase 2.5 wave-3
 
 
 def _telegram_permalink(channel_id: str | None, msg_id: int | str) -> str | None:
@@ -120,18 +135,31 @@ async def ingest_telegram_message(
 ) -> dict[str, Any]:
     """단일 텔레그램 메시지 처리.
 
-    동작:
-    - URL 이 1개 이상 있으면 → 각 URL 에 대해 `/ingest/auto` 흐름 (host 별 라우팅).
-      메시지 자체는 별 item 으로 저장하지 않음 (URL item 이 중심).
-    - URL 없으면 → source_type='telegram' 으로 raw text 저장 (메모 노트 패턴).
+    동작 (Phase 2.5 wave-3 확장):
+    - URL 이 1개 이상 있으면 → 각 URL 에 대해 `/ingest/auto` 흐름 (host 별 라우팅)
+    - 첨부 파일이 1개 이상 있으면 → 각 첨부에 대해 `ingest_document` 호출
+      (PDF/DOCX/PPTX/TXT/MD 텍스트 추출 + 그 외 포맷은 attachment 만 저장)
+    - 메시지의 text 는 attachments 가 있으면 각 attachment item 의 user_notes 로
+      자동 채움 (caption → 사용자 메모, §1 학습 데이터 비전)
+    - URL 도 attachment 도 없으면 → source_type='telegram' 으로 raw text 저장
 
-    반환: {urls_ingested: [{url, item_id, created, ...}], note_item_id: ...}.
+    반환:
+        {urls_ingested: [...], attachments_ingested: [...], note_item_id: ...,
+         caption: <text 가 attachments 와 같이 왔으면 그것>}.
+
+    inbox 패턴: ChannelAgent.is_ingest_successful 이 모든 키 (urls + attachments +
+    note) 가 error 없으면 True — 그때만 채널에서 메시지 삭제.
     """
     urls = _find_urls(message.text)
+    attachments = message.attachments or []
+    caption = message.text.strip() if attachments and message.text else None
+
     result: dict[str, Any] = {
         "msg_id": str(message.msg_id),
         "urls_ingested": [],
+        "attachments_ingested": [],
         "note_item_id": None,
+        "caption": caption,
     }
 
     if urls:
@@ -163,11 +191,47 @@ async def ingest_telegram_message(
             r["kind"] = kind
             result["urls_ingested"].append(r)
 
-    text_only = message.text.strip()
-    if not urls and text_only and len(text_only) >= 20:
-        # URL 없는 메시지는 메모처럼 raw 저장. 너무 짧은 메시지 (인사말 등) 는 skip.
-        note_id = await _save_text_message(message, analyze_now=analyze_now)
-        result["note_item_id"] = note_id
+    if attachments:
+        from backend.ingest.document import ingest_document
+
+        for att in attachments:
+            try:
+                r = await ingest_document(
+                    att.file_path,
+                    filename=att.file_name,
+                    caption=caption,
+                    source_metadata_extra={
+                        "mime_type": att.mime_type,
+                        "telegram": {
+                            "msg_id": str(message.msg_id),
+                            "channel": message.channel,
+                            "channel_id": message.channel_id,
+                            "sender": message.sender,
+                            "sender_id": message.sender_id,
+                            "permalink": message.permalink,
+                            "date": message.date.isoformat() if message.date else None,
+                            "caption": caption,
+                        },
+                    },
+                    analyze_now=analyze_now,
+                    force=force,
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "telegram attachment ingest 실패 (msg=%s, file=%s): %s: %s",
+                    message.msg_id, att.file_name, type(e).__name__, e,
+                )
+                r = {"filename": att.file_name, "error": str(e)}
+            r["filename"] = att.file_name
+            result["attachments_ingested"].append(r)
+
+    # URL/attachment 둘 다 없을 때만 note 저장 — attachments 가 있으면 caption 이 이미
+    # user_notes 로 들어감 (note 중복 방지).
+    if not urls and not attachments:
+        text_only = message.text.strip()
+        if text_only and len(text_only) >= 20:
+            note_id = await _save_text_message(message, analyze_now=analyze_now)
+            result["note_item_id"] = note_id
 
     return result
 

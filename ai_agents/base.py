@@ -77,17 +77,18 @@ class ChannelAgent(ABC):
 
         inbox 패턴의 "성공한 메시지는 채널에서 자동 삭제" 트리거 조건.
 
-        규칙:
-        - URL 들이 ingest 됐고 모두 `error` 키 없음 → 성공
-        - URL 없음 + `note_item_id` 있음 → 성공 (note 저장됨)
-        - 둘 다 아님 → 실패 (채널 측이 메시지 보존, 사용자 시각 확인)
+        규칙 (Phase 2.5 wave-3 확장 — attachments 도 포함):
+        - 결과에 있는 모든 ingest 시도 (urls + attachments) 가 error 없음
+        - + 최소 하나는 처리됨 (urls / attachments / note 중 하나 이상)
+        - 그렇지 않으면 False — 채널 측이 메시지 보존 (사용자가 시각으로 확인).
 
         Args:
             result: backend.ingest.* 의 반환 dict. 예:
                 ```
                 {
                     "msg_id": "...",
-                    "urls_ingested": [{"url": "...", "item_id": "..."}],
+                    "urls_ingested": [{"url": "...", "item_id": "..."}, ...],
+                    "attachments_ingested": [{"filename": "...", "item_id": "..."}, ...],
                     "note_item_id": "abc-uuid" | None,
                 }
                 ```
@@ -96,6 +97,13 @@ class ChannelAgent(ABC):
             True 면 채널 측이 메시지 삭제 가능 (이미 안전하게 저장됨).
         """
         urls = result.get("urls_ingested") or []
-        if urls:
-            return all("error" not in u for u in urls)
-        return bool(result.get("note_item_id"))
+        attachments = result.get("attachments_ingested") or []
+        note = result.get("note_item_id")
+
+        has_any = bool(urls or attachments or note)
+        if not has_any:
+            return False
+
+        urls_ok = all("error" not in u for u in urls)
+        attachments_ok = all("error" not in a for a in attachments)
+        return urls_ok and attachments_ok

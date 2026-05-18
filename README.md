@@ -261,8 +261,8 @@ LinkMind 는 backend (`backend/`) + multi-channel gateway (`ai_agents/`) + Strea
 | **2.5 wave-2** | arxiv API seed (title/abstract 자동), 검색 결과의 multi-modal 인라인 노출, manual link autocomplete | ✅ 완료 |
 | **C wave-1 (Telegram inbox)** | Telethon daemon, 채널 메시지 → 자동 ingest + URL 라우팅 + topic 매핑, 처리 후 채널에서 자동 삭제 (inbox 패턴) | ✅ 완료 (실 환경 검증) |
 | **리팩토링** | `scripts/` 는 .sh 만 / `backend/jobs/` batch python / `ai_agents/` client agent — 5 카테고리 135 tests | ✅ 완료 |
-| **2.5 wave-3 (단일 self-contained, 2026-05-18)** | (1) §3 재정의 + §14 신규 (AGPL+Privacy+SaaS path) + docs/agent_architecture.md (2) `ai_agents/base.py` ChannelAgent ABC + telegram refactor (3) items 스키마 user_notes/is_read/read_at + GET/PATCH /items/{id} + LLM 키워드 추출 BackgroundTask (4) `backend/ingest/document/` 통합 추출 (PDF + DOCX/PPTX/TXT/MD, 한국어 cp949) | 🚧 진행 중 (172 tests, Day 5 텔레그램 첨부 ingest 작업 중) |
-| **2.5 wave-3 남은 작업** | 텔레그램 첨부 download + caption→user_notes 자동 + is_ingest_successful 확장 → graph backend `/graph/*` (cytoscape JSON) → **Next.js 14 graph UI + modality viewer** | 🚧 진행 중 |
+| **2.5 wave-3 (단일 self-contained, 2026-05-18)** | (1) §3 재정의 + §14 신규 (AGPL+Privacy+SaaS path) + docs/agent_architecture.md (2) `ai_agents/base.py` ChannelAgent ABC + telegram refactor (3) items 스키마 user_notes/is_read/read_at + GET/PATCH /items/{id} + LLM 키워드 추출 BackgroundTask (4) `backend/ingest/document/` 통합 추출 (PDF + DOCX/PPTX/TXT/MD, 한국어 cp949) (5) 텔레그램 첨부 자동 ingest (Telethon download_media → ingest_document, caption → user_notes 자동, is_ingest_successful 이 첨부까지 확인해야 메시지 삭제) | 🚧 진행 중 (177 tests, Day 5 마무리) |
+| **2.5 wave-3 남은 작업** | backend/ingest 가벼운 정리 → graph backend `/graph/*` (cytoscape JSON) → **Next.js 14 graph UI + modality viewer (user_notes 편집, is_read 토글, PDF figures, YouTube transcript, GitHub README)** | 🚧 진행 중 |
 | C wave-2 (Slack workspace ingest) | Slack export 재수집 → 워크스페이스 전체 채널 ingest + thread/첨부 (사용자가 Slack 구독 해제 예정 → 일회성 backfill) | 보류 |
 | 2 후반 (AI 카테고리/feedback/dataset exporter) | AI 카테고리 강화, feedback 테이블, dataset exporter (JSONL) | |
 | 3 | 이미지/OCR/멀티모달 RAG, TEI 임베딩 전환, MinIO object storage, `ai_agents/` 채널 확장 (Slack/WhatsApp/Discord), 자가학습 (auto prompt/ingester 개선) | |

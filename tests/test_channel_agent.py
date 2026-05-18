@@ -68,6 +68,61 @@ def test_is_ingest_successful_is_staticmethod_callable_without_instance():
     assert ChannelAgent.is_ingest_successful({}) is False
 
 
+# ── attachments 케이스 (Phase 2.5 wave-3 확장) ──────────────
+
+
+def test_is_ingest_successful_attachments_all_ok():
+    """첨부 모두 error 없이 처리 → True (메시지 삭제 가능)."""
+    result = {
+        "urls_ingested": [],
+        "attachments_ingested": [
+            {"filename": "a.pdf", "item_id": "..."},
+            {"filename": "b.docx", "item_id": "..."},
+        ],
+    }
+    assert ChannelAgent.is_ingest_successful(result) is True
+
+
+def test_is_ingest_successful_attachment_with_error_false():
+    """첨부 하나라도 error 면 False — 메시지 보존 (사용자가 발견)."""
+    result = {
+        "urls_ingested": [],
+        "attachments_ingested": [
+            {"filename": "a.pdf", "item_id": "..."},
+            {"filename": "b.docx", "error": "extraction failed"},
+        ],
+    }
+    assert ChannelAgent.is_ingest_successful(result) is False
+
+
+def test_is_ingest_successful_mixed_urls_and_attachments():
+    """URL + 첨부 + note 다 있는 경우 — 전부 성공해야 True."""
+    result = {
+        "urls_ingested": [{"url": "https://x.com", "item_id": "u1"}],
+        "attachments_ingested": [{"filename": "a.pdf", "item_id": "a1"}],
+        "note_item_id": "n1",
+    }
+    assert ChannelAgent.is_ingest_successful(result) is True
+
+
+def test_is_ingest_successful_url_ok_but_attachment_fail_false():
+    """URL 다 OK 지만 첨부 하나 실패 → False (메시지 보존)."""
+    result = {
+        "urls_ingested": [{"url": "https://x.com", "item_id": "u1"}],
+        "attachments_ingested": [{"filename": "a.pdf", "error": "download failed"}],
+    }
+    assert ChannelAgent.is_ingest_successful(result) is False
+
+
+def test_is_ingest_successful_attachment_fail_url_ok_false():
+    """대칭 케이스 — 첨부 OK + URL 실패 → False."""
+    result = {
+        "urls_ingested": [{"url": "https://x.com", "error": "404"}],
+        "attachments_ingested": [{"filename": "a.pdf", "item_id": "a1"}],
+    }
+    assert ChannelAgent.is_ingest_successful(result) is False
+
+
 def test_default_name_is_empty_string():
     """ABC 의 name 기본값은 빈 문자열 — 구현체가 override 강제 안 함 (warning 도 X).
 

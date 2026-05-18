@@ -31,8 +31,22 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from backend.db.connection import get_engine
+from backend.db.repository import (
+    find_item_by_hash,
+    insert_attachment,
+    insert_item,
+)
+
 # PDF 재사용 — backend/ingest/pdf 의 검증된 함수.
-from backend.ingest.pdf import _extract_pdf_text, _sanitize_text
+from backend.ingest.pdf import (
+    _extract_pdf_text,
+    _sanitize_text,
+    _save_pdf_figures,
+)
+from backend.utils.hashing import sha256_text
 
 logger = logging.getLogger(__name__)
 
@@ -359,3 +373,215 @@ def _filename_to_title(filename: str | None) -> str | None:
     if not name:
         return None
     return name[:200]
+
+
+# ──────────────────────────────────────────────────────────────
+# ingest_document — 통합 진입점 (텔레그램 첨부, 향후 web upload, Slack 첨부 등)
+# ──────────────────────────────────────────────────────────────
+
+
+# extension 만으로 source_type 결정 — PDF 는 기존 ingest_pdf 와 일관성 위해 "pdf",
+# 그 외 office/text 는 "document".
+def _resolve_source_type(fmt: str, override: str | None) -> str:
+    if override:
+        return override
+    if fmt == "pdf":
+        return "pdf"
+    return "document"
+
+
+async def ingest_document(
+    file_path: str | Path,
+    *,
+    source_type: str | None = None,         # caller 가 명시 안 하면 fmt 로 결정
+    source_id: str | None = None,           # 채널별 외부 id (예: telegram msg_id)
+    source_url: str | None = None,
+    source_metadata_extra: dict[str, Any] | None = None,
+    caption: str | None = None,              # 함께 온 사용자 메모 → items.user_notes
+    analyze_now: bool = True,
+    force: bool = False,
+) -> dict[str, Any]:
+    """다양한 포맷 file 을 LinkMind item 으로 ingest.
+
+    사용 위치 (Phase 2.5+):
+    - 텔레그램 첨부 (caption = 메시지 텍스트 → user_notes)
+    - 향후: Slack/Discord 첨부, web upload, ...
+
+    동작:
+    1. 파일 bytes 로드 + storage 저장 (loss-less, sha256 dedup)
+    2. extract_text_from_bytes 로 텍스트 추출
+       - 지원 포맷이면 raw_content + chunks + summary
+       - 지원 안 함 (image/doc/ppt/hwp/zip 등) → raw_content = 메타 placeholder,
+         attachment 만 저장 (raw 파일은 보존 — 학습 데이터 손실 방지)
+    3. items + attachments insert, dedup 시 attachment 만 추가
+    4. caption 있으면 items.user_notes 에 단순 저장 (LLM 키워드 추출은 PATCH 시점에)
+    5. analyze_now 면 chunks (embedding) + summary, PDF 면 figure 도
+
+    반환:
+        {item_id, created, source_type, source_format, file_hash, file_path,
+         chunks_indexed, figures_saved, summary_generated, refreshed, ...}
+    """
+    # ── 1. 파일 로드 + storage 저장 ─────────────────────────────
+    from backend.storage.local import save_file
+
+    src = Path(file_path)
+    if not src.exists():
+        raise FileNotFoundError(f"file not found: {src}")
+
+    storage_path, file_hash, file_size = save_file(src)
+    data = src.read_bytes()        # 추출용 (storage 는 이미 복사됨)
+
+    # ── 2. 포맷 식별 + 텍스트 추출 ──────────────────────────────
+    filename = src.name
+    if not _explicit_mime(source_metadata_extra):
+        mime_type = mimetypes.guess_type(filename)[0]
+    else:
+        mime_type = source_metadata_extra.get("mime_type")  # type: ignore[union-attr]
+
+    fmt = guess_format(filename, mime_type)
+    extract = extract_text_from_bytes(data, filename=filename, mime_type=mime_type)
+
+    if extract:
+        raw_content = extract.raw_text
+        title = extract.title
+        extractor = extract.extractor
+        extract_meta = extract.meta
+    else:
+        # 텍스트 추출 안 됨 (image/unsupported) — raw 는 placeholder, 파일은 attachment 로 보존
+        raw_content = (
+            f"[binary file: {filename}, mime={mime_type or 'unknown'}, "
+            f"size={file_size} bytes, format={fmt}]"
+        )
+        title = _filename_to_title(filename)
+        extractor = "none"
+        extract_meta = {}
+
+    resolved_source_type = _resolve_source_type(fmt, source_type)
+    content_hash = sha256_text(raw_content)
+
+    base_metadata: dict[str, Any] = {
+        "file_hash": file_hash,
+        "file_size": file_size,
+        "file_path": storage_path,
+        "filename": filename,
+        "mime_type": mime_type,
+        "source_format": fmt,
+        "extractor": extractor,
+        "extract_meta": extract_meta,
+    }
+    if source_metadata_extra:
+        # caller (예: telegram) 가 channel/msg_id/caption 등 provenance 메타 추가.
+        # 같은 key 충돌 시 caller 가 우선 (raw 원본 정보 보존).
+        merged_meta = {**base_metadata, **source_metadata_extra}
+    else:
+        merged_meta = base_metadata
+
+    final_source_url = source_url or f"/files/{file_hash}"
+
+    # ── 3. DB insert / dedup ───────────────────────────────────
+    engine = get_engine()
+    session_factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    async with session_factory() as session:
+        existing = await find_item_by_hash(
+            session, source_type=resolved_source_type, content_hash=content_hash,
+        )
+        if existing is not None:
+            # 같은 파일을 다른 메시지로 다시 보냈을 수도 — attachment dedup 자동 (UNIQUE).
+            att_id = await insert_attachment(
+                session, item_id=existing, file_path=storage_path,
+                file_hash=file_hash, file_size=file_size,
+                mime_type=mime_type or "application/octet-stream",
+                role="attachment",
+            )
+            # 새 caption 이면 user_notes 도 갱신 (raw 자체는 dedup 으로 같음)
+            if caption and caption.strip():
+                from backend.db.repository import update_item_user_notes
+                await update_item_user_notes(
+                    session, item_id=existing, user_notes=caption.strip(),
+                )
+            await session.commit()
+            return {
+                "item_id": str(existing),
+                "created": False,
+                "source_type": resolved_source_type,
+                "source_format": fmt,
+                "file_hash": file_hash,
+                "file_path": storage_path,
+                "attachment_added": att_id is not None,
+                "filename": filename,
+                "chunks_indexed": 0,
+                "figures_saved": 0,
+            }
+
+        item_id = await insert_item(
+            session,
+            source_type=resolved_source_type,
+            raw_content=raw_content,
+            raw_content_hash=content_hash,
+            source_id=source_id or file_hash,
+            source_url=final_source_url,
+            source_metadata=merged_meta,
+            title=title,
+            source_created_at=None,
+        )
+        await insert_attachment(
+            session, item_id=item_id, file_path=storage_path,
+            file_hash=file_hash, file_size=file_size,
+            mime_type=mime_type or "application/octet-stream",
+            role="attachment",
+        )
+        # caption (텔레그램 등에서 함께 온 사용자 메모) → user_notes 자동
+        if caption and caption.strip():
+            from backend.db.repository import update_item_user_notes
+            await update_item_user_notes(
+                session, item_id=item_id, user_notes=caption.strip(),
+            )
+        await session.commit()
+
+        chunks_indexed = 0
+        figures_saved = 0
+        summary_generated = False
+        if analyze_now and extract and extract.raw_text:
+            # lazy import — 순환 의존 회피 (url 이 document import 할 수도 있어서)
+            from backend.ingest.url import (
+                ExtractedDoc,
+                _embed_and_index,
+                _generate_and_save_summary,
+            )
+
+            chunks_indexed = await _embed_and_index(
+                session, item_id=item_id, text=raw_content,
+            )
+            if fmt == "pdf":
+                figures_saved = await _save_pdf_figures(
+                    session, item_id=item_id, data=data,
+                )
+                await session.commit()
+            paper_keywords = [fmt]
+            doc = ExtractedDoc(
+                body=raw_content, title=title, abstract=None,
+                paper_keywords=paper_keywords,
+            )
+            summary_text, _tags = await _generate_and_save_summary(
+                session, item_id=item_id, doc=doc,
+            )
+            summary_generated = summary_text is not None
+
+        return {
+            "item_id": str(item_id),
+            "created": True,
+            "source_type": resolved_source_type,
+            "source_format": fmt,
+            "file_hash": file_hash,
+            "file_path": storage_path,
+            "filename": filename,
+            "chunks_indexed": chunks_indexed,
+            "figures_saved": figures_saved,
+            "summary_generated": summary_generated,
+            "title": title,
+        }
+
+
+def _explicit_mime(extra: dict[str, Any] | None) -> bool:
+    """source_metadata_extra 에 mime_type 이 직접 명시됐는지 (telegram 등이 알면 우선)."""
+    return bool(extra and extra.get("mime_type"))

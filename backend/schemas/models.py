@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field, HttpUrl
 SourceType = Literal[
     "slack", "telegram", "url", "pdf",
     "github", "arxiv", "youtube", "youtube_playlist", "manual",
+    "document",   # Phase 2.5 wave-3 — DOCX/PPTX/TXT/MD 등 (PDF 외 office/text). PDF 는 기존 "pdf" 유지.
 ]
 
 
