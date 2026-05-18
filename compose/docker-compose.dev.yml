@@ -102,6 +102,50 @@ services:
       - linkmind
 
   # ─────────────────────────────────────────────────────────────
+  # vLLM — production-grade LLM 서빙 (OpenAI 호환). Ollama 대비 2-10x throughput.
+  # paged attention + continuous batching, RTX 4090 잘 활용.
+  # Phase 3 의 main inference engine. Ollama 는 디버깅/cli/모델관리용으로 유지.
+  # 첫 startup 시 모델 (예: Qwen/Qwen2.5-7B-Instruct ~15GB) HF Hub 다운로드 — 시간 큼.
+  # ─────────────────────────────────────────────────────────────
+  vllm:
+    image: vllm/vllm-openai:latest
+    container_name: linkmind-vllm
+    restart: unless-stopped
+    profiles: ["vllm"]                  # 기본 profile 안 시작 — 활성화: `--profile vllm`
+    ports:
+      - "8001:8000"                     # 호스트 8001 (backend 의 8000 과 충돌 회피)
+    environment:
+      HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN:-}
+    volumes:
+      - ${VOLUMES_ROOT:-../volumes}/vllm-cache:/root/.cache/huggingface
+    command:
+      - "--model"
+      - "${VLLM_MODEL:-Qwen/Qwen2.5-7B-Instruct}"
+      - "--port"
+      - "8000"
+      - "--max-model-len"
+      - "${VLLM_MAX_MODEL_LEN:-8192}"
+      - "--gpu-memory-utilization"
+      - "${VLLM_GPU_MEM_UTIL:-0.85}"
+      - "--enable-lora"                 # Phase 4 LoRA adapter hot-swap 대비
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/8000' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 300s                # 첫 모델 다운로드 시간 고려 (5분)
+    ipc: host                           # vLLM 권장 — shared memory 최적화
+    networks:
+      - linkmind
+
+  # ─────────────────────────────────────────────────────────────
   # OpenWebUI — Ollama용 웹 UI (선택, 디버깅/모델 관리에 유용)
   # ─────────────────────────────────────────────────────────────
   openwebui:

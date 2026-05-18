@@ -37,6 +37,7 @@ _KEYS = {
     "ollama_model",
     "openai_model",
     "anthropic_model",
+    "vllm_model",
 }
 
 # prompt name → (version, content)
@@ -171,6 +172,11 @@ def get_effective_anthropic_model() -> str:
     return _settings_cache.get("anthropic_model") or get_settings().anthropic_model
 
 
+def get_effective_vllm_model() -> str:
+    _ensure_loaded()
+    return _settings_cache.get("vllm_model") or get_settings().vllm_model
+
+
 def get_active_prompt(name: str) -> tuple[str, str]:
     """활성 prompt 반환: (version, content). DB 미적재/누락 시 시드 default 로 fallback.
 
@@ -214,6 +220,7 @@ async def snapshot() -> dict[str, Any]:
             "ollama_model": get_effective_ollama_model(),
             "openai_model": get_effective_openai_model(),
             "anthropic_model": get_effective_anthropic_model(),
+            "vllm_model": get_effective_vllm_model(),
         },
         # 'config_defaults' = backend/config.py 의 Field default. DB 가 비어있을 때
         # fallback 으로만 사용. (이전엔 env 도 override 했지만 LLM 관련 env 는 제거됨.)
@@ -222,6 +229,7 @@ async def snapshot() -> dict[str, Any]:
             "ollama_model": s.ollama_model,
             "openai_model": s.openai_model,
             "anthropic_model": s.anthropic_model,
+            "vllm_model": s.vllm_model,
         },
         "prompts": active_prompts,
     }

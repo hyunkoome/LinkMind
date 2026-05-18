@@ -83,20 +83,22 @@ function LLMSection({
   models: ModelsListResponse | null;
   onChanged: () => void;
 }) {
-  const effective = settings?.effective || {};
+  const effective = (settings?.effective || {}) as Record<string, string | undefined>;
   const [provider, setProvider] = useState(effective.default_llm_provider || "ollama");
   const [ollamaModel, setOllamaModel] = useState(effective.ollama_model || "");
   const [openaiModel, setOpenaiModel] = useState(effective.openai_model || "");
   const [anthropicModel, setAnthropicModel] = useState(effective.anthropic_model || "");
+  const [vllmModel, setVllmModel] = useState(effective.vllm_model || "");
   const [saving, setSaving] = useState(false);
 
   // settings 가 reload 되면 state 동기화
   useEffect(() => {
-    const e = settings?.effective || {};
+    const e = (settings?.effective || {}) as Record<string, string | undefined>;
     setProvider(e.default_llm_provider || "ollama");
     setOllamaModel(e.ollama_model || "");
     setOpenaiModel(e.openai_model || "");
     setAnthropicModel(e.anthropic_model || "");
+    setVllmModel(e.vllm_model || "");
   }, [settings]);
 
   const save = async () => {
@@ -107,7 +109,8 @@ function LLMSection({
         ollama_model: ollamaModel || null,
         openai_model: openaiModel || null,
         anthropic_model: anthropicModel || null,
-      });
+        vllm_model: vllmModel || null,
+      } as Record<string, string | null>);
       onChanged();
     } catch (e) {
       alert(`저장 실패: ${(e as Error).message}`);
@@ -118,6 +121,9 @@ function LLMSection({
 
   const ollamaList = models?.providers?.ollama?.models || [];
   const ollamaError = models?.providers?.ollama?.error;
+  const vllmList = models?.providers?.vllm?.models || [];
+  const vllmAvailable = models?.providers?.vllm?.available;
+  const vllmError = models?.providers?.vllm?.error;
 
   return (
     <section className="mb-8 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded p-4">
@@ -130,7 +136,8 @@ function LLMSection({
             onChange={(e) => setProvider(e.target.value)}
             className="mt-1 w-full px-2 py-1.5 bg-zinc-50 dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded"
           >
-            <option value="ollama">ollama (로컬)</option>
+            <option value="ollama">ollama (로컬, MVP)</option>
+            <option value="vllm">vllm (로컬, 2-10x 빠름)</option>
             <option value="openai">openai</option>
             <option value="claude">claude (anthropic)</option>
           </select>
@@ -184,6 +191,38 @@ function LLMSection({
             placeholder="claude-haiku-4-5"
             className="mt-1 w-full px-2 py-1.5 bg-zinc-50 dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded"
           />
+        </label>
+        <label className="block">
+          <span className="text-xs text-zinc-500">
+            vLLM 모델 (HF id){" "}
+            {vllmAvailable ? (
+              <span className="text-green-500">(서버 가동 중)</span>
+            ) : vllmError ? (
+              <span className="text-red-400">(미가동 — compose --profile vllm 으로 시작)</span>
+            ) : null}
+          </span>
+          {vllmList.length > 0 ? (
+            <select
+              value={vllmModel}
+              onChange={(e) => setVllmModel(e.target.value)}
+              className="mt-1 w-full px-2 py-1.5 bg-zinc-50 dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded"
+            >
+              <option value="">(env 기본값)</option>
+              {vllmList.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input
+              type="text"
+              value={vllmModel}
+              onChange={(e) => setVllmModel(e.target.value)}
+              placeholder="Qwen/Qwen2.5-7B-Instruct"
+              className="mt-1 w-full px-2 py-1.5 bg-zinc-50 dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded"
+            />
+          )}
         </label>
       </div>
       <div className="mt-3 flex items-center justify-between">

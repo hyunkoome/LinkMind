@@ -90,6 +90,15 @@ class Settings(BaseSettings):
     ollama_base_url_local: str = Field(default="http://localhost:11434")
     ollama_model: str = Field(default="qwen2.5:7b")
 
+    # vLLM (Phase 3+) — OpenAI 호환, Ollama 대비 2-10x throughput.
+    # docker compose 의 vllm service (profile: vllm) 가 떠 있어야 동작.
+    vllm_base_url: str = Field(default="http://vllm:8000/v1")
+    vllm_base_url_local: str = Field(default="http://localhost:8001/v1")
+    vllm_model: str = Field(default="Qwen/Qwen2.5-7B-Instruct")
+
+    # Hugging Face token — gated 모델 (Llama 3 등) 받을 때 필요. 공개 모델 (Qwen 등) 만이면 빈.
+    hf_token: str = Field(default="")
+
     # ─── OpenClaw (LinkMind는 client로서 호출만; 통합 시점에 사용) ──
     openclaw_gateway_url: str = Field(default="http://localhost:7890")
     openclaw_api_key: str = Field(default="")
@@ -154,6 +163,15 @@ class Settings(BaseSettings):
         if os.getenv("IN_DOCKER") == "1":
             return self.ollama_base_url
         return self.ollama_base_url_local
+
+    @property
+    def effective_vllm_base_url(self) -> str:
+        """ollama 와 동일 패턴 — backend 가 docker 안 (vllm:8000/v1) 또는
+        호스트 (localhost:8001/v1)."""
+        import os
+        if os.getenv("IN_DOCKER") == "1":
+            return self.vllm_base_url
+        return self.vllm_base_url_local
 
     @property
     def storage_local_abs_path(self) -> Path:

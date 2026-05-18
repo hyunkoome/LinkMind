@@ -16,6 +16,7 @@ from backend.llm.base import LLMProvider
 from backend.llm.claude_provider import ClaudeProvider
 from backend.llm.ollama_provider import OllamaProvider
 from backend.llm.openai_provider import OpenAIProvider
+from backend.llm.vllm_provider import VLLMProvider
 
 
 @lru_cache(maxsize=4)
@@ -39,5 +40,10 @@ def get_llm_provider(name: str | None = None) -> LLMProvider:
         return OllamaProvider(
             base_url=settings.effective_ollama_base_url,
             default_model=runtime_settings.get_effective_ollama_model(),
+        )
+    if chosen == "vllm":
+        return VLLMProvider(
+            base_url=settings.effective_vllm_base_url,
+            default_model=runtime_settings.get_effective_vllm_model(),
         )
     raise ValueError(f"알 수 없는 LLM provider: {chosen}")

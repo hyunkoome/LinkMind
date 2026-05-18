@@ -36,10 +36,11 @@ router = APIRouter()
 class LLMSettingsUpdate(BaseModel):
     """비어있는 문자열 또는 null 은 'override 해제 → env 기본값으로 복귀'."""
 
-    default_llm_provider: str | None = Field(default=None, description="openai|claude|ollama")
+    default_llm_provider: str | None = Field(default=None, description="openai|claude|ollama|vllm")
     ollama_model: str | None = None
     openai_model: str | None = None
     anthropic_model: str | None = None
+    vllm_model: str | None = None
 
 
 class PromptSave(BaseModel):
@@ -63,7 +64,7 @@ async def get_llm_settings() -> dict[str, Any]:
 async def update_llm_settings(payload: LLMSettingsUpdate) -> dict[str, Any]:
     # provider 값 검증 (빈/None 은 override 해제로 통과)
     if payload.default_llm_provider and payload.default_llm_provider not in (
-        "openai", "claude", "ollama",
+        "openai", "claude", "ollama", "vllm",
     ):
         raise HTTPException(400, f"알 수 없는 provider: {payload.default_llm_provider}")
     return await runtime_settings.update_settings(payload.model_dump())
@@ -94,6 +95,11 @@ async def list_models() -> dict[str, Any]:
                 "default": runtime_settings.get_effective_ollama_model(),
                 "models": [],
             },
+            "vllm": {
+                "available": False,    # vLLM 서버 가동 시 True
+                "default": runtime_settings.get_effective_vllm_model(),
+                "models": [],
+            },
         }
     }
     # Ollama 설치된 모델 — 실패해도 다른 정보는 반환.
@@ -106,6 +112,18 @@ async def list_models() -> dict[str, Any]:
     except Exception as e:  # noqa: BLE001
         logger.warning("Ollama /api/tags 조회 실패: %s", e)
         out["providers"]["ollama"]["error"] = str(e)
+    # vLLM 의 OpenAI 호환 /v1/models — 가동 시 현재 서빙 모델 1개 반환.
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.get(f"{settings.effective_vllm_base_url}/models")
+            r.raise_for_status()
+            data = r.json()
+            models = [m["id"] for m in data.get("data", [])]
+            out["providers"]["vllm"]["available"] = True
+            out["providers"]["vllm"]["models"] = models
+    except Exception as e:  # noqa: BLE001
+        logger.info("vLLM /v1/models 조회 실패 (서버 미가동일 수 있음): %s", e)
+        out["providers"]["vllm"]["error"] = str(e)
     return out
 
 

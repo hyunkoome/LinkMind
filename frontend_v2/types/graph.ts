@@ -90,6 +90,7 @@ export interface LLMSettings {
     ollama_model?: string;
     openai_model?: string;
     anthropic_model?: string;
+    vllm_model?: string;
   };
   override?: Record<string, string | null>;
   config_defaults?: Record<string, string>;
@@ -101,6 +102,7 @@ export interface LLMSettingsUpdate {
   ollama_model?: string | null;
   openai_model?: string | null;
   anthropic_model?: string | null;
+  vllm_model?: string | null;
 }
 
 // backend GET /settings/llm/models 응답 — 각 provider 별 사용 가능 여부 + default + 모델 목록
@@ -116,6 +118,7 @@ export interface ModelsListResponse {
     ollama: ProviderModels;
     openai: ProviderModels;
     claude: ProviderModels;
+    vllm: ProviderModels;
   };
 }
 
