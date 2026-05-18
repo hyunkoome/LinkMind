@@ -281,13 +281,35 @@ async def ingest_url(
     (summary, tags, source_metadata, title) 만 재계산해서 덮어쓴다. raw_content /
     chunks 는 동일 hash 라 의미상 같으므로 건드리지 않는다 (loss-less + 비용 최소).
 
+    영구 실패 (HTTP 4xx, 본문 추출 실패) 시 fallback — URL 자체만 raw 로 보존하는
+    "url-only" item 저장. 5xx / network error 는 raise (재시도 가능).
+    이렇게 하면 텔레그램 인박스의 메시지가 영구 실패 URL 이라도 처리되어 채널에서
+    삭제됨 → backfill 무한 재시도 방지. graph 에는 빈 노드로 보존 → 사용자가 수동
+    archive.org / 다른 URL 로 재시도 가능.
+
     Returns: {"item_id": ..., "created": bool, "refreshed": bool, "chunks_indexed": int,
               "summary_generated": bool, "tags": [...], "title": ...}
     """
-    html = await fetch_html(url)
+    try:
+        html = await fetch_html(url)
+    except httpx.HTTPStatusError as e:
+        status = e.response.status_code
+        # 4xx = 영구 실패 (403 Cloudflare/anti-bot, 404 사라짐, 410 gone, 401 unauth)
+        # 5xx 는 raise — 일시 서버 오류, 재시도 가능
+        if 400 <= status < 500:
+            logger.info(
+                "URL %s → %d (영구 실패, url-only 저장): %s",
+                url, status, type(e).__name__,
+            )
+            return await _save_url_only(url, error=f"HTTP {status}", force=force)
+        raise
+
     doc = extract_doc(html, url=url)
     if not doc.body or len(doc.body.strip()) < 50:
-        raise ValueError(f"URL 에서 본문을 추출하지 못했습니다: {url}")
+        # 200 OK 였지만 trafilatura + readability 모두 본문 추출 실패 (JS rendered,
+        # 비표준 HTML 등). URL only 로 보존.
+        logger.info("URL %s 200 OK 이지만 본문 추출 실패 (url-only 저장)", url)
+        return await _save_url_only(url, error="본문 추출 실패", force=force)
 
     # 외부 식별자 (arxiv_id / doi / github_repo / yt video_id 등) — URL + 본문 모두에서.
     ext_ids = extract_external_ids(url=url, text=doc.body)
@@ -373,6 +395,101 @@ async def ingest_url(
             "summary_generated": summary_text is not None,
             "tags": final_tags,
             "title": doc.title,
+        }
+
+
+async def _save_url_only(
+    url: str, *, error: str, force: bool = False,
+) -> dict[str, Any]:
+    """본문 추출 실패한 URL 을 'url-only' 로 저장 — graph 에 빈 노드로 보존.
+
+    저장 내용:
+      - source_type='url' (일반 url 과 같지만 raw_content 가 URL+에러 메시지만)
+      - raw_content = URL + 에러 설명 (placeholder, hash 안정성 위해 고정 형식)
+      - title = URL hostname
+      - tags = ['url-only', 'fetch-failed']
+      - summary 없음, chunks 없음 (raw 너무 짧고 의미 없음 — embedding 비용 회피)
+      - source_metadata.fetch_error = 에러 정보 (사용자가 graph 에서 확인 가능)
+      - external_ids 추출은 URL 에서만 (예: github URL 이면 owner/repo 따옴)
+
+    dedup: 같은 URL 두 번 던지면 같은 raw_content hash → 두 번째는 created=False.
+    사용자가 archive.org 또는 다른 mirror URL 로 던지면 새 item 으로 저장.
+    """
+    placeholder_text = (
+        f"[url-only fallback — 본문 추출 실패]\n"
+        f"URL: {url}\n"
+        f"Error: {error}\n"
+        f"이 자료의 본문을 가져오지 못했습니다. 수동으로 archive.org 또는 다른 mirror "
+        f"URL 을 시도하거나, 이 노드를 graph 에서 삭제 후 재공유하세요."
+    )
+    content_hash = sha256_text(placeholder_text)
+
+    # URL hostname 을 title 로 (예: medium.com — 어떤 사이트인지 즉시 인지)
+    try:
+        from urllib.parse import urlparse as _up
+        title = _up(url).hostname or url
+    except Exception:  # noqa: BLE001
+        title = url
+
+    # URL 의 external_ids — github URL 이면 owner/repo 추출 (본문 없어도 topic 자동 link)
+    ext_ids = extract_external_ids(url=url, text=None)
+
+    engine = get_engine()
+    session_factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    async with session_factory() as session:
+        existing = await find_item_by_hash(
+            session, source_type="url", content_hash=content_hash,
+        )
+        if existing is not None and not force:
+            return {
+                "item_id": str(existing),
+                "created": False,
+                "url_only": True,
+                "error": error,
+            }
+
+        if existing is not None:
+            # force 면 dedup 무시하고 새 item 안 만듦 — 이미 url-only 라 재계산 의미 X
+            return {
+                "item_id": str(existing),
+                "created": False,
+                "url_only": True,
+                "error": error,
+            }
+
+        item_id = await insert_item(
+            session,
+            source_type="url",
+            raw_content=placeholder_text,
+            raw_content_hash=content_hash,
+            source_id=url,
+            source_url=url,
+            source_metadata={
+                "fetch_error": error,
+                "url_only": True,
+                "external_ids": [{"kind": x.kind, "value": x.value} for x in ext_ids],
+            },
+            title=title,
+            source_created_at=None,
+        )
+        await auto_link_topics(
+            session, item_id=item_id, source_type="url",
+            title=title, ids=ext_ids,
+        )
+        # url-only 면 의미상 'url-only' / 'fetch-failed' tag 도 — graph 에서 시각적 구분
+        from sqlalchemy import text as _sql_text
+        await session.execute(
+            _sql_text("UPDATE items SET tags = :tags WHERE id = :id"),
+            {"id": item_id, "tags": ["url-only", "fetch-failed"]},
+        )
+        await session.commit()
+
+        return {
+            "item_id": str(item_id),
+            "created": True,
+            "url_only": True,
+            "error": error,
+            "title": title,
         }
 
 
