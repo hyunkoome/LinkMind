@@ -158,9 +158,10 @@ export default function GraphView({
         }}
         nodeOpacity={0.95}
         nodeResolution={16}
-        linkColor={() => "#71717a"}
-        linkOpacity={0.35}
-        linkWidth={0.5}
+        linkColor={() => "#cbd5e1"}
+        linkOpacity={0.7}
+        linkWidth={1.2}
+        linkResolution={6}
         linkDirectionalParticles={0}
         linkLabel={(l) => (l as FGLink).role || ""}
         onNodeClick={handleNodeClick}
