@@ -1,37 +1,43 @@
 # LinkMind
 
 > **개인 데이터로 sVLL(small VLM/LLM) 을 학습시켜 온프레미스 AI 엔진을 만드는 것이 최종 목표**.
-> LinkMind 는 그 학습 데이터를 raw-first 원칙으로 수집·구조화하는 backend knowledge OS.
+> LinkMind 는 그 학습 데이터를 raw-first 원칙으로 수집·구조화하는 **self-contained personal AI engine**.
+> (이전 "LinkMind + OpenClaw 두 시스템 분리" 모델 → Phase 2.5 (2026-05-18) 부터 단일 self-contained 시스템으로 통합. external/ 는 벤치마킹 참조용.)
 
 ```
-[Sources]  Slack export · Telegram · URL · PDF · GitHub · Arxiv · YouTube · Image
-              │
-              ▼
-         [LinkMind backend]                  [OpenClaw (외부 agent)]
+[Sources]                                  [ai_agents/ (LinkMind 내부)]
+URL · PDF · DOCX · PPTX · TXT · MD ·       Telegram inbox watcher
+GitHub · Arxiv · YouTube · Image           (Phase 3+: Slack/WhatsApp/Discord)
               │                                    │
-   ┌──────────┼──────────┐                         ▼
-   ▼          ▼          ▼               사용자 ↔ Telegram/Slack/...
-Postgres   Qdrant    Storage             OpenClaw extension 이
-(raw +     (vectors) (files,             LinkMind HTTP API 호출
- metadata)            assets)
-              │
-              ▼
-         FastAPI + Streamlit
-              │
-              ▼
-     /ingest  /search  /ask
-              │
-              ▼
-       (Phase 2+) dataset export
-              │
-              ▼
-   sVLL 파인튜닝 (LoRA / QLoRA)
-              │
-              ▼
-     vLLM / Ollama 로 온프레미스 서빙
-              │
-              ▼
-       LinkMind LLMProvider 로 dogfooding
+              └────────────┬───────────────────────┘
+                           ▼
+                  [LinkMind backend]
+                           │
+              ┌────────────┼──────────────┐
+              ▼            ▼              ▼
+         Postgres       Qdrant        Storage
+       (raw + 메모 +   (vectors)    (loss-less
+        is_read +                    원본 파일)
+        attachments)
+                           │
+                           ▼
+                  FastAPI + Streamlit (MVP)
+                  + Next.js graph UI (Phase 2.5+)
+                           │
+                           ▼
+        /ingest  /search  /ask  /graph  /items  /topics
+                           │
+                           ▼
+           (Phase 2+) dataset export
+                           │
+                           ▼
+        sVLL 파인튜닝 (LoRA / QLoRA) — 사용자 본인 데이터로 본인 모델만
+                           │
+                           ▼
+         vLLM / Ollama 로 온프레미스 서빙
+                           │
+                           ▼
+            LinkMind LLMProvider 로 dogfooding
 ```
 
 ---
@@ -232,11 +238,13 @@ LinkMind/
 
 자세한 내용: [docs/training_data_design.md](docs/training_data_design.md)
 
-### LinkMind ↔ OpenClaw 분리
+### 단일 self-contained 시스템 (Phase 2.5+, 2026-05-18)
 
-OpenClaw 는 **frontend agent** (사용자가 직접 대화하는 layer). LinkMind 는 **backend knowledge OS** (지식 저장·검색·답변 layer). 둘은 HTTP API 로만 통신. OpenClaw 가 breaking change 나도 LinkMind 는 영향 없음.
+LinkMind 는 backend (`backend/`) + multi-channel gateway (`ai_agents/`) + Streamlit MVP (`frontend/`) + Next.js graph UI (`frontend_v2/`, Phase 2.5+) 를 한 저장소에서 같이 유지. self-host 한 방으로 다 따라온다.
 
-자세한 내용: [docs/openclaw_integration.md](docs/openclaw_integration.md)
+외부 프로젝트 (openclaw, hermes-agent, hermes-webui) 는 `external/{name}/` 의 gitignored clone — **벤치마킹 참조 전용**. 셋 다 MIT 라이센스라 부분 코드 vendor 도 가능 (attribution 보존). 다만 통째 fork 대신 idea/UX 패턴 차용 후 자체 구현이 일반적.
+
+자세한 내용: [docs/agent_architecture.md](docs/agent_architecture.md)
 
 ### 빠른 MVP 우선
 
@@ -251,19 +259,24 @@ OpenClaw 는 **frontend agent** (사용자가 직접 대화하는 layer). LinkMi
 | 2 second wave  | `ingest --force`, PDF figure 추출, abstract regex 보강, YouTube 썸네일 attachments | ✅ 완료 |
 | **2.5 (Topic 그룹핑)** | `topics`+`item_topics` 스키마, external_ids extractor, 자동 매핑, Topics UI, description 자동 생성 | ✅ 완료 |
 | **2.5 wave-2** | arxiv API seed (title/abstract 자동), 검색 결과의 multi-modal 인라인 노출, manual link autocomplete | ✅ 완료 |
-| **C wave-1 (Telegram inbox)** | Telethon daemon, 채널 메시지 → 자동 ingest + URL 라우팅 + topic 매핑, 처리 후 채널에서 자동 삭제 (inbox 패턴), GitHub README HTML cleanup, PDF title placeholder 거름 | ✅ 완료 (실 환경 검증) |
+| **C wave-1 (Telegram inbox)** | Telethon daemon, 채널 메시지 → 자동 ingest + URL 라우팅 + topic 매핑, 처리 후 채널에서 자동 삭제 (inbox 패턴) | ✅ 완료 (실 환경 검증) |
 | **리팩토링** | `scripts/` 는 .sh 만 / `backend/jobs/` batch python / `ai_agents/` client agent — 5 카테고리 135 tests | ✅ 완료 |
-| C wave-2 (Slack workspace ingest) | ⚠️ 옛 archive 폴더 사용자가 삭제. Slack API 직접 (slack_sdk) 또는 slackdump 재 export → 워크스페이스 전체 채널 ingest + thread/첨부, URL 자동 라우팅 | 진행 예정 |
+| **2.5 wave-3 (단일 self-contained, 2026-05-18)** | (1) §3 재정의 + §14 신규 (AGPL+Privacy+SaaS path) + docs/agent_architecture.md (2) `ai_agents/base.py` ChannelAgent ABC + telegram refactor (3) items 스키마 user_notes/is_read/read_at + GET/PATCH /items/{id} + LLM 키워드 추출 BackgroundTask (4) `backend/ingest/document/` 통합 추출 (PDF + DOCX/PPTX/TXT/MD, 한국어 cp949) | 🚧 진행 중 (172 tests, Day 5 텔레그램 첨부 ingest 작업 중) |
+| **2.5 wave-3 남은 작업** | 텔레그램 첨부 download + caption→user_notes 자동 + is_ingest_successful 확장 → graph backend `/graph/*` (cytoscape JSON) → **Next.js 14 graph UI + modality viewer** | 🚧 진행 중 |
+| C wave-2 (Slack workspace ingest) | Slack export 재수집 → 워크스페이스 전체 채널 ingest + thread/첨부 (사용자가 Slack 구독 해제 예정 → 일회성 backfill) | 보류 |
 | 2 후반 (AI 카테고리/feedback/dataset exporter) | AI 카테고리 강화, feedback 테이블, dataset exporter (JSONL) | |
-| 3 | 이미지/OCR/멀티모달 RAG, TEI 임베딩 전환, MinIO object storage | |
-| 4 | **sVLL LoRA 파인튜닝** (LLaMA-Factory + Qwen2-VL), vLLM 서빙 | |
+| 3 | 이미지/OCR/멀티모달 RAG, TEI 임베딩 전환, MinIO object storage, `ai_agents/` 채널 확장 (Slack/WhatsApp/Discord), 자가학습 (auto prompt/ingester 개선) | |
+| 4 | **sVLL LoRA 파인튜닝** (LLaMA-Factory + Qwen2-VL), vLLM 서빙 — self-host 또는 hosted enterprise tier 옵션 | |
 | 5 | Continuous training loop, on-prem AI 엔진 완성 | |
+| 6 (선택) | OSS (AGPL v3) 공개 → hosted SaaS (Next.js + Auth.js + Stripe, BYOK, multi-tenant) | |
 
 자세한 backlog 와 phase 별 완료/미구현 항목 — `docs/features_backlog.md` 참고.
 
 ## 라이센스
 
-(미정 — 사용자 결정 대기)
+**AGPL v3** (OSS 공개 시점에 LICENSE 추가 — Phase 6-B, 6+개월 후 예정). self-host 무제한 자유, 변형해서 SaaS 로 재판매 시 변경 사항 공개 의무. Plausible/Cal.com/n8n 채택 모델. 자세히는 [CLAUDE.md §14](CLAUDE.md).
+
+`external/{openclaw,hermes-agent,hermes-webui}/` 의 참조 코드는 셋 다 **MIT** — AGPL v3 와 호환. 부분 코드 vendor 시 LICENSE/copyright notice 보존 필수.
 
 ## 기여 / 코드 스타일
 
