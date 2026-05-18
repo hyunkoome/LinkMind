@@ -129,21 +129,37 @@ bash scripts/step4_check_qdrant.sh       # 컬렉션 존재 + vector dim 일치 
 ### 6. 백엔드 + Streamlit 동시 기동 (step5)
 
 ```bash
-# 한 셸 — backend (FastAPI :8000) + frontend (Streamlit :8501) 동시 백그라운드
+# 한 셸 — backend (FastAPI :8000) + Streamlit (:8501) + telegram daemon 동시 백그라운드
 bash scripts/step5_run_dev.sh             # log: /tmp/linkmind-*.log
 bash scripts/step5_run_dev.sh --status    # pid + 포트 + 최근 로그
-bash scripts/step5_run_dev.sh --stop      # 둘 다 종료
+bash scripts/step5_run_dev.sh --stop      # 셋 다 종료
 bash scripts/step5_run_dev.sh --foreground  # 포어그라운드 (Ctrl+C 종료)
+bash scripts/step5_run_dev.sh --no-telegram # backend + frontend 만
 
 # 또는 셸 둘
 uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
 streamlit run frontend/app.py             # http://localhost:8501
 ```
 
+### 6-1. Next.js graph UI (Phase 2.5+, frontend_v2/)
+
+cytoscape.js 기반 그래프 시각화 + modality viewer + user_notes 편집. Streamlit 과 병행.
+
+```bash
+cd frontend_v2
+npm install         # 첫 1회 (Node 22+ 필요)
+npm run dev         # http://localhost:3001
+# build: npm run build && npm run start
+```
+
+backend 가 :8000 에서 떠 있어야 함 (`bash scripts/step5_run_dev.sh`). API base URL 변경 시
+`NEXT_PUBLIC_API_BASE` env 로 override (`.env.local` 에).
+
 확인:
 
 ```bash
 curl http://localhost:8000/health | jq
+curl http://localhost:8000/graph/topics | jq '.nodes | length'
 ```
 
 ### 7. 첫 자료 수집 (URL 한 건)
@@ -261,8 +277,8 @@ LinkMind 는 backend (`backend/`) + multi-channel gateway (`ai_agents/`) + Strea
 | **2.5 wave-2** | arxiv API seed (title/abstract 자동), 검색 결과의 multi-modal 인라인 노출, manual link autocomplete | ✅ 완료 |
 | **C wave-1 (Telegram inbox)** | Telethon daemon, 채널 메시지 → 자동 ingest + URL 라우팅 + topic 매핑, 처리 후 채널에서 자동 삭제 (inbox 패턴) | ✅ 완료 (실 환경 검증) |
 | **리팩토링** | `scripts/` 는 .sh 만 / `backend/jobs/` batch python / `ai_agents/` client agent — 5 카테고리 135 tests | ✅ 완료 |
-| **2.5 wave-3 (단일 self-contained, 2026-05-18)** | (1) §3 재정의 + §14 신규 (AGPL+Privacy+SaaS path) + docs/agent_architecture.md (2) `ai_agents/base.py` ChannelAgent ABC + telegram refactor (3) items 스키마 user_notes/is_read/read_at + GET/PATCH /items/{id} + LLM 키워드 추출 BackgroundTask (4) `backend/ingest/document/` 통합 추출 (PDF + DOCX/PPTX/TXT/MD, 한국어 cp949) (5) 텔레그램 첨부 자동 ingest (Telethon download_media → ingest_document, caption → user_notes 자동, is_ingest_successful 이 첨부까지 확인해야 메시지 삭제) (6) VOLUMES_ROOT env (compose 모든 bind mount root 설정 가능) (7) **graph backend `/graph/{topics,search,item/{id}}` — cytoscape.js 호환 JSON** | 🚧 진행 중 (194 tests, Day 9 완료) |
-| **2.5 wave-3 남은 작업** | **Next.js 14 graph UI** (frontend_v2/, Tailwind + shadcn/ui + cytoscape) + modality viewer (user_notes 편집, is_read 토글, PDF figures, YouTube transcript, GitHub README) → end-to-end 검증 | 🚧 진행 중 |
+| **2.5 wave-3 (단일 self-contained, 2026-05-18)** | (1) §3 재정의 + §14 신규 (AGPL+Privacy+SaaS path) + docs/agent_architecture.md (2) `ai_agents/base.py` ChannelAgent ABC + telegram refactor (3) items 스키마 user_notes/is_read/read_at + GET/PATCH /items/{id} + LLM 키워드 추출 BackgroundTask (4) `backend/ingest/document/` 통합 추출 (PDF + DOCX/PPTX/TXT/MD, 한국어 cp949) (5) 텔레그램 첨부 자동 ingest + caption → user_notes 자동 (6) VOLUMES_ROOT env (compose bind mount root 설정 가능) (7) graph backend `/graph/*` — cytoscape.js 호환 JSON | 🚧 진행 중 (194 tests, backend 완성) |
+| **2.5 wave-3 남은 작업** | end-to-end 검증 — 실 환경에서 텔레그램 PDF/DOCX 첨부 + caption→user_notes + graph UI 노드 클릭 → modality viewer → user_notes 편집 → LLM 키워드 자동 → tags 갱신 풀체인 | 🚧 사용자 검증 대기 |
 | C wave-2 (Slack workspace ingest) | Slack export 재수집 → 워크스페이스 전체 채널 ingest + thread/첨부 (사용자가 Slack 구독 해제 예정 → 일회성 backfill) | 보류 |
 | 2 후반 (AI 카테고리/feedback/dataset exporter) | AI 카테고리 강화, feedback 테이블, dataset exporter (JSONL) | |
 | 3 | 이미지/OCR/멀티모달 RAG, TEI 임베딩 전환, MinIO object storage, `ai_agents/` 채널 확장 (Slack/WhatsApp/Discord), 자가학습 (auto prompt/ingester 개선) | |
