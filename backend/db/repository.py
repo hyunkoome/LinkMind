@@ -168,6 +168,93 @@ async def get_items_by_ids(session: AsyncSession, ids: list[UUID]) -> dict[UUID,
     return {r["id"]: dict(r) for r in rows}
 
 
+async def get_item_full(session: AsyncSession, item_id: UUID) -> dict[str, Any] | None:
+    """GET /items/{id} — 모든 컬럼 + attachments 목록.
+
+    raw_content 가 포함되어 크기 클 수 있음 (수십~수백 KB) — modality viewer
+    전용. 일반 검색 결과엔 get_items_by_ids 의 slim subset 만 반환.
+    """
+    res = await session.execute(
+        text("""
+            SELECT
+                id, source_type, source_id, source_url, source_metadata,
+                title, summary, raw_content,
+                categories, tags, language,
+                source_created_at, ingested_at, updated_at,
+                user_notes, user_notes_updated_at, is_read, read_at
+            FROM items
+            WHERE id = :id
+        """),
+        {"id": item_id},
+    )
+    row = res.mappings().one_or_none()
+    if row is None:
+        return None
+    item = dict(row)
+
+    # attachments 같이 묶음 — modality viewer 가 한 번에 받게.
+    att_res = await session.execute(
+        text("""
+            SELECT id, role, mime_type, file_size, file_hash, caption, width, height
+            FROM attachments
+            WHERE item_id = :id
+            ORDER BY created_at ASC
+        """),
+        {"id": item_id},
+    )
+    item["attachments"] = [dict(r) for r in att_res.mappings().all()]
+    return item
+
+
+async def update_item_user_notes(
+    session: AsyncSession, *, item_id: UUID, user_notes: str | None,
+) -> bool:
+    """user_notes + user_notes_updated_at 갱신.
+
+    `user_notes=""` (빈 문자열) 면 NULL 로 정규화 (DB 일관성). user_notes_updated_at
+    은 변경 있을 때만 now() 로 자동.
+
+    Returns: True 면 row 변경됨, False 면 id 가 없거나 변경 없음.
+    """
+    normalized = user_notes if user_notes else None
+    res = await session.execute(
+        text("""
+            UPDATE items
+            SET user_notes = :notes,
+                user_notes_updated_at = now()
+            WHERE id = :id
+              AND COALESCE(user_notes, '') IS DISTINCT FROM COALESCE(:notes, '')
+        """),
+        {"id": item_id, "notes": normalized},
+    )
+    return (res.rowcount or 0) > 0
+
+
+async def update_item_read(
+    session: AsyncSession, *, item_id: UUID, is_read: bool,
+) -> bool:
+    """is_read 토글. is_read=True 로 처음 만들 때 read_at 을 now() 로 채움.
+
+    is_read=False 로 다시 돌려도 read_at 은 보존 — "처음 읽은 시각" history.
+
+    Returns: True 면 row 변경됨, False 면 id 가 없거나 이미 같은 값.
+    """
+    res = await session.execute(
+        text("""
+            UPDATE items
+            SET is_read = :is_read,
+                read_at = CASE
+                    WHEN :is_read = TRUE AND read_at IS NULL THEN now()
+                    ELSE read_at
+                END
+            WHERE id = :id
+              AND is_read IS DISTINCT FROM :is_read
+        """),
+        {"id": item_id, "is_read": is_read},
+    )
+    return (res.rowcount or 0) > 0
+
+
 # ──────────────────────────────────────────────────────────────
 # attachments
 # ──────────────────────────────────────────────────────────────

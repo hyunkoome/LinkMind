@@ -16,7 +16,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend import runtime_settings
-from backend.api import ask, files, health, ingest, search, settings as settings_api, topics
+from backend.api import ask, files, health, ingest, items, search, settings as settings_api, topics
 from backend.config import get_settings
 from backend.db.connection import close_engine, get_engine
 
@@ -73,6 +73,7 @@ app.include_router(ask.router, prefix="/ask", tags=["ask"])
 app.include_router(settings_api.router, prefix="/settings", tags=["settings"])
 app.include_router(files.router, prefix="/files", tags=["files"])
 app.include_router(topics.router, prefix="/topics", tags=["topics"])
+app.include_router(items.router, prefix="/items", tags=["items"])
 
 
 @app.get("/")

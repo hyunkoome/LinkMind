@@ -102,3 +102,67 @@ class AskResponse(BaseModel):
     citations: list[AskCitation] = Field(default_factory=list)
     llm_provider: str
     llm_model: str
+
+
+# ──────────────────────────────────────────────────────────────
+# Items (GET/PATCH /items/{id}) — Phase 2.5, user_notes / is_read 도입
+# ──────────────────────────────────────────────────────────────
+
+
+class ItemAttachmentSummary(BaseModel):
+    """item 의 첨부 요약 — modality viewer 용 (raw 본문은 /files/{hash} 로 따로)."""
+    id: UUID
+    role: str | None = None             # 'figure' | 'thumbnail' | 'pdf_source' | 'attachment' …
+    mime_type: str | None = None
+    file_size: int | None = None
+    file_hash: str
+    caption: str | None = None
+    width: int | None = None
+    height: int | None = None
+
+
+class ItemDetail(BaseModel):
+    """item 의 전체 정보 — graph UI modality viewer / 상세 페이지용.
+
+    raw_content 가 큼 (논문 PDF 추출 수십~수백 KB) — 일반 검색 결과엔 미포함,
+    여기 GET /items/{id} 에서만 반환.
+    """
+    id: UUID
+    source_type: SourceType
+    source_id: str | None = None
+    source_url: str | None = None
+    source_metadata: dict[str, Any] = Field(default_factory=dict)
+
+    title: str | None = None
+    summary: str | None = None
+    raw_content: str
+
+    categories: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    language: str | None = None
+
+    source_created_at: datetime | None = None
+    ingested_at: datetime
+    updated_at: datetime
+
+    # Phase 2.5 신규 — 사용자 메모 + 읽음 inbox
+    user_notes: str | None = None
+    user_notes_updated_at: datetime | None = None
+    is_read: bool = False
+    read_at: datetime | None = None
+
+    attachments: list[ItemAttachmentSummary] = Field(default_factory=list)
+
+
+class ItemUpdateRequest(BaseModel):
+    """PATCH /items/{id} — 사용자가 편집 가능한 필드만 (partial update).
+
+    필드 동작:
+    - None 또는 미포함  → 변경 없음
+    - user_notes=""     → 메모 비움 (NULL 로 설정)
+    - user_notes="..."  → 그 내용으로 저장 (+ user_notes_updated_at 자동 갱신)
+    - is_read=True      → 읽음 처리 (+ read_at 이 NULL 이면 첫 read 시각으로 채움)
+    - is_read=False     → 안 읽음 (read_at 은 그대로 보존 — "처음 읽은 시각" history)
+    """
+    user_notes: str | None = None
+    is_read: bool | None = None

@@ -54,6 +54,15 @@ CREATE TABLE IF NOT EXISTS items (
     ingested_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
 
+    -- ── 사용자 메모 / inbox 읽음 상태 (Phase 2.5, 2026-05-18) ──
+    -- user_notes: 사용자가 직접 작성한 메모/아이디어 (논문 읽고 정리한 생각 등).
+    --             §1 학습 데이터 비전상 가장 가치 있는 데이터 — 사용자 본인 생각.
+    -- is_read   : inbox UX. graph UI 에서 unread 노드 강조 표시.
+    user_notes              TEXT,
+    user_notes_updated_at   TIMESTAMPTZ,
+    is_read                 BOOLEAN NOT NULL DEFAULT FALSE,
+    read_at                 TIMESTAMPTZ,
+
     -- ── Full-text search (검색 fallback / hybrid retrieval용) ──
     fts_vector tsvector GENERATED ALWAYS AS (
         setweight(to_tsvector('simple', coalesce(title,       '')), 'A') ||
@@ -255,3 +264,26 @@ DROP TRIGGER IF EXISTS topics_set_updated_at ON topics;
 CREATE TRIGGER topics_set_updated_at
     BEFORE UPDATE ON topics
     FOR EACH ROW EXECUTE FUNCTION trg_set_updated_at();
+
+
+-- ============================================================================
+-- Migration: 기존 DB 업그레이드 — ADD COLUMN IF NOT EXISTS (Postgres 9.6+).
+-- ----------------------------------------------------------------------------
+-- schema.sql 은 docker-entrypoint-initdb.d 가 첫 부팅 시 자동 실행만 한다.
+-- 떠 있는 DB 에 새 컬럼을 적용하려면 `python -m backend.jobs.migrate_schema` 로
+-- 이 파일 전체를 다시 실행 — 모든 DDL 이 IF NOT EXISTS / CREATE OR REPLACE 라
+-- 여러 번 안전.
+--
+-- 신규 컬럼은 CREATE TABLE 안에도 이미 추가됨 — 신규 부팅용. 아래 ALTER 는
+-- 기존 DB 업그레이드용 (두 곳 모두 idempotent).
+-- ============================================================================
+
+-- 2026-05-18 — Phase 2.5: user_notes / is_read / read_at
+ALTER TABLE items ADD COLUMN IF NOT EXISTS user_notes              TEXT;
+ALTER TABLE items ADD COLUMN IF NOT EXISTS user_notes_updated_at   TIMESTAMPTZ;
+ALTER TABLE items ADD COLUMN IF NOT EXISTS is_read                 BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE items ADD COLUMN IF NOT EXISTS read_at                 TIMESTAMPTZ;
+
+-- unread 빠른 조회 (graph UI 의 inbox 강조). partial index 라 작음.
+CREATE INDEX IF NOT EXISTS idx_items_unread ON items (ingested_at DESC)
+    WHERE is_read = FALSE;
