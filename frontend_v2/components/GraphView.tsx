@@ -3,6 +3,7 @@
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 
+import { sourceTypeColor, topicKindColor } from "@/lib/colors";
 import type { GraphResponse } from "@/types/graph";
 
 // react-force-graph-3d 는 three.js + window 의존 → SSR 비활성화
@@ -18,22 +19,6 @@ interface GraphViewProps {
   selectedId?: string | null;
 }
 
-// source_type 별 색상 (옵시디언의 폴더 색상과 같은 역할)
-function sourceTypeColor(source: string | undefined): string {
-  switch (source) {
-    case "pdf": return "#ef4444";          // red
-    case "url": return "#3b82f6";          // blue
-    case "github": return "#8b5cf6";       // purple
-    case "youtube":
-    case "youtube_playlist": return "#dc2626"; // dark red
-    case "arxiv": return "#10b981";        // green
-    case "document": return "#f59e0b";     // amber
-    case "telegram": return "#06b6d4";     // cyan
-    case "slack": return "#a855f7";        // violet
-    default: return "#71717a";             // zinc
-  }
-}
-
 // react-force-graph 의 노드/링크 포맷 (cytoscape data wrap 없이 평면)
 type FGNode = {
   id: string;
@@ -42,6 +27,7 @@ type FGNode = {
   // topic 전용
   slug?: string;
   item_count?: number;
+  primary_external_id?: Record<string, string>;
   // item 전용
   source_type?: string;
   source_url?: string | null;
@@ -78,6 +64,7 @@ export default function GraphView({
       type: n.data.type,
       slug: n.data.slug,
       item_count: n.data.item_count,
+      primary_external_id: n.data.primary_external_id,
       source_type: n.data.source_type,
       source_url: n.data.source_url,
       summary: n.data.summary,
@@ -135,16 +122,22 @@ export default function GraphView({
         ref={fgRef}
         graphData={fgData}
         // topic 큰 sphere (item_count 비례) / item 작은 sphere (source_type 색상)
+        // selected 노드는 size 1.5x 로 시각 강조
         nodeVal={(n) => {
           const node = n as FGNode;
-          if (node.type === "topic") {
-            return Math.max(4, Math.min(30, (node.item_count || 1) * 2));
-          }
-          return 2;
+          const isSelected = selectedId === node.id;
+          const base = node.type === "topic"
+            ? Math.max(4, Math.min(30, (node.item_count || 1) * 2))
+            : 2;
+          return isSelected ? base * 1.5 : base;
         }}
         nodeColor={(n) => {
           const node = n as FGNode;
-          if (node.type === "topic") return "#f97316"; // orange
+          const isSelected = selectedId === node.id;
+          // selected 면 흰색으로 강조 (마우스/카메라가 어디 있는지 즉시 시각화)
+          if (isSelected) return "#ffffff";
+          // topic 은 primary_external_id.kind 별 색상 (arxiv=green, github=purple 등)
+          if (node.type === "topic") return topicKindColor(node.primary_external_id);
           return sourceTypeColor(node.source_type);
         }}
         nodeLabel={(n) => {

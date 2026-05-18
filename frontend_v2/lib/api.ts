@@ -83,7 +83,11 @@ export async function listModels(): Promise<ModelsListResponse> {
 }
 
 export async function listPromptVersions(name: string): Promise<PromptVersion[]> {
-  return fetchJSON<PromptVersion[]>(`/settings/prompts/${name}/versions`);
+  // backend 응답: {name: string, versions: PromptVersion[]} — versions 만 풀어서 반환
+  const res = await fetchJSON<{ name: string; versions: PromptVersion[] }>(
+    `/settings/prompts/${name}/versions`,
+  );
+  return res.versions || [];
 }
 
 export async function savePromptVersion(

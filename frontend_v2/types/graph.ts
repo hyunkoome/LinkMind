@@ -103,16 +103,20 @@ export interface LLMSettingsUpdate {
   anthropic_model?: string | null;
 }
 
-export interface ModelOption {
-  name: string;
-  modified_at?: string;
-  size?: number;
+// backend GET /settings/llm/models 응답 — 각 provider 별 사용 가능 여부 + default + 모델 목록
+export interface ProviderModels {
+  available: boolean;
+  default: string;
+  models: string[];          // ollama 의 경우 실제 설치된 모델명 list, 다른 provider 는 default 1개
+  error?: string;            // ollama API 호출 실패 시
 }
 
 export interface ModelsListResponse {
-  ollama: { models: ModelOption[]; error?: string };
-  openai: { model: string };
-  claude: { model: string };
+  providers: {
+    ollama: ProviderModels;
+    openai: ProviderModels;
+    claude: ProviderModels;
+  };
 }
 
 export interface PromptVersion {

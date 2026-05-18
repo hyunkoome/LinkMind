@@ -1,5 +1,6 @@
 "use client";
 
+import { topicKindColor } from "@/lib/colors";
 import type { GraphResponse, GraphNodeData } from "@/types/graph";
 
 interface TopicsTreeProps {
@@ -70,21 +71,31 @@ export default function TopicsTree({
         <ul className="space-y-0.5">
           {topics.map((t) => {
             const isSelected = selectedTopicId === t.id;
+            // graph 노드와 같은 색 — primary_external_id.kind 별 (arxiv/github/yt 등)
+            const dotColor = topicKindColor(t.primary_external_id);
             return (
               <li key={t.id}>
                 <button
                   type="button"
                   onClick={() => onTopicClick(t.id)}
-                  className={`w-full text-left px-2 py-1.5 rounded text-xs transition ${
+                  className={`w-full text-left px-2 py-1.5 rounded text-xs transition flex items-start gap-2 ${
                     isSelected
-                      ? "bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300 font-medium"
+                      ? "bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300 font-medium ring-2 ring-orange-400"
                       : "hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300"
                   }`}
                   title={t.slug || ""}
                 >
-                  <span className="block truncate">{t.label}</span>
-                  <span className="block text-[10px] text-zinc-500">
-                    {t.item_count ?? 0} items · {t.slug}
+                  {/* graph 노드 색상과 동일 — 시각적 매칭 */}
+                  <span
+                    className="mt-0.5 inline-block w-2.5 h-2.5 rounded-full shrink-0"
+                    style={{ backgroundColor: dotColor }}
+                    aria-label="topic 색상"
+                  />
+                  <span className="flex-1 min-w-0">
+                    <span className="block truncate">{t.label}</span>
+                    <span className="block text-[10px] text-zinc-500">
+                      {t.item_count ?? 0} items · {t.slug}
+                    </span>
                   </span>
                 </button>
               </li>

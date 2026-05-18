@@ -116,7 +116,8 @@ function LLMSection({
     }
   };
 
-  const ollamaList = models?.ollama?.models || [];
+  const ollamaList = models?.providers?.ollama?.models || [];
+  const ollamaError = models?.providers?.ollama?.error;
 
   return (
     <section className="mb-8 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded p-4">
@@ -137,8 +138,8 @@ function LLMSection({
         <label className="block">
           <span className="text-xs text-zinc-500">
             Ollama model{" "}
-            {models?.ollama?.error && (
-              <span className="text-red-400">({models.ollama.error})</span>
+            {ollamaError && (
+              <span className="text-red-400">({ollamaError})</span>
             )}
           </span>
           {ollamaList.length > 0 ? (
@@ -148,9 +149,9 @@ function LLMSection({
               className="mt-1 w-full px-2 py-1.5 bg-zinc-50 dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded"
             >
               <option value="">(env 기본값)</option>
-              {ollamaList.map((m) => (
-                <option key={m.name} value={m.name}>
-                  {m.name}
+              {ollamaList.map((name) => (
+                <option key={name} value={name}>
+                  {name}
                 </option>
               ))}
             </select>
