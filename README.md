@@ -143,7 +143,7 @@ streamlit run frontend/app.py             # http://localhost:8501
 
 ### 6-1. Next.js graph UI (Phase 2.5+, frontend_v2/)
 
-cytoscape.js 기반 그래프 시각화 + modality viewer + user_notes 편집. Streamlit 과 병행.
+**옵시디언의 3D Graph view 같은 WebGL 3D 그래프** (react-force-graph-3d + three.js, 옵시디언 3D Graph community plugin 과 동일 라이브러리) + modality viewer + user_notes 편집. Streamlit 과 병행.
 
 ```bash
 cd frontend_v2
