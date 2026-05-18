@@ -167,3 +167,34 @@ class ItemUpdateRequest(BaseModel):
     """
     user_notes: str | None = None
     is_read: bool | None = None
+
+
+# ──────────────────────────────────────────────────────────────
+# Graph (GET /graph/*) — Phase 2.5 wave-3, cytoscape.js 호환 JSON
+# ──────────────────────────────────────────────────────────────
+
+
+class GraphNode(BaseModel):
+    """cytoscape 노드. type='topic'|'item' 으로 UI 측 스타일 분기.
+
+    data 의 추가 필드 (item 의 source_type/is_read/tags/has_notes, topic 의 slug/
+    item_count) 는 frontend 의 노드 정보 패널 + 색상/모양 결정에 사용.
+    """
+    data: dict[str, Any]   # cytoscape 표준 — {"id", "label", "type", ...}
+
+
+class GraphEdge(BaseModel):
+    """cytoscape 엣지. data.role = 'paper'|'code'|'video'|'playlist'|'blog'|'note'.
+
+    item-topic 엣지는 source=item, target=topic. (방향성 큰 의미 X, 시각화용)
+    """
+    data: dict[str, Any]   # {"id", "source", "target", "role", ...}
+
+
+class GraphResponse(BaseModel):
+    """cytoscape elements 표준 — `{nodes: [...], edges: [...]}`.
+
+    빈 응답도 valid (검색 결과 0 건). frontend 가 그래프 비우면 됨.
+    """
+    nodes: list[GraphNode] = Field(default_factory=list)
+    edges: list[GraphEdge] = Field(default_factory=list)

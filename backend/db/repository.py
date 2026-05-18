@@ -510,6 +510,114 @@ async def list_topics(
 
 
 # ──────────────────────────────────────────────────────────────
+# Graph helpers (Phase 2.5 wave-3) — cytoscape JSON 빌드용
+# ──────────────────────────────────────────────────────────────
+
+
+async def list_items_summary(
+    session: AsyncSession,
+    *,
+    item_ids: list[UUID] | None = None,
+    limit: int = 500,
+) -> list[dict[str, Any]]:
+    """graph 노드용 item 요약 — raw_content 없이 가벼운 필드만.
+
+    item_ids 명시하면 그 id 들만, 없으면 최근 limit 개 (ingested_at DESC).
+    graph UI 노드 표시 + 색상/모양 결정에 필요한 정보:
+    - source_type (pdf/url/youtube/github/document/telegram/...)
+    - is_read / user_notes 존재 여부 (UI 의 unread 표시 + 메모 indicator)
+    - tags (graph 의 tag 기반 그룹화)
+    """
+    if item_ids is not None:
+        if not item_ids:
+            return []
+        res = await session.execute(
+            text("""
+                SELECT id, source_type, source_url, title, summary, tags,
+                       is_read, (user_notes IS NOT NULL AND user_notes != '') AS has_notes,
+                       ingested_at
+                FROM items
+                WHERE id = ANY(:ids)
+                ORDER BY ingested_at DESC
+            """),
+            {"ids": list(item_ids)},
+        )
+    else:
+        res = await session.execute(
+            text("""
+                SELECT id, source_type, source_url, title, summary, tags,
+                       is_read, (user_notes IS NOT NULL AND user_notes != '') AS has_notes,
+                       ingested_at
+                FROM items
+                ORDER BY ingested_at DESC
+                LIMIT :lim
+            """),
+            {"lim": limit},
+        )
+    return [dict(r) for r in res.mappings().all()]
+
+
+async def list_item_topic_links(
+    session: AsyncSession,
+    *,
+    item_ids: list[UUID] | None = None,
+    topic_ids: list[UUID] | None = None,
+) -> list[dict[str, Any]]:
+    """item ↔ topic 연결 일괄 조회 — graph 엣지 빌드용.
+
+    필터:
+    - item_ids 만 명시 → 그 item 들의 모든 topic link
+    - topic_ids 만 명시 → 그 topic 들의 모든 item link
+    - 둘 다 명시 → 교집합
+    - 둘 다 None → 전체 (대량 데이터 시 위험 — 위치별로 호출 시 명시)
+
+    반환 필드: item_id, topic_id, role, confidence, source
+    """
+    conds: list[str] = []
+    params: dict[str, Any] = {}
+    if item_ids:
+        conds.append("item_id = ANY(:iids)")
+        params["iids"] = list(item_ids)
+    if topic_ids:
+        conds.append("topic_id = ANY(:tids)")
+        params["tids"] = list(topic_ids)
+    where = ("WHERE " + " AND ".join(conds)) if conds else ""
+    res = await session.execute(
+        text(f"""
+            SELECT item_id, topic_id, role, confidence, source
+            FROM item_topics
+            {where}
+        """),
+        params,
+    )
+    return [dict(r) for r in res.mappings().all()]
+
+
+async def search_items_by_text(
+    session: AsyncSession, *, query: str, limit: int = 50,
+) -> list[UUID]:
+    """Postgres FTS 기반 빠른 item id 검색 — graph subset 용.
+
+    Qdrant 벡터 검색을 굳이 graph endpoint 에 끌어들이지 않음 (chunk 단위 결과의
+    item dedup 비용 + 임베딩 로드). FTS 로 빠른 후보 추리 + UI 가 검색 결과를
+    graph 위에 highlight.
+    """
+    if not query.strip():
+        return []
+    res = await session.execute(
+        text("""
+            SELECT id
+            FROM items
+            WHERE fts_vector @@ websearch_to_tsquery('simple', :q)
+            ORDER BY ts_rank(fts_vector, websearch_to_tsquery('simple', :q)) DESC
+            LIMIT :lim
+        """),
+        {"q": query, "lim": limit},
+    )
+    return [r[0] for r in res.all()]
+
+
+# ──────────────────────────────────────────────────────────────
 # app_settings  (런타임 key-value 설정)
 # ──────────────────────────────────────────────────────────────
 
