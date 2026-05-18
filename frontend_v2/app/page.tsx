@@ -105,6 +105,13 @@ export default function HomePage() {
         onSearchSubmit={handleSearchSubmit}
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
+        isSubsetView={isSubsetView}
+        onReturnToAll={() => {
+          setSearchQuery("");
+          setSelectedItemId(null);
+          setSelectedNodeFullId(null);
+          void loadAllTopics();
+        }}
       />
 
       <main className="flex-1 h-full relative">

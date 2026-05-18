@@ -10,6 +10,8 @@ interface TopicsTreeProps {
   onSearchSubmit: (query: string) => void;
   searchQuery: string;
   onSearchChange: (q: string) => void;
+  isSubsetView: boolean;
+  onReturnToAll: () => void;
 }
 
 export default function TopicsTree({
@@ -19,6 +21,8 @@ export default function TopicsTree({
   onSearchSubmit,
   searchQuery,
   onSearchChange,
+  isSubsetView,
+  onReturnToAll,
 }: TopicsTreeProps) {
   const topics: GraphNodeData[] = data.nodes
     .filter((n) => n.data.type === "topic")
@@ -31,6 +35,19 @@ export default function TopicsTree({
         <h1 className="text-base font-semibold mb-2 text-orange-600 dark:text-orange-400">
           LinkMind
         </h1>
+
+        {/* 부분 view 일 때만 "← 전체 그래프로 복귀" 버튼 — 검색 상자 위에 배치 (눈에 띔) */}
+        {isSubsetView && (
+          <button
+            type="button"
+            onClick={onReturnToAll}
+            className="w-full mb-2 px-2 py-2 text-xs bg-orange-500 hover:bg-orange-600 text-white rounded font-medium shadow animate-pulse"
+            title="현재 부분 view — 클릭으로 전체 그래프 복귀"
+          >
+            ← 전체 그래프로 복귀
+          </button>
+        )}
+
         <form
           onSubmit={(e) => {
             e.preventDefault();
