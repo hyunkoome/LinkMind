@@ -397,6 +397,8 @@ async def ingest_document(
     source_type: str | None = None,         # caller 가 명시 안 하면 fmt 로 결정
     source_id: str | None = None,           # 채널별 외부 id (예: telegram msg_id)
     source_url: str | None = None,
+    filename: str | None = None,            # 원본 파일명 (예: "photo_2026-05-18.jpg")
+                                            # 없으면 file_path 의 basename 사용
     source_metadata_extra: dict[str, Any] | None = None,
     caption: str | None = None,              # 함께 온 사용자 메모 → items.user_notes
     analyze_now: bool = True,
@@ -433,14 +435,16 @@ async def ingest_document(
     data = src.read_bytes()        # 추출용 (storage 는 이미 복사됨)
 
     # ── 2. 포맷 식별 + 텍스트 추출 ──────────────────────────────
-    filename = src.name
+    # caller 가 원본 파일명 (예: 텔레그램 첨부의 "photo_2026-05-18.jpg") 을 명시했으면 우선,
+    # 없으면 file_path 의 basename. 확장자 + title fallback + mime 추정 에 사용.
+    effective_filename = filename or src.name
     if not _explicit_mime(source_metadata_extra):
-        mime_type = mimetypes.guess_type(filename)[0]
+        mime_type = mimetypes.guess_type(effective_filename)[0]
     else:
         mime_type = source_metadata_extra.get("mime_type")  # type: ignore[union-attr]
 
-    fmt = guess_format(filename, mime_type)
-    extract = extract_text_from_bytes(data, filename=filename, mime_type=mime_type)
+    fmt = guess_format(effective_filename, mime_type)
+    extract = extract_text_from_bytes(data, filename=effective_filename, mime_type=mime_type)
 
     if extract:
         raw_content = extract.raw_text
@@ -450,10 +454,10 @@ async def ingest_document(
     else:
         # 텍스트 추출 안 됨 (image/unsupported) — raw 는 placeholder, 파일은 attachment 로 보존
         raw_content = (
-            f"[binary file: {filename}, mime={mime_type or 'unknown'}, "
+            f"[binary file: {effective_filename}, mime={mime_type or 'unknown'}, "
             f"size={file_size} bytes, format={fmt}]"
         )
-        title = _filename_to_title(filename)
+        title = _filename_to_title(effective_filename)
         extractor = "none"
         extract_meta = {}
 
@@ -464,7 +468,7 @@ async def ingest_document(
         "file_hash": file_hash,
         "file_size": file_size,
         "file_path": storage_path,
-        "filename": filename,
+        "filename": effective_filename,
         "mime_type": mime_type,
         "source_format": fmt,
         "extractor": extractor,
