@@ -1,20 +1,20 @@
-"""
-ai_agents/telegram_inbox_watcher.py 의 helper 함수 단위 테스트.
+"""ai_agents.base.ChannelAgent.is_ingest_successful 단위 테스트.
 
-watcher daemon 자체는 LinkMind backend 외부 (CLAUDE.md §3 NEVER) 라 ai_agents/ 에
-있지만, 내부 결정 로직 (ingest 성공/실패 판별) 은 pure function 이라 default test
-suite 에 포함 — 회귀 방지 + CI 도 검증.
+Phase 2.5 (2026-05-18) 에 ChannelAgent ABC 도입 — 이전엔
+ai_agents/telegram_inbox_watcher.py 의 모듈 함수 `_ingest_successful` 이었으나
+backend.ingest.* 결과 dict 판정 로직은 채널 간 공통이라 ABC 의 staticmethod 로 이동.
+
+테스트 자체는 그대로 — channel watcher daemon 이 처리 성공 시 채널에서
+메시지 자동 삭제 (inbox 패턴) 트리거 조건을 검증.
 """
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
+from ai_agents.base import ChannelAgent
 
-# ai_agents/ 는 Python package 가 아니라 모듈 단독. sys.path 에 추가해서 import.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "ai_agents"))
 
-from telegram_inbox_watcher import _ingest_successful  # noqa: E402
+# alias — 짧게 쓰기 위해
+is_ok = ChannelAgent.is_ingest_successful
 
 
 # ── 성공 케이스 ──────────────────────────────────────────────
@@ -30,7 +30,7 @@ def test_urls_all_succeeded_returns_true():
         ],
         "note_item_id": None,
     }
-    assert _ingest_successful(result) is True
+    assert is_ok(result) is True
 
 
 def test_note_saved_returns_true():
@@ -40,7 +40,7 @@ def test_note_saved_returns_true():
         "urls_ingested": [],
         "note_item_id": "abc-uuid",
     }
-    assert _ingest_successful(result) is True
+    assert is_ok(result) is True
 
 
 # ── 실패 / 보존 케이스 ──────────────────────────────────────
@@ -56,7 +56,7 @@ def test_url_with_error_returns_false():
         ],
         "note_item_id": None,
     }
-    assert _ingest_successful(result) is False
+    assert is_ok(result) is False
 
 
 def test_too_short_message_returns_false():
@@ -66,9 +66,9 @@ def test_too_short_message_returns_false():
         "urls_ingested": [],
         "note_item_id": None,
     }
-    assert _ingest_successful(result) is False
+    assert is_ok(result) is False
 
 
 def test_empty_dict_returns_false():
     """비정상 input 도 안전하게 False (KeyError 안 나게)."""
-    assert _ingest_successful({}) is False
+    assert is_ok({}) is False
