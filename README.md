@@ -229,6 +229,25 @@ bash scripts/install_openclaw.sh              # 기본: 공식 install.sh (Node 
 
 비공개 채널 / DM 까지 받고 싶다면 slackdump 사용. 토큰 / 쿠키 추출 + export 절차는 [docs/slack_setup.md](docs/slack_setup.md) 참고.
 
+Phase C wave-2 (2026-05-19~) 이후 LinkMind 자체 ingest 도 지원:
+
+```bash
+# 1) slackdump 로 workspace 전체 export (files=true 첨부 포함)
+bash scripts/slack_export.sh                                       # archive/slack_export/full_<ts>/ + latest symlink
+
+# 2) backend uvicorn 의 임베딩 모델이 GPU 점유 중이면 종료 (OOM 회피)
+bash scripts/step5_run_dev.sh --stop
+
+# 3) LinkMind 로 backfill — Telegram 패턴 일관 (URL 자동 host 라우팅, thread parent → 자식 caption 전파, 첨부 → ingest_document, mrkdwn entity 정리)
+bash scripts/slack_ingest_all.sh                                   # tqdm 진행률 + archive/slack_export/issues/<ts>/manifest.json 자동 보존
+bash scripts/slack_ingest_all.sh --channel 가-공부-cuda-programming  # 단일 채널 (디버깅)
+
+# 4) 끝나면 backend/frontend 재기동
+bash scripts/step5_run_dev.sh
+```
+
+이슈 manifest (DB 에 안 들어간 URL — LinkedIn login wall / 정적 project page / mp4 video 등) 는 `archive/slack_export/issues/<timestamp>/manifest.json` 에 자동 보존 — 후속 wave 에서 별도 패턴별 재처리.
+
 ---
 
 ## 디렉토리 구조
@@ -292,8 +311,8 @@ LinkMind 는 backend (`backend/`) + multi-channel gateway (`ai_agents/`) + Strea
 | **리팩토링** | `scripts/` 는 .sh 만 / `backend/jobs/` batch python / `ai_agents/` client agent — 5 카테고리 135 tests | ✅ 완료 |
 | **2.5 wave-3 (단일 self-contained, 2026-05-18)** | (1) §3 재정의 + §14 신규 (AGPL+Privacy+SaaS path) + docs/agent_architecture.md (2) `ai_agents/base.py` ChannelAgent ABC + telegram refactor (3) items 스키마 user_notes/is_read/read_at + GET/PATCH /items/{id} + LLM 키워드 추출 BackgroundTask (4) `backend/ingest/document/` 통합 추출 (PDF + DOCX/PPTX/TXT/MD, 한국어 cp949) (5) 텔레그램 첨부 자동 ingest + caption → user_notes 자동 (6) VOLUMES_ROOT env (compose bind mount root 설정 가능) (7) graph backend `/graph/*` — cytoscape.js 호환 JSON | ✅ 완료 |
 | **2.5 wave-4 (categories 레이어 + Union 그래프 + Theme, 2026-05-18~19)** | (1) **fallback topic** — external_id 없는 url 도 자체 topic 자동 (193 backfill, Houdini 같은 키워드도 카테고리로 살아남음) (2) **categories 스키마** + auto_link_categories job (61 카테고리 + 796 link, items.tags 빈도 ≥3) (3) **3-tier graph endpoint** — `/graph/categories`·`/graph/category/{slug}`·`/graph/topic/{uuid}` (4) **caption append 정책** — 모든 ingest 에 caption 파라미터, `append_item_user_notes` idempotent + timestamp 구분자 (5) **vLLM 가동** — Ollama → vLLM (qwen2.5:14b 3분 → vllm/Qwen2.5-7B 7초, 30x), `default_llm_provider: vllm` (6) **frontend 대개편** — i18n (한/EN 토글), 3-tier sidebar 트리 (cat ▸ topic ▸ item), 색상 그룹화 (Articles=녹/Video=빨/Code=보/Web=파/Note=시안), 양방향 highlight (`relatedIds`), Union 그래프 (`mergeGraph` 유니온 스테이션 hub-spoke), NodeDetails 통합 패널, ItemDetails 자동 expand, ThemeToggle (☀️/🌙/🖥 system + localStorage), Legend 그룹별 + 선택 상태 안내, navigation history (← 이전 / ← 전체) (7) 6개 텔레그램 fail 메시지 자동 처리 (url-only fetch_error key, youtube /live/, github owner-only fallback) (8) 181 topics title cleanup (cross-modal 차용 버그) | ✅ 완료 |
-| **2.5 wave-5 0순위 (다음 세션 1차)** — C wave-2 Slack 일회성 backfill | 시한 리스크 (사용자 구독 해제 임박) → 미리 확보. Telegram 패턴 그대로 `backend/ingest/slack/*` 작성. raw-first 라 wiki 모델 무관하게 안전. | 🚧 다음 세션 |
-| **2.5 wave-5 1순위** — D10 llm_wiki 아키텍처 (큰 그림) | karpathy llm_wiki + vlm_wiki + multi-agent + 자가학습. 일반 RAG 아닌 **topic = wiki 페이지** 단위. 첫 세션 plan — `external/karpathy/llm_wiki/` 분석 + `docs/llm_wiki_design.md` + `backend/agents/` (retriever/writer/critic) + `/wiki/{slug}` prototype. | 🚧 다음 세션 |
+| **C wave-2 Slack 일회성 backfill (2026-05-19 늦은 저녁)** | 시한 리스크 (사용자 구독 해제 임박) → 미리 확보. **모듈/CLI/테스트/스크립트 완료**: `backend/ingest/slack/{export_parser,__init__,__main__}.py` (Telegram 패턴 미러: mrkdwn entity 정리, blocks/raw URL 추출, thread parent → 자식 caption 전파, 시스템 메시지 skip), `tests/test_slack_parser.py` 46 케이스, `scripts/slack_ingest_all.sh` (tqdm 진행률 + archive 하위에 issues manifest 자동 — /tmp 휘발성 금지). 부수 fix: `_classify_url` 의 `/pdf/` path 인식 (arxiv pdf URL 들이 url 로 잘못 라우팅되던 버그), GPU OOM 회피 (uvicorn 잠시 stop — 장기 fix 는 TEI 임베딩 분리, wave-5+ 후보). 검증: 단일 채널 (gtsam.org URL chunks=10) + thread 채널 248 메시지 → 218 URLs + 55 notes. **전체 14241 메시지 backfill 진행 중** (background tmux, ~2일 예상). | 🚧 ingest 진행 중 |
+| **2.5 wave-5 1순위 (Slack 끝난 후)** — D10 llm_wiki 아키텍처 (큰 그림) | karpathy llm_wiki + vlm_wiki + multi-agent + 자가학습. 일반 RAG 아닌 **topic = wiki 페이지** 단위. 첫 세션 plan — `external/karpathy/llm_wiki/` 분석 + `docs/llm_wiki_design.md` + `backend/agents/` (retriever/writer/critic) + `/wiki/{slug}` prototype. | 🚧 다음 세션 |
 | 2.5 wave-5 2~4 | D9 arxiv title 재시드 → D11 카테고리 UI 편집 → D8 cross-modality matching (wiki 모델 안에서 흡수) | |
 | 2 후반 (AI 카테고리/feedback/dataset exporter) | AI 카테고리 강화, feedback 테이블, dataset exporter (JSONL) | |
 | 3 | 이미지/OCR/멀티모달 RAG, TEI 임베딩 전환, MinIO object storage, `ai_agents/` 채널 확장 (Slack/WhatsApp/Discord), 자가학습 (auto prompt/ingester 개선) | |

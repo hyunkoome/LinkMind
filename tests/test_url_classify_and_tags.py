@@ -36,6 +36,17 @@ def test_classify_pdf_extension():
     assert _classify_url("https://example.com/paper") == "url"
 
 
+def test_classify_pdf_path_segment():
+    """`/pdf/` path 도 pdf (Slack backfill 에서 arxiv /pdf/<id> 가 url 로 잘못
+    라우팅되어 placeholder 만 생기던 버그 회귀 방지)."""
+    assert _classify_url("https://arxiv.org/pdf/2106.14490") == "pdf"
+    assert _classify_url("http://arxiv.org/pdf/2408.16760") == "pdf"
+    assert _classify_url("https://arxiv.org/pdf/2304.09748v1") == "pdf"
+    # openreview / conference site 도 같은 패턴
+    assert _classify_url("https://openreview.net/pdf?id=abc") == "url"  # querystring 만, path 에 /pdf/ 없음 → url
+    assert _classify_url("https://openaccess.thecvf.com/content/CVPR2021/papers/Foo.pdf") == "pdf"
+
+
 def test_classify_fallback_url():
     assert _classify_url("https://arxiv.org/abs/2106.09685") == "url"
     assert _classify_url("https://en.wikipedia.org/wiki/SLAM") == "url"

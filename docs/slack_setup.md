@@ -228,6 +228,100 @@ slackdump convert -type standard -o archive/slack_export/full archive/slack_expo
 
 - 환경변수 정의: [env/dev.env.example](../env/dev.env.example) (실제 값은 `env/dev.env`)
 - 백엔드 설정 로더: [backend/config.py](../backend/config.py)
-- (Phase 2 예정) Slack export 파서: `backend/ingest/slack/export_parser.py`
-- (Phase 2 예정) Slack Web API 클라이언트: `backend/ingest/slack/api_client.py`
+- ✅ Slack export 파서: [backend/ingest/slack/export_parser.py](../backend/ingest/slack/export_parser.py) — slackdump standard 포맷 → SlackMessage iterator (Phase C wave-2, 2026-05-19)
+- ✅ Slack ingest 진입점: [backend/ingest/slack/__init__.py](../backend/ingest/slack/__init__.py) — `ingest_slack_message` (단일) + `ingest_slack_export` (폴더)
+- ✅ Slack ingest CLI: [backend/ingest/slack/__main__.py](../backend/ingest/slack/__main__.py) — `python -m backend.ingest.slack`
+- ✅ 전체 backfill 스크립트: [scripts/slack_ingest_all.sh](../scripts/slack_ingest_all.sh) — 사전 점검 + tqdm 진행률 + 이슈 manifest 자동
+- ⏸ Slack Web API 클라이언트 (Phase 3+): `backend/ingest/slack/api_client.py` — 사용자 구독 해제 예정이라 보류
 - 데이터 설계: [docs/training_data_design.md](training_data_design.md)
+
+---
+
+## 10. Slack ingest — slackdump export → LinkMind backfill
+
+slackdump 로 받은 export 디렉토리를 LinkMind item 으로 통째 backfill (Phase C
+wave-2, 2026-05-19~). Telegram 패턴 일관.
+
+```bash
+# 1) 사전 — backend uvicorn 종료 (bge-m3 GPU 점유 해제, OOM 회피)
+bash scripts/step5_run_dev.sh --stop
+
+# 2) 전체 워크스페이스 backfill
+bash scripts/slack_ingest_all.sh
+
+# 또는 옵션
+bash scripts/slack_ingest_all.sh --channel 가-공부-cuda-programming  # 단일 채널 (디버깅)
+bash scripts/slack_ingest_all.sh --force                            # 동일 hash 도 summary/tags 재계산
+.venv/bin/python -m backend.ingest.slack archive/slack_export/latest \
+    --workspace-url https://w1710672365-sjj477000.slack.com           # CLI 직접
+
+# 3) 완료 후 재기동
+bash scripts/step5_run_dev.sh
+```
+
+### 동작
+
+각 Slack 메시지 (시스템 메시지 / 빈 메시지 skip) 에 대해:
+
+1. **URL 자동 라우팅** — text + blocks 의 URL 추출, mrkdwn entity 정리
+   (`<url|label>` → label / `<@U>` 제거 / `<#C|name>` → `#name` / `<!here>` →
+   `@here`). 각 URL 은 host 별 분기 (ingest_url / ingest_youtube / ingest_github
+   / ingest_pdf).
+2. **첨부 ingest** — `attachments/<file_id>-<name>` 로컬 파일을 `ingest_document`
+   (PDF/DOCX/PPTX/TXT/MD 통합 추출) 로.
+3. **caption 정책** (= `items.user_notes`):
+   - thread 자식 → **부모 메시지 cleaned text** (논문 제목 같은 묶음 라벨)
+   - 첨부 있고 본문 → 본문 그대로
+   - URL + 메모 → URL 제거한 나머지 (`_strip_urls_for_caption`)
+4. **URL/첨부 없고 cleaned text >= 20자** → `source_type='slack'` note. `source_
+   metadata['slack']` 에 ts/channel/channel_id/user/thread_ts/permalink 보존.
+
+### 이슈 manifest
+
+DB 에 안 들어간 자료 (LinkedIn login wall / 정적 project page / mp4 video /
+단축 URL 등) 는 `archive/slack_export/issues/<timestamp>/manifest.json` 에 자동
+보존 — 후속 wave 에서 패턴별 별도 처리. 정책 (2026-05-19): manifest 는 항상
+`archive/slack_export/` 하위에만 (/tmp 휘발성 위치 금지).
+
+manifest entry 구조:
+
+```json
+{
+  "ts": "1726737542.090369",
+  "channel": "가-공부-논문쓰기-image-composition-이미지-물체-추가",
+  "permalink": "https://<workspace>.slack.com/archives/.../p...",
+  "url": "https://www.linkedin.com/posts/...",
+  "kind": "url",
+  "issue": "placeholder",
+  "error": null,
+  "raw_len": 232,
+  "chunks_indexed": 0
+}
+```
+
+분석 예:
+
+```bash
+# 도메인별 카운트
+jq '.[] | .url' archive/slack_export/issues/<ts>/manifest.json \
+    | sed 's|/[^/]*$||' | sort | uniq -c | sort -rn
+
+# 특정 issue 유형만
+jq '.[] | select(.issue == "placeholder") | .url' .../manifest.json
+```
+
+### GPU OOM 회피 (중요)
+
+vLLM 컨테이너 (qwen2.5-7B, ~18 GB) + backend uvicorn 의 bge-m3 (~3.78 GB) 가
+24 GB GPU 거의 점유. CLI ingest 가 별도 프로세스라 bge-m3 를 또 로드하려다
+OutOfMemoryError. **ingest 도중에는 uvicorn 종료 필수**:
+
+```bash
+bash scripts/step5_run_dev.sh --stop
+bash scripts/slack_ingest_all.sh
+bash scripts/step5_run_dev.sh    # 끝나면 재기동
+```
+
+장기 fix 후보 (wave-5+): bge-m3 를 **TEI (Text Embedding Inference) 컨테이너** 로
+분리 → 모든 프로세스가 같은 HTTP 서버 호출 → 모델 1번만 GPU. CLAUDE.md §12 의
+Phase 2 backlog 항목.

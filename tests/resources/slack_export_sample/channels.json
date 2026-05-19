@@ -1,0 +1,11 @@
+[
+  {
+    "id": "C06QLDC2G72",
+    "name": "test-channel",
+    "name_normalized": "test-channel",
+    "is_channel": true,
+    "is_private": false,
+    "num_members": 1,
+    "shared_team_ids": ["T06PXGA7LE7"]
+  }
+]

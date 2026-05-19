@@ -70,13 +70,22 @@ def _wrap_result(result: dict[str, Any]) -> "UrlIngestResponse":
 
 
 def _classify_url(url: str) -> str:
-    """URL host 로 source 종류 추정. 'youtube' | 'github' | 'pdf' | 'url'."""
-    host = (urlparse(url).hostname or "").lower()
+    """URL host 로 source 종류 추정. 'youtube' | 'github' | 'pdf' | 'url'.
+
+    pdf 판정:
+    - path 가 `.pdf` 로 끝남 (정통 케이스)
+    - path 안에 `/pdf/` 세그먼트 (arxiv.org/pdf/2106.14490, openreview/pdf?id=...,
+      conference site 의 /pdf/...). Slack backfill 에서 발견된 패턴 — 기존엔
+      url 로 잘못 라우팅돼서 readability fallback 만 도는 placeholder 들이 생김.
+    """
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
     if host.endswith("youtube.com") or host == "youtu.be":
         return "youtube"
     if host == "github.com" or host == "www.github.com":
         return "github"
-    if url.lower().split("?", 1)[0].endswith(".pdf"):
+    path_lower = parsed.path.lower()
+    if path_lower.endswith(".pdf") or "/pdf/" in path_lower:
         return "pdf"
     return "url"
 

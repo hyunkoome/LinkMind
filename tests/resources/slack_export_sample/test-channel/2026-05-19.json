@@ -1,0 +1,79 @@
+[
+  {
+    "type": "message",
+    "subtype": "channel_join",
+    "user": "U06QA9GMQSD",
+    "text": "<@U06QA9GMQSD> 님이 채널에 참여함",
+    "ts": "1747600000.000001"
+  },
+  {
+    "type": "message",
+    "user": "U06QA9GMQSD",
+    "text": "☆ LoRA: Low-Rank Adaptation of Large Language Models",
+    "ts": "1747600100.000100",
+    "thread_ts": "1747600100.000100",
+    "user_profile": {
+      "display_name": "hkkim",
+      "real_name": "김현구"
+    }
+  },
+  {
+    "type": "message",
+    "user": "U06QA9GMQSD",
+    "text": "<https://arxiv.org/abs/2106.09685|https://arxiv.org/abs/2106.09685>",
+    "ts": "1747600110.000110",
+    "thread_ts": "1747600100.000100",
+    "blocks": [
+      {
+        "type": "rich_text",
+        "elements": [
+          {
+            "type": "rich_text_section",
+            "elements": [
+              {"type": "link", "url": "https://arxiv.org/abs/2106.09685"}
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "type": "message",
+    "user": "U06QA9GMQSD",
+    "text": "<https://github.com/microsoft/LoRA>",
+    "ts": "1747600120.000120",
+    "thread_ts": "1747600100.000100"
+  },
+  {
+    "type": "message",
+    "user": "U06QA9GMQSD",
+    "text": "참고 자료: <https://arxiv.org/abs/2401.01234> 한번 보세요",
+    "ts": "1747600200.000200"
+  },
+  {
+    "type": "message",
+    "user": "U06QA9GMQSD",
+    "text": "오늘 회의 정리 — 다음 주에 sVLL LoRA 학습 시작하기로 결정함",
+    "ts": "1747600300.000300"
+  },
+  {
+    "type": "message",
+    "user": "U06QA9GMQSD",
+    "text": "ㅋ",
+    "ts": "1747600400.000400"
+  },
+  {
+    "type": "message",
+    "user": "U06QA9GMQSD",
+    "text": "video attached",
+    "ts": "1747600500.000500",
+    "files": [
+      {
+        "id": "FTESTVID001",
+        "name": "demo.mp4",
+        "mimetype": "video/mp4",
+        "size": 42
+      }
+    ]
+  }
+]

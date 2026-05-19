@@ -282,36 +282,69 @@ force push: `hyunkoo.dev@watanow.com` → `hyunkoome <hyunkookim.me@gmail.com>`.
 
 ---
 
-## Phase C wave-2 (다음) — Slack 워크스페이스 일회성 backfill
+## Phase C wave-2 — Slack 워크스페이스 일회성 backfill ✅ 모듈 완료 / 🚧 ingest 진행 중 (2026-05-19 늦은 저녁)
 
-⚠️ **변경 (2026-05-16 외출 전 사용자 알림)**:
+⚠️ **배경 (2026-05-16 외출 전 사용자 알림)**:
 - 옛 `archive/slack_export/public_2026-05-14/` 폴더는 사용자가 삭제
 - 사용자가 **Slack 구독을 곧 해제 — 내일부터는 Slack 안 씀**
 - 즉 wave-2 는 **일회성 backfill** 만 의미. incremental sync / realtime watcher 불필요.
 
-**slackdump 셋업은 그대로 유지** (어제 검증된 환경):
-- alias `hkkim` 등록 + token/cookie 활성
-- `scripts/slack_export.sh` (export 자동화 wrapper, archive/ + latest symlink)
-- `docs/slack_setup.md` (절차 문서)
-- `env/dev.env` 의 `SLACK_USER_TOKEN` / `SLACK_D_COOKIE`
+**완료 항목 (2026-05-19)**:
+1. ✅ `bash scripts/slack_export.sh` 로 새 export — workspace 전체, files=true.
+   결과: 183 채널 / 14241 메시지 / 625 MB / 16 첨부, `archive/slack_export/
+   full_2026-05-19_20-04-58/` + `latest` symlink. token/cookie cache 살아있어
+   재인증 불필요.
+2. ✅ **`backend/ingest/slack/` 신규 모듈** (Telegram 패턴 미러):
+   - `export_parser.py` — slackdump standard 파싱 (channel 디렉토리 + 날짜별 JSON
+     + `attachments/`). `SlackMessage` / `SlackAttachment` dataclass. mrkdwn entity
+     정리 (`<url|label>` / `<@U>` / `<#C|name>` / `<!here>`), blocks/raw URL 추출
+     + dedup, 시스템 메시지 (`_SKIP_SUBTYPES`: channel_join/leave/topic/bot 등) skip,
+     thread 부모 → 자식 `parent_text` 전파, `channels.json`/`users.json` 메타 로드,
+     `_slack_permalink` 생성
+   - `__init__.py` — `ingest_slack_message` (단일) + `ingest_slack_export` (폴더).
+     URL → `_classify_url` 분기 라우팅 (ingest_url/youtube/github/pdf), 첨부 →
+     `ingest_document`, caption (thread parent / 첨부 본문 / URL 제거 잔여) →
+     user_notes, URL/첨부 없으면 source_type='slack' note 저장
+   - `__main__.py` — CLI (`python -m backend.ingest.slack <export> [옵션]`).
+     `--channel`, `--workspace-url`, `--force`, `--no-progress`, `--issues-path`,
+     `--no-issues`. tqdm 진행률 (postfix: ch / urls / errs / iss). 이슈 manifest
+     자동 보존 (기본: `<export_dir 부모>/issues/<ts>/manifest.json` — 사용자 정책
+     2026-05-19: archive/slack_export/ 하위에만, /tmp 휘발성 금지).
+3. ✅ **CLI: `python -m backend.ingest.slack <export_dir> [옵션]`** + scripts/
+   slack_ingest_all.sh (사전 점검 — uvicorn 가동 여부 / GPU 여유 / vLLM 응답 —
+   + 한 줄 실행).
+4. ✅ **단위 테스트 + fixture**: `tests/test_slack_parser.py` 46 케이스 (mrkdwn 9
+   / URL 6 / 첨부 3 / helper 5 / 메타 4 / parse 11 / _resolve_caption 5 + fixture 3).
+   `tests/resources/slack_export_sample/` (channels.json + users.json + test-channel/
+   2026-05-19.json + attachments/) 신규.
+5. ✅ **검증**:
+   - 단일 채널 `robot-action-foundation` (1 URL): chunks=10 + 한국어 summary
+     1003자 + tags 6개 + title 자동 추출. end-to-end 작동 확인.
+   - thread 채널 `가-공부-논문쓰기-image-composition-이미지-물체-추가` (248 메시지):
+     218 URLs + 55 notes ingest. github=63 / pdf=12 / url=107 / slack note=53 /
+     youtube=5. avg summary 600-800자. thread parent_text → 자식 caption 잘 전파.
 
-**진행 순서** (다음 세션):
-1. `bash scripts/slack_export.sh` 로 새 export — workspace 전체, files=true
-2. `backend/ingest/slack/__init__.py` + `export_parser.py` 작성:
-   - slackdump standard 포맷 파싱 (channel 별 디렉토리, 날짜별 JSON)
-   - `SlackMessage` dataclass + `ingest_slack_message` (단일) + `ingest_slack_export`
-     (전체 폴더) — Telegram 패턴 일관
-   - thread 처리 (`thread_ts` → reply 묶음 → 한 item)
-   - URL 자동 라우팅 (telegram 흐름 재사용)
-   - 첨부 다운로드 (옵션)
-3. CLI: `python -m backend.ingest.slack <export_dir> [--channel <name>]`
-4. 단위 테스트 + 작은 fixture (채널 디렉토리 + 한 JSON 모사)
-5. 검증: `공부-컴퓨터비전` 단일 채널 → 워크스페이스 전체
+**부수 fix (Slack ingest 도중 발견)**:
+- ✅ `_classify_url` 의 `/pdf/` path 인식 (`backend/api/ingest.py`) — 기존엔 `.pdf`
+  확장자만 검사라 `arxiv.org/pdf/2106.14490` 등이 url 분기로 잘못 라우팅돼서
+  readability fallback 만 도는 placeholder 만 생기던 버그. fix: `parsed.path` 의
+  `/pdf/` 세그먼트도 pdf 분기 (arxiv / openaccess.thecvf / openreview 등). 회귀
+  테스트 `test_classify_pdf_path_segment` 추가.
+- ✅ thread 채널 검증에서 발견된 9개 placeholder (8 arxiv pdf URL + 1 unite.ai)
+  DELETE — 전체 ingest 시 fix 효과로 PDF 흐름으로 재라우팅됨.
+- ✅ **GPU OOM 해결** — vLLM (qwen2.5-7B, 18 GB) + backend uvicorn 의 bge-m3
+  (3.78 GB) 가 GPU 거의 점유 → CLI ingest 의 bge-m3 가 추가로 못 들어감.
+  단기 fix: `bash scripts/step5_run_dev.sh --stop` 으로 ingest 중에만 uvicorn
+  종료. **장기 fix (wave-5+ 후보)**: bge-m3 를 **TEI 컨테이너** 분리 → 모든 프로세스가
+  같은 HTTP 서버 호출 → 모델 1번만 GPU. CLAUDE.md §12 의 Phase 2 backlog 항목.
 
-slack_sdk 직접 호출은 over-engineering — 구독 해제 후 코드 거의 dead 자산.
+**🚧 진행 중**: `bash scripts/slack_ingest_all.sh` (background, tmux). 평균 ~12 s/msg,
+**예상 1.5-2일** (vLLM 요약 + 임베딩 + URL fetch). 완료 후 결과 확인 + manifest
+분석 (LinkedIn / project page / mp4 등 패턴별 후속 처리) + step5 재기동.
 
-모듈 자체는 향후 다른 Slack 워크스페이스 처리 또는 다시 쓸 때 재사용 가능 (Telegram
-ingest_telegram_export 와 같은 구조).
+**slack_sdk 직접 호출은 over-engineering** — 구독 해제 후 코드 거의 dead 자산.
+모듈 자체는 향후 다른 Slack 워크스페이스 처리 또는 다시 쓸 때 재사용 가능
+(Telegram `ingest_telegram_export` 와 같은 구조).
 
 
 ### C1. Slack export ingest
