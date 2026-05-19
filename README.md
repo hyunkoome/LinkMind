@@ -322,6 +322,35 @@ LinkMind 는 backend (`backend/`) + multi-channel gateway (`ai_agents/`) + Strea
 
 자세한 backlog 와 phase 별 완료/미구현 항목 — `docs/features_backlog.md` + `CLAUDE.md §13` 참고.
 
+### ingest 완료 후 다음 세션 진입 순서
+
+```
+🚧 [현재]      전체 14241 메시지 ingest (background tmux, ~2일)
+   │
+   ▼
+☐  [ingest 끝난 직후] archive/slack_export/issues/<ts>/manifest.json 분석
+   - 도메인별 카운트 / issue 유형 분포 → fix 우선순위
+   │
+   ▼
+☐  [그 다음] issues 패턴별 재처리 로직
+   - arxiv `/pdf/` 변환 retry (_classify_url fix 효과 검증)
+   - archive.org Wayback Machine fallback (dead link)
+   - t.ly 단축 URL 펼치기
+   - mp4 / image 직접 URL → 첨부 attachment 로 라우팅
+   - LinkedIn login wall — skip + 메타만 보존
+   │
+   ▼
+☐  [issues 정리 후] step5 재기동 + frontend 검증
+   - `bash scripts/step5_run_dev.sh`
+   - 카테고리/토픽 트리에서 Slack 데이터 어떻게 보이는지
+   │
+   ▼
+☐  [그 다음] D10 llm_wiki 아키텍처 plan (wave-5 1순위)
+   - external/karpathy/llm_wiki/ 분석 → docs/llm_wiki_design.md
+   - backend/agents/ (retriever/writer/critic)
+   - /wiki/{slug} endpoint prototype
+```
+
 ## 라이센스
 
 **AGPL v3** (OSS 공개 시점에 LICENSE 추가 — Phase 6-B, 6+개월 후 예정). self-host 무제한 자유, 변형해서 SaaS 로 재판매 시 변경 사항 공개 의무. Plausible/Cal.com/n8n 채택 모델. 자세히는 [CLAUDE.md §14](CLAUDE.md).
