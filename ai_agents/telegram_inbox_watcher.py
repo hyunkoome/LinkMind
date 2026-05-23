@@ -2,8 +2,9 @@
 """
 ai_agents/telegram_inbox_watcher.py
 ----------------------------------------------------------------------------
-Telegram inbox 채널 (예: LinkMind-Inbox) 의 새 메시지를 받아 LinkMind 로 자동
-ingest 하는 daemon. ChannelAgent ABC (ai_agents.base) 의 첫 번째 구현체.
+Telegram inbox 채널들의 새 메시지를 받아 LinkMind 로 자동 ingest 하는 daemon.
+multi-channel 지원 (2026-05-23) — config/telegram_channels.yaml 의 모든 채널을
+한 watcher 가 동시에 listen + backfill.
 
 CLAUDE.md §3: ai_agents/ 는 LinkMind 의 multi-channel gateway 모듈. backend.ingest.*
 모듈을 직접 import 호출하지만 backend.llm.* (LLMProvider) 직접 호출은 금지 — 그건
@@ -11,30 +12,29 @@ backend HTTP `/ask` 경유.
 
 설계:
 - Telethon 사용자 계정 client. 첫 실행 시 SMS 인증 → session 파일 자동 저장.
-- 채널 invite link 로 join 후, NewMessage 이벤트 listener 등록.
-- 새 메시지마다 → backend.ingest.telegram.ingest_telegram_message.
-- backfill 옵션: `--backfill N` 으로 지난 N개 메시지도 처리.
-- inbox 패턴: ingest 성공한 메시지는 채널에서 자동 삭제 (사용자가 처리 안 된 것
-  만 시각적으로 확인). `is_ingest_successful` 판정은 ChannelAgent ABC 의 공통 헬퍼.
+- yaml 의 채널 list 모두 join 후, NewMessage(chats=list) 로 통합 listener 등록.
+- 새 메시지마다 → 어느 채널인지 chat.id 로 식별 → 채널별 delete 정책 적용.
+- backfill 옵션: `--backfill N` 으로 지난 N개 메시지도 처리 (모든 채널 순차).
+- inbox 패턴: ingest 성공한 메시지는 채널의 정책에 따라 자동 삭제. 채널별
+  delete_after_ingest=true/false 를 yaml 에서 설정.
 
 사용:
-    python -m ai_agents.telegram_inbox_watcher                  # 자동 backfill (안 지워진
-                                                               # 모든 메시지) → listen
+    python -m ai_agents.telegram_inbox_watcher                  # 자동 backfill → listen
     python -m ai_agents.telegram_inbox_watcher --no-backfill   # backfill 없이 listen 만
-    python -m ai_agents.telegram_inbox_watcher --backfill 50 --no-listen  # backfill 만 (50개)
+    python -m ai_agents.telegram_inbox_watcher --backfill 50 --no-listen  # backfill 만
 
-기본 동작 (Phase 2.5 wave-3, 2026-05-18~):
-- daemon 시작 시 채널에 남아있는 모든 메시지 자동 backfill (inbox 패턴 — 처리
-  성공한 메시지는 채널에서 자동 삭제되므로, "남아있다 = 아직 처리 안 됨").
-- backfill 끝나면 listen 시작 (이후 새 메시지 자동).
-- 매번 daemon 재시작 시 같은 흐름. 이미 처리된 메시지는 채널에 없으니 backfill skip.
-- ingested_at = ingest 시각 (현재). source_created_at = 텔레그램 메시지 원본 시각 (provenance).
+기본 동작:
+- daemon 시작 시 각 채널에 남아있는 모든 메시지 자동 backfill (inbox 패턴).
+- backfill 끝나면 모든 채널 동시 listen.
+- ingested_at = ingest 시각. source_created_at = 텔레그램 메시지 원본 시각 (provenance).
 
 환경변수 (env/dev.env):
-    TELEGRAM_API_ID         my.telegram.org 에서 발급
-    TELEGRAM_API_HASH       my.telegram.org 에서 발급
-    TELEGRAM_SESSION_PATH   session 파일 위치 (기본: volumes/telegram/inbox.session)
-    TELEGRAM_INBOX_INVITE   채널 invite link (예: https://t.me/+abc) 또는 채널명/id
+    TELEGRAM_API_ID            my.telegram.org 에서 발급
+    TELEGRAM_API_HASH          my.telegram.org 에서 발급
+    TELEGRAM_SESSION_PATH      session 파일 위치 (기본: volumes/telegram/inbox.session)
+    TELEGRAM_CHANNELS_CONFIG   yaml 채널 list 경로 (기본: config/telegram_channels.yaml)
+    TELEGRAM_INBOX_INVITE      단일 채널 fallback (yaml 미존재 시)
+    TELEGRAM_DELETE_AFTER_INGEST  fallback 채널의 default delete 정책
 """
 
 from __future__ import annotations
@@ -44,6 +44,7 @@ import asyncio
 import logging
 import sys
 import tempfile
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -56,6 +57,11 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from ai_agents.base import ChannelAgent  # noqa: E402
+from ai_agents.telegram_channels import (  # noqa: E402
+    TelegramChannelConfig,
+    TelegramWatcherConfig,
+    load_telegram_channels,
+)
 from backend.config import Settings, get_settings  # noqa: E402
 from backend.ingest.telegram import (  # noqa: E402
     TelegramAttachment,
@@ -86,8 +92,6 @@ def _check_env() -> Settings:
         missing.append("TELEGRAM_API_ID")
     if not s.telegram_api_hash:
         missing.append("TELEGRAM_API_HASH")
-    if not s.telegram_inbox_invite:
-        missing.append("TELEGRAM_INBOX_INVITE")
     if missing:
         print(
             f"❌ env 미설정: {', '.join(missing)}\n"
@@ -99,13 +103,77 @@ def _check_env() -> Settings:
     return s
 
 
-async def _resolve_channel(client, invite_or_name: str):
-    """invite link 면 join 후 entity 반환. 채널명/id 면 그대로 get_entity.
+def _load_watcher_config(s: Settings) -> TelegramWatcherConfig:
+    """yaml 단일 진실 (2026-05-23). 채널 0개면 sys.exit (운영자가 yaml 채우도록 강제)."""
+    cfg = load_telegram_channels(s.telegram_channels_config)
+    if not cfg.channels:
+        print(
+            "❌ 텔레그램 채널 설정 없음.\n"
+            f"   {s.telegram_channels_config} 의 channels: list 에 invite + delete_after_ingest "
+            f"항목 채워 넣고 재실행.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    return cfg
 
-    Telethon 의 get_entity 가 invite link 직접 처리 못 함 — ImportChatInviteRequest
-    또는 CheckChatInviteRequest 가 필요. 단순화 위해 join 시도 후 fallback.
+
+# FloodWait 임계값 — 이보다 길면 skip (운영자가 다음 재기동 시 처리).
+# 텔레그램 API rate limit 은 보통 300초 (5분) 이하라 5분 임계가 합리.
+_FLOOD_WAIT_MAX_S = 300
+
+# 채널 resolve (join) 사이 sleep — Telegram rate limit 예방. 보통 2-3초로 충분.
+_CHANNEL_RESOLVE_SLEEP_S = 3.0
+
+
+def _invite_hash(invite_or_name: str) -> str | None:
+    """invite link 면 hash 부분 (cache key) 반환. 채널명/id 면 None."""
+    if invite_or_name.startswith(("https://t.me/+", "https://t.me/joinchat/", "t.me/+")):
+        return invite_or_name.rsplit("/", 1)[-1].lstrip("+")
+    return None
+
+
+def _load_channel_id_cache(path: Path) -> dict[str, int]:
+    """invite hash → channel_id 영구 cache 로드. 파일 미존재 시 빈 dict."""
+    if not path.exists():
+        return {}
+    try:
+        import json
+        return {k: int(v) for k, v in json.loads(path.read_text(encoding="utf-8")).items()}
+    except Exception as e:  # noqa: BLE001
+        logger.warning("channel_id cache 로드 실패 (%s, 무시): %s", path, e)
+        return {}
+
+
+def _save_channel_id_cache(path: Path, cache: dict[str, int]) -> None:
+    """cache atomic 저장 (tmp + rename)."""
+    import json
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(path)
+
+
+async def _resolve_channel(
+    client,
+    invite_or_name: str,
+    *,
+    channel_id_cache: dict[str, int] | None = None,
+    dialog_entities: dict[int, object] | None = None,
+):
+    """채널 entity 반환. resolve 우선순위:
+
+    1. invite hash → channel_id cache → dialog_entities 안에서 lookup (rate limit X)
+    2. cache → client.get_entity(channel_id) (rate limit X)
+    3. ImportChatInviteRequest (rate limit 영향)
+    4. UserAlreadyParticipant → CheckChatInviteRequest fallback
+
+    FloodWaitError 가 _FLOOD_WAIT_MAX_S 이하면 자동 sleep + 재시도, 그 이상이면
+    RuntimeError 로 올려서 호출자가 skip 결정.
+
+    cache 와 dialog_entities 는 호출자가 한 번 로드/생성 → 모든 채널 resolve 에 공유.
     """
     from telethon.errors import (
+        FloodWaitError,
         InviteHashExpiredError,
         InviteHashInvalidError,
         UserAlreadyParticipantError,
@@ -115,27 +183,81 @@ async def _resolve_channel(client, invite_or_name: str):
         ImportChatInviteRequest,
     )
 
-    if invite_or_name.startswith(("https://t.me/+", "https://t.me/joinchat/", "t.me/+")):
-        hash_part = invite_or_name.rsplit("/", 1)[-1].lstrip("+")
+    hash_part = _invite_hash(invite_or_name)
+
+    # 1. invite cache + dialog 매칭 (rate limit 완전 회피).
+    if hash_part and channel_id_cache is not None and hash_part in channel_id_cache:
+        chan_id = channel_id_cache[hash_part]
+        if dialog_entities and chan_id in dialog_entities:
+            return dialog_entities[chan_id]
+        # cache 에 있지만 dialog 에 없을 수도 — get_entity 시도 (보통 rate limit X)
+        try:
+            return await client.get_entity(chan_id)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "cache hit 인 channel_id=%s 의 get_entity 실패 (cache 무효화): %s",
+                chan_id, e,
+            )
+            # cache 오염 — 제거 후 fallthrough 로 ImportChatInvite 재시도.
+            channel_id_cache.pop(hash_part, None)
+
+    if hash_part is None:
+        # 채널명/peer id 직접 (rate limit 보통 없음).
+        return await client.get_entity(invite_or_name)
+
+    # 2. ImportChatInvite (rate limit risk).
+    for attempt in range(2):  # 최대 1회 재시도 (FloodWait 자동 대기 후).
         try:
             r = await client(ImportChatInviteRequest(hash_part))
             return r.chats[0]
         except UserAlreadyParticipantError:
             # 이미 멤버 — CheckChatInviteRequest 로 entity 조회.
-            check = await client(CheckChatInviteRequest(hash_part))
+            try:
+                check = await client(CheckChatInviteRequest(hash_part))
+            except FloodWaitError as e:
+                if e.seconds <= _FLOOD_WAIT_MAX_S and attempt == 0:
+                    logger.info(
+                        "FloodWait %ds 자동 대기 — invite=%s (CheckChatInvite)",
+                        e.seconds, invite_or_name,
+                    )
+                    await asyncio.sleep(e.seconds + 1)
+                    continue
+                raise
             chat = check.chat if hasattr(check, "chat") else check.chats[0]
             return await client.get_entity(chat)
+        except FloodWaitError as e:
+            if e.seconds <= _FLOOD_WAIT_MAX_S and attempt == 0:
+                logger.info(
+                    "FloodWait %ds 자동 대기 — invite=%s (ImportChatInvite)",
+                    e.seconds, invite_or_name,
+                )
+                await asyncio.sleep(e.seconds + 1)
+                continue
+            raise
         except (InviteHashInvalidError, InviteHashExpiredError) as e:
             raise RuntimeError(f"invite link 만료/유효하지 않음: {e}") from e
+    # 여기 도달 시 재시도 끝 — 마지막 시도가 FloodWait 였을 것.
+    raise RuntimeError(f"FloodWait 재시도 후에도 resolve 실패 — invite={invite_or_name}")
 
-    return await client.get_entity(invite_or_name)
+
+@dataclass
+class ResolvedChannel:
+    """resolve 후 — telethon entity + 운영 정책 + 표시 이름."""
+    config: TelegramChannelConfig
+    entity: object   # telethon Chat/Channel entity
+    chat_id: int     # 빠른 lookup 용 (events 의 chat.id 매칭)
+    display: str     # 로그 표시용 (yaml name 우선, 없으면 entity.title)
 
 
 class TelegramChannelAgent(ChannelAgent):
-    """Telegram inbox 채널의 ChannelAgent 구현체.
+    """Telegram multi-channel inbox ChannelAgent 구현체.
 
     Telethon 사용자 계정 (bot 아님) 으로 동작 — 봇 API 의 admin 권한 제한 회피.
-    inbox 패턴: ingest 성공 시 채널에서 메시지 자동 삭제.
+    inbox 패턴: 채널별 yaml 설정 (delete_after_ingest) 에 따라 ingest 성공 시
+    메시지 자동 삭제.
+
+    yaml 의 모든 채널을 한 client 가 통합 listen — events.NewMessage(chats=list)
+    로 entity list 전달. 메시지 도착 시 chat.id 로 어느 채널인지 식별.
     """
 
     name = "telegram"
@@ -145,19 +267,36 @@ class TelegramChannelAgent(ChannelAgent):
 
         텔레그램은 사용자 입력 channel — 채널 빠르게 비우는 게 우선. raw + 채널
         삭제만 즉시, chunks (embedding) + summary (LLM) 는 backend 의 analysis_worker
-        가 백그라운드로 천천히 처리. step5_run_dev.sh 한 명령으로 다 자동 동작.
+        가 백그라운드로 천천히 처리.
 
-        analyze_now=True 명시 시 옛 동기 동작 — 1메시지당 ~30-60초. 보통 안 씀.
+        batch_size 는 yaml 의 batch_size 필드 (default 5). setup() 에서 자동 결정.
         """
         self.settings: Settings | None = None
         self.client = None       # telethon.TelegramClient — setup 이후 채워짐
-        self.channel = None      # telethon entity — setup 이후 채워짐
+        self.watcher_config: TelegramWatcherConfig | None = None  # setup 이후
+        self.channels: list[ResolvedChannel] = []  # 누적 resolve 결과
+        self._by_chat_id: dict[int, ResolvedChannel] = {}
         self.analyze_now = analyze_now
+        # invite hash → channel_id 영구 cache + dialog entity dict — setup() 에서 채움.
+        # rate limit 회피 위해 _resolve_channel 가 우선 lookup.
+        self._channel_id_cache: dict[str, int] = {}
+        self._channel_id_cache_path: Path | None = None
+        self._dialog_entities: dict[int, object] = {}
+
+    @property
+    def channel_configs(self) -> list[TelegramChannelConfig]:
+        """yaml 의 채널 list (편의 접근)."""
+        return self.watcher_config.channels if self.watcher_config else []
+
+    @property
+    def batch_size(self) -> int:
+        return self.watcher_config.batch_size if self.watcher_config else 5
 
     async def setup(self) -> None:
-        """env 검증 + Telethon client start + 채널 resolve."""
+        """env 검증 + yaml 로드 + Telethon client start. 채널 resolve 는 run() 에서 batch 별로."""
         _check_telethon()
         self.settings = _check_env()
+        self.watcher_config = _load_watcher_config(self.settings)
 
         from telethon import TelegramClient
 
@@ -175,41 +314,143 @@ class TelegramChannelAgent(ChannelAgent):
             str(session_path), api_id_int, self.settings.telegram_api_hash
         )
         logger.info(
-            "Telethon 시작 — session=%s, channel=%s",
-            session_path, self.settings.telegram_inbox_invite,
+            "Telethon 시작 — session=%s, channels=%d (batch=%d)",
+            session_path, len(self.channel_configs), self.batch_size,
         )
         # start() 가 처음 호출 시 전화번호 + SMS 코드 대화식 입력.
         await self.client.start()
         me = await self.client.get_me()
         logger.info("Telethon 인증 완료 (me=%s)", getattr(me, "username", None) or me.id)
 
-        self.channel = await _resolve_channel(self.client, self.settings.telegram_inbox_invite)
+        # invite hash → channel_id 영구 cache 로드 (rate limit 회피 핵심).
+        self._channel_id_cache_path = session_path.parent / "channel_id_cache.json"
+        self._channel_id_cache = _load_channel_id_cache(self._channel_id_cache_path)
         logger.info(
-            "채널 entity: %s (id=%s)",
-            getattr(self.channel, "title", self.channel),
-            getattr(self.channel, "id", None),
+            "channel_id cache: %d entries (%s)",
+            len(self._channel_id_cache), self._channel_id_cache_path,
         )
 
+        # 사용자가 이미 join 한 모든 dialog (채널) 한 번에 조회 — rate limit 가벼움.
+        # cache 안에 있는 channel_id 의 entity 를 즉시 lookup 가능 (ImportChatInvite 회피).
+        try:
+            dialogs = await self.client.get_dialogs(limit=500)
+            for d in dialogs:
+                ent = d.entity
+                if hasattr(ent, "id"):
+                    self._dialog_entities[int(ent.id)] = ent
+            logger.info(
+                "dialog cache: %d channels (이미 join 한 채널은 rate limit 회피 가능)",
+                len(self._dialog_entities),
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "get_dialogs 실패 (cache 없이 진행): %s: %s", type(e).__name__, e,
+            )
+
+    async def _resolve_one(self, cfg: TelegramChannelConfig) -> ResolvedChannel | None:
+        """한 채널 join + 등록. 실패 시 None (호출자가 warn + skip).
+
+        cache + dialog lookup 우선 → rate limit 회피. 새 채널만 ImportChatInvite.
+        성공 시 cache 업데이트 (다음 실행에서 rate limit 영향 없도록).
+        """
+        try:
+            entity = await _resolve_channel(
+                self.client, cfg.invite,
+                channel_id_cache=self._channel_id_cache,
+                dialog_entities=self._dialog_entities,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "채널 resolve 실패 — skip (invite=%s): %s: %s",
+                cfg.invite, type(e).__name__, e,
+            )
+            return None
+        chat_id = int(getattr(entity, "id", 0))
+        display = cfg.name or getattr(entity, "title", None) or cfg.display_name()
+        resolved = ResolvedChannel(config=cfg, entity=entity, chat_id=chat_id, display=display)
+        self.channels.append(resolved)
+        self._by_chat_id[chat_id] = resolved
+
+        # cache 업데이트 — 다음 실행은 ImportChatInvite skip.
+        hash_part = _invite_hash(cfg.invite)
+        if hash_part and chat_id and self._channel_id_cache.get(hash_part) != chat_id:
+            self._channel_id_cache[hash_part] = chat_id
+            if self._channel_id_cache_path:
+                try:
+                    _save_channel_id_cache(self._channel_id_cache_path, self._channel_id_cache)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("channel_id cache 저장 실패 (무시): %s", e)
+
+        logger.info(
+            "채널 등록: %s (id=%s, delete=%s)",
+            display, chat_id, cfg.delete_after_ingest,
+        )
+        return resolved
+
     async def run(self, *, backfill: int = 0, listen: bool = True) -> int:
-        """daemon 진입점. setup → backfill → listen 순.
+        """daemon 진입점. batch sequential — [join batch → backfill batch → 다음].
 
         Args:
-            backfill: 채널의 최근 N개 메시지 먼저 처리 (0 = skip).
-            listen:   처리 후 실시간 NewMessage stream 계속 (False = backfill 만).
+            backfill: 채널별 최근 N개 메시지 먼저 처리 (0 = skip, batch 도 skip).
+            listen:   모든 batch 끝난 후 통합 listen (False = backfill 만 하고 종료).
+
+        batch 패턴 이유 (사용자 결정 2026-05-23):
+        1. Telegram join rate limit 회피 (한 batch 안의 join 사이에 sleep, batch 간
+           긴 sleep + backfill 자체가 시간 buffer).
+        2. backend 부하 분산 — 한 batch 의 backfill 다 끝나야 다음 채널 메시지 쏟아짐.
+        3. progress 가시화 — "batch 1/3 완료" 로그가 사용자 시각적 진척도.
+
+        backfill=0 일 때는 batch 안 나누고 한 번에 모두 join 후 listen (단순).
         """
         await self.setup()
         try:
-            if backfill > 0:
-                await self._backfill(backfill)
+            if backfill > 0 and len(self.channel_configs) > self.batch_size:
+                # batch sequential 모드 — yaml 의 채널을 batch_size 씩 나눠 처리.
+                batches = [
+                    self.channel_configs[i:i + self.batch_size]
+                    for i in range(0, len(self.channel_configs), self.batch_size)
+                ]
+                total = len(batches)
+                for bi, batch_cfgs in enumerate(batches, start=1):
+                    logger.info("─── batch %d/%d 시작 — %d 채널 ───", bi, total, len(batch_cfgs))
+                    batch_resolved: list[ResolvedChannel] = []
+                    for idx, cfg in enumerate(batch_cfgs):
+                        if idx > 0:
+                            await asyncio.sleep(_CHANNEL_RESOLVE_SLEEP_S)
+                        rc = await self._resolve_one(cfg)
+                        if rc:
+                            batch_resolved.append(rc)
+                    # 이 batch 의 채널들 backfill 완주 — 다음 batch 전에.
+                    for rc in batch_resolved:
+                        await self._backfill_channel(rc, backfill)
+                    logger.info("─── batch %d/%d 완료 ───", bi, total)
+                    if bi < total:
+                        # 다음 batch 전 짧은 buffer — backfill 이 이미 시간 buffer 역할.
+                        await asyncio.sleep(_BATCH_BREATHE_S)
+            else:
+                # backfill 안 하거나 채널 수 적으면 단순 모드 — 한 번에 다 join.
+                for idx, cfg in enumerate(self.channel_configs):
+                    if idx > 0:
+                        await asyncio.sleep(_CHANNEL_RESOLVE_SLEEP_S)
+                    rc = await self._resolve_one(cfg)
+                    if rc and backfill > 0:
+                        await self._backfill_channel(rc, backfill)
+
+            if not self.channels:
+                logger.error("resolve 된 채널이 0개 — listen 불가. yaml 또는 네트워크 확인.")
+                return 1
 
             if listen:
                 from telethon import events
 
-                @self.client.on(events.NewMessage(chats=self.channel))
+                # entity list 를 그대로 전달 — Telethon 가 multi-chat filter 지원.
+                entities = [rc.entity for rc in self.channels]
+
+                @self.client.on(events.NewMessage(chats=entities))
                 async def _on_new(event):
                     await self._handle_message(event)
 
-                logger.info("listening… (Ctrl+C 로 종료)")
+                logger.info("listening… %d 채널 동시 (Ctrl+C 로 종료)", len(self.channels))
                 await self.client.run_until_disconnected()
             else:
                 await self.client.disconnect()
@@ -218,8 +459,8 @@ class TelegramChannelAgent(ChannelAgent):
             return 1
         return 0
 
-    async def _backfill(self, count: int) -> None:
-        """채널의 메시지 backfill — 옛 → 새 순서 (queue 처럼).
+    async def _backfill_channel(self, rc: ResolvedChannel, count: int) -> None:
+        """한 채널의 메시지 backfill — 옛 → 새 순서 (queue 처럼).
 
         count 가 0 이하면 skip. 큰 수 (예: 10000) 면 사실상 전체 처리.
 
@@ -229,23 +470,25 @@ class TelegramChannelAgent(ChannelAgent):
         reverse=True 로 옛 메시지부터 처리 — 사용자가 채널에 던진 순서 보존.
         """
         if count <= 0:
-            logger.info("backfill skip (count=%d)", count)
             return
-        logger.info("backfill 시작 — 최근 %d 개 메시지 (옛→새 순서)", count)
+        logger.info("[%s] backfill 시작 — 최근 %d 개 메시지 (옛→새)", rc.display, count)
         processed = 0
-        async for msg in self.client.iter_messages(self.channel, limit=count, reverse=True):
-            await self._handle_message(msg)
+        async for msg in self.client.iter_messages(rc.entity, limit=count, reverse=True):
+            await self._handle_message(msg, _rc_hint=rc)
             processed += 1
-        logger.info("backfill 완료 — %d 메시지 처리", processed)
+        logger.info("[%s] backfill 완료 — %d 메시지 처리", rc.display, processed)
 
-    async def _handle_message(self, event_or_msg) -> None:
+    async def _handle_message(
+        self, event_or_msg, *, _rc_hint: "ResolvedChannel | None" = None,
+    ) -> None:
         """Telethon NewMessage event / iter_messages Message 둘 다 처리.
 
         Phase 2.5 wave-3 — 첨부 (PDF/DOCX/PPTX/TXT/MD/이미지/zip 등) 자동 download
         후 ingest_document 로 보냄. 텍스트 + 첨부 + URL 모두 가능 (한 메시지에).
 
-        NewMessage.Event 는 `.message` 가 Message 객체, iter_messages 는 Message
-        자체. `hasattr(event, "message") and hasattr(event.message, "id")` 로 구분.
+        multi-channel (2026-05-23): chat.id 로 어느 채널인지 식별 → 채널별
+        delete_after_ingest 정책 적용. _rc_hint 는 backfill 시 채널 미리 알고 있으니
+        lookup 생략 위해 전달 (listen 분기는 None).
         """
         if hasattr(event_or_msg, "message") and hasattr(event_or_msg.message, "id"):
             msg = event_or_msg.message     # NewMessage event
@@ -303,19 +546,27 @@ class TelegramChannelAgent(ChannelAgent):
         atts = result.get("attachments_ingested") or []
         note = result.get("note_item_id")
         succeeded = self.is_ingest_successful(result)
+
+        # 어느 채널에서 온 메시지인지 식별 — backfill 은 hint 로 즉시 알고,
+        # listen 분기는 chat.id 로 lookup. 매칭 실패 시 (이론적으론 없음) 안전 default
+        # 는 삭제 안 함 (rollback 가능). 정상은 항상 yaml 의 채널 정책.
+        rc = _rc_hint or self._by_chat_id.get(int(getattr(chat, "id", 0)))
+        ch_display = rc.display if rc else (channel_name or "unknown")
+        delete_policy = rc.config.delete_after_ingest if rc else False
+
         logger.info(
-            "msg %s: urls=%d attach=%d note=%s ok=%s text=%r",
-            msg.id, len(urls), len(atts), bool(note), succeeded, text[:80],
+            "[%s] msg %s: urls=%d attach=%d note=%s ok=%s text=%r",
+            ch_display, msg.id, len(urls), len(atts), bool(note), succeeded, text[:80],
         )
 
         # inbox 패턴 — 모든 ingest 가 성공해야만 채널에서 삭제.
         # is_ingest_successful 이 urls + attachments + note 의 error 부재 확인 (§ChannelAgent).
-        if succeeded and self.settings and self.settings.telegram_delete_after_ingest:
+        if succeeded and delete_policy:
             try:
                 await msg.delete()
-                logger.info("msg %s ingest 성공 → 채널에서 삭제", msg.id)
+                logger.info("[%s] msg %s ingest 성공 → 채널에서 삭제", ch_display, msg.id)
             except Exception as e:  # noqa: BLE001
-                logger.warning("msg %s 삭제 실패 (권한/네트워크?): %s", msg.id, e)
+                logger.warning("[%s] msg %s 삭제 실패 (권한/네트워크?): %s", ch_display, msg.id, e)
 
     async def _download_attachments(
         self, msg,

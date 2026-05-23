@@ -58,6 +58,7 @@ tenacity>=9.0.0                   # 재시도
 loguru>=0.7.2                     # 로깅
 orjson>=3.10.12                   # 빠른 JSON
 python-dateutil>=2.9.0
+PyYAML>=6.0.0                     # config/telegram_channels.yaml 등 운영 데이터 yaml
 
 # ─── Test ─────────────────────────────────────────────────────────
 pytest>=8.3.0

@@ -1,0 +1,56 @@
+# config/telegram_channels.yaml
+# ----------------------------------------------------------------------------
+# ai_agents/telegram_inbox_watcher.py 가 listen + backfill 하는 채널 list.
+#
+# 필수 필드:
+#   invite               — invite link (https://t.me/+xxx) 또는 채널명/ID
+#   delete_after_ingest  — ingest 성공 시 채널에서 메시지 자동 삭제 (inbox 패턴 on/off)
+#
+# 선택 필드:
+#   name                 — 로그 표시용 별명. 비우면 텔레그램 채널의 실제 title 자동 사용.
+#
+# 변경 시 watcher 재기동 필요 (hot-reload 안 함):
+#   bash scripts/step5_run_dev.sh --stop && bash scripts/step5_run_dev.sh
+
+# batch_size: yaml 의 채널을 N 개씩 batch sequential 처리.
+#   각 batch = [join → backfill 완주 → 다음 batch]. listen 은 모든 batch 끝나야.
+#   Telegram join rate limit (FloodWait 300s) 회피 + backend 부하 분산 + progress 가시화.
+#   범위 1~20. default 5 (사용자 환경 검증 기준).
+batch_size: 5
+
+channels:
+  # LinkMind 의 메인 inbox — 처리 후 자동 삭제 (사용자가 처리 안 된 것만 시각적으로 확인)
+  - invite: https://t.me/+2ztAGOP93_Q3NzQ1
+    delete_after_ingest: true
+    name: LinkMind-Inbox
+
+  # ── 2026-05-23 추가 — 사용자의 기존 텔레그램 채널 14개 ──────────────
+  # 모두 inbox 패턴 (처리 후 자동 삭제). name 은 비워두고 채널 title 자동.
+  - invite: https://t.me/+istTXfI9LT5jNmI1
+    delete_after_ingest: true
+  - invite: https://t.me/+v8TsqZoGxHpmZjVl
+    delete_after_ingest: true
+  - invite: https://t.me/+VgKZsppIyg1iZDg1
+    delete_after_ingest: true
+  - invite: https://t.me/+BaseIhbvDFZjMDA1
+    delete_after_ingest: true
+  - invite: https://t.me/+2Xq3i0GyUds2NjU9
+    delete_after_ingest: true
+  - invite: https://t.me/+jz2FP9Lvd94yNDU1
+    delete_after_ingest: true
+  - invite: https://t.me/+zA2AxCVoKoowNTM1
+    delete_after_ingest: true
+  - invite: https://t.me/+-YvYYUXMOoo2YmQ1
+    delete_after_ingest: true
+  - invite: https://t.me/+NkHTKje_FzRhMGI1
+    delete_after_ingest: true
+  - invite: https://t.me/+MEHXedp9hsNkMmQ1
+    delete_after_ingest: true
+  - invite: https://t.me/+ggcz4Ns2twUyMGE1
+    delete_after_ingest: true
+  - invite: https://t.me/+QC_zUMmcliszNzA1
+    delete_after_ingest: true
+  - invite: https://t.me/+SrNs_ZHY0YM1NmI1
+    delete_after_ingest: true
+  - invite: https://t.me/+kh7ecBn6qi1kYzI1
+    delete_after_ingest: true

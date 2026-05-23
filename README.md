@@ -199,19 +199,46 @@ bash scripts/tests/ci/step1_cpu.sh              # 가장 빠른 default suite (�
 
 자세한 정책은 `CLAUDE.md` §9 (Testing 정책) + `scripts/tests/README.md`.
 
-### 9. (선택) Telegram inbox watcher
+### 9. (선택) Telegram inbox watcher — multi-channel (2026-05-23~)
 
-LinkMind-Inbox 같은 텔레그램 채널에 URL/메모 던지면 자동 ingest + 채널 자동 정리:
+여러 텔레그램 채널 (논문/동영상/공부 등 inbox 모음) 의 URL/메모/첨부를 한 watcher 가
+통합해 자동 ingest + 채널 자동 정리:
 
 ```bash
 # https://my.telegram.org 에서 API ID/Hash 발급 후 env/dev.env 에 채우기
 # (자세히는 docs/telegram_setup.md)
+TELEGRAM_API_ID=...
+TELEGRAM_API_HASH=...
+TELEGRAM_CHANNELS_CONFIG=config/telegram_channels.yaml  # default
+```
+
+채널 list 는 `config/telegram_channels.yaml` 단일 진실 (git commit 가능, 비밀 아님):
+
+```yaml
+batch_size: 5                                  # 한 번에 N개씩 sequential 처리 (default 5)
+channels:
+  - invite: https://t.me/+xxx                  # 필수
+    delete_after_ingest: true                  # 필수 (채널별 inbox 패턴 on/off)
+    name: LinkMind-Inbox                       # 선택 (비우면 채널 title 자동)
+  - invite: https://t.me/+yyy
+    delete_after_ingest: false                 # 예: 보존 채널
+```
+
+```bash
 bash ai_agents/telegram_inbox_watcher.sh                # 첫 실행: SMS 인증
 bash ai_agents/telegram_inbox_watcher.sh --daemon       # 백그라운드 daemon
-bash ai_agents/telegram_inbox_watcher.sh --restart      # 코드 변경 후 재기동 (idempotent)
-bash ai_agents/telegram_inbox_watcher.sh --backfill 50  # 채널의 최근 N개도 처리
-tail -f /tmp/telegram-watcher.log                     # 로그
+bash ai_agents/telegram_inbox_watcher.sh --restart      # 코드/yaml 변경 후 재기동
+bash ai_agents/telegram_inbox_watcher.sh --backfill 50  # 채널별 최근 N개도 처리
+tail -f /tmp/telegram-watcher.log                       # 로그
 ```
+
+**동작**:
+- batch sequential — yaml 의 채널을 batch_size 씩 [join → backfill 완주 → 다음].
+  Telegram FloodWait 회피 + backend 부하 분산 + progress 가시화.
+- FloodWait 자동 대기 — 임계 300초 이하면 sleep 후 재시도.
+- channel_id cache (`volumes/telegram/channel_id_cache.json`) — 다음 실행에서
+  ImportChatInvite skip, rate limit 영향 없이 즉시 join.
+- 이미 join 한 채널은 setup() 의 `get_dialogs()` 로 dialog cache 에 즉시 등록.
 
 ### 10. (선택) OpenClaw 설치
 
