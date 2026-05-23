@@ -93,47 +93,52 @@ async def _process_one(item: dict[str, Any]) -> bool:
 
     engine = get_engine()
     SessionMaker = async_sessionmaker(engine, expire_on_commit=False)
+    # `session.begin()` 으로 외부 transaction 을 열지 않는다 — _embed_and_index 와
+    # _generate_and_save_summary 가 각각 내부에서 session.commit() 을 호출하므로,
+    # 외부에서 begin() 으로 감싸면 첫 commit 후 transaction 이 닫혀서 두 번째 호출이
+    # "Can't operate on closed transaction" 으로 실패한다 (url ingest 흐름도 동일 패턴).
     async with SessionMaker() as session:
-        async with session.begin():
-            # 1. chunks 없으면 먼저 임베딩 (빠름, ~1-2초)
-            if not await _has_chunks(session, item_id):
-                try:
-                    n = await _embed_and_index(session, item_id=item_id, text=raw)
-                    logger.info("chunks 생성 — item=%s, chunks=%d", item_id, n)
-                except Exception as e:  # noqa: BLE001
-                    logger.warning(
-                        "chunks 생성 실패 (item=%s): %s",
-                        item_id, e,
-                    )
-                    # chunks 실패해도 summary 시도 — 둘은 독립
-
-            # 2. summary 생성 (느림, ~30-60초)
-            #    ExtractedDoc 의 abstract/paper_keywords 는 backfill 시점엔 모름 —
-            #    raw 전체를 body 로, title 만 사용. _generate_and_save_summary 가
-            #    body 를 _SUMMARY_INPUT_LIMIT 로 cap.
-            doc = ExtractedDoc(body=raw, title=title, abstract=None, paper_keywords=[])
+        # 1. chunks 없으면 먼저 임베딩 (빠름, ~1-2초). 자체 commit.
+        if not await _has_chunks(session, item_id):
             try:
-                summary_text, _tags = await _generate_and_save_summary(
-                    session, item_id=item_id, doc=doc,
-                )
-                if summary_text:
-                    logger.info(
-                        "summary 생성 — item=%s, source=%s, len=%d",
-                        item_id, item.get("source_type"), len(summary_text),
-                    )
-                    return True
-                else:
-                    logger.info(
-                        "summary 빈 응답 — item=%s (LLM 빈 응답, 다음 시도까지 skip)",
-                        item_id,
-                    )
-                    return False
+                n = await _embed_and_index(session, item_id=item_id, text=raw)
+                logger.info("chunks 생성 — item=%s, chunks=%d", item_id, n)
             except Exception as e:  # noqa: BLE001
                 logger.warning(
-                    "summary 생성 실패 (item=%s, %s: %s)",
-                    item_id, type(e).__name__, e,
+                    "chunks 생성 실패 (item=%s): %s",
+                    item_id, e,
+                )
+                # chunks 실패해도 summary 시도 — 둘은 독립
+                await session.rollback()
+
+        # 2. summary 생성 (느림, ~30-60초). 자체 commit.
+        #    ExtractedDoc 의 abstract/paper_keywords 는 backfill 시점엔 모름 —
+        #    raw 전체를 body 로, title 만 사용. _generate_and_save_summary 가
+        #    body 를 _SUMMARY_INPUT_LIMIT 로 cap.
+        doc = ExtractedDoc(body=raw, title=title, abstract=None, paper_keywords=[])
+        try:
+            summary_text, _tags = await _generate_and_save_summary(
+                session, item_id=item_id, doc=doc,
+            )
+            if summary_text:
+                logger.info(
+                    "summary 생성 — item=%s, source=%s, len=%d",
+                    item_id, item.get("source_type"), len(summary_text),
+                )
+                return True
+            else:
+                logger.info(
+                    "summary 빈 응답 — item=%s (LLM 빈 응답, 다음 시도까지 skip)",
+                    item_id,
                 )
                 return False
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "summary 생성 실패 (item=%s, %s: %s)",
+                item_id, type(e).__name__, e,
+            )
+            await session.rollback()
+            return False
 
 
 async def run_analysis_worker(stop_event: asyncio.Event | None = None) -> None:

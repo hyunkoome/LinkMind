@@ -19,11 +19,19 @@ def get_embedding_provider() -> EmbeddingProvider:
             model_name=settings.embedding_model,
             dim=settings.embedding_dim,
         )
+    if backend == "vllm":
+        # vllm-embed 컨테이너 — CLAUDE.md §13 D13. 모든 프로세스 공유, GPU 1번 로드.
+        from backend.embedding.vllm_embed import VLLMEmbeddingProvider
+        return VLLMEmbeddingProvider(
+            base_url=settings.effective_vllm_embed_base_url,
+            model_name=settings.embedding_model,
+            dim=settings.embedding_dim,
+        )
     if backend == "tei":
-        # Phase 2 — TEI HTTP 클라이언트는 별도 구현 예정.
+        # 도입 안 함 — vLLM 으로 통일 (사용자 결정 2026-05-23). features_backlog D13 참조.
         raise NotImplementedError(
-            "EMBEDDING_BACKEND=tei는 Phase 2에서 구현됩니다. "
-            "backend/embedding/tei.py 작성 + compose phase2 profile 활성화 필요."
+            "EMBEDDING_BACKEND=tei 는 도입 안 함. vLLM 으로 통일 (D13). "
+            "EMBEDDING_BACKEND=vllm 사용."
         )
     if backend == "ollama":
         raise NotImplementedError(

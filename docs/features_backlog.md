@@ -282,7 +282,7 @@ force push: `hyunkoo.dev@watanow.com` → `hyunkoome <hyunkookim.me@gmail.com>`.
 
 ---
 
-## Phase C wave-2 — Slack 워크스페이스 일회성 backfill ✅ 모듈 완료 / 🚧 ingest 진행 중 (2026-05-19 늦은 저녁)
+## Phase C wave-2 — Slack 워크스페이스 일회성 backfill ✅ 완료 (2026-05-19 ~ 23)
 
 ⚠️ **배경 (2026-05-16 외출 전 사용자 알림)**:
 - 옛 `archive/slack_export/public_2026-05-14/` 폴더는 사용자가 삭제
@@ -332,15 +332,35 @@ force push: `hyunkoo.dev@watanow.com` → `hyunkoome <hyunkookim.me@gmail.com>`.
   테스트 `test_classify_pdf_path_segment` 추가.
 - ✅ thread 채널 검증에서 발견된 9개 placeholder (8 arxiv pdf URL + 1 unite.ai)
   DELETE — 전체 ingest 시 fix 효과로 PDF 흐름으로 재라우팅됨.
-- ✅ **GPU OOM 해결** — vLLM (qwen2.5-7B, 18 GB) + backend uvicorn 의 bge-m3
+- ✅ **GPU OOM 해결 (단기 fix)** — vLLM (qwen2.5-7B, 18 GB) + backend uvicorn 의 bge-m3
   (3.78 GB) 가 GPU 거의 점유 → CLI ingest 의 bge-m3 가 추가로 못 들어감.
-  단기 fix: `bash scripts/step5_run_dev.sh --stop` 으로 ingest 중에만 uvicorn
-  종료. **장기 fix (wave-5+ 후보)**: bge-m3 를 **TEI 컨테이너** 분리 → 모든 프로세스가
-  같은 HTTP 서버 호출 → 모델 1번만 GPU. CLAUDE.md §12 의 Phase 2 backlog 항목.
+  단기 fix: `bash scripts/step5_run_dev.sh --stop` 으로 ingest 중에만 uvicorn 종료.
+  **장기 fix (D13 진행 중)**: TEI 아닌 **vLLM 으로 임베딩까지 통일** (사용자 결정
+  2026-05-23). `vllm-embed` 컨테이너 (`--runner pooling`, bge-m3) → 모든 프로세스가
+  HTTP 공유. D13 항목 참조.
 
-**🚧 진행 중**: `bash scripts/slack_ingest_all.sh` (background, tmux). 평균 ~12 s/msg,
-**예상 1.5-2일** (vLLM 요약 + 임베딩 + URL fetch). 완료 후 결과 확인 + manifest
-분석 (LinkedIn / project page / mp4 등 패턴별 후속 처리) + step5 재기동.
+**✅ ingest 완료** (2026-05-23): `bash scripts/slack_ingest_all.sh` 4일 걸쳐 완주.
+결과 — `archive/slack_export/issues/20260519-220427/manifest.json` 생성. **953
+issues / 14241 메시지 = 6.7% 실패율**. placeholder 633 + exception 320.
+
+**manifest 분석** (2026-05-23):
+- fix 불가 ~40% — YouTube 영상 삭제/private 174 / LinkedIn login wall 141 / Facebook 65
+  / DNS 실패 20 / GitHub repo 비공개 7. 자료 자체가 없거나 익명 익세스 차단.
+- 간단 fix — URL protocol 누락 9 / YouTube channel URL skip 14 / openaccess.thecvf 18
+  (manifest URL truncated 라 진단 필요). 약 40+건.
+- Wayback fallback 후보 — medium.com 88 + SSL/500/ConnectError 24. 약 110+건.
+- JS rendering 필요 (어려움) — 네이버 블로그 26 / marble.worldlabs 11 / colab 6 등.
+
+→ **issues 패턴별 재처리는 D12 (placeholder 정리 UI) 안에서 흡수** (사용자 결정
+2026-05-23). 단발성 `backend/ingest/issue_reprocess.py` 모듈 만들기 대신, UI 와
+인프라 (fetch_error 마커 / 수동 액션 / Wayback / 단축 URL retry / LinkedIn skip
+표시) 를 통합한 방향.
+
+**watcher 재기동 시 OOM 발견 (2026-05-23)** — 81 backfill 메시지 중 거의 다 ok=False.
+DB 트랜잭션 확인 결과 — `_embed_and_index` 전 commit (line 410) 이라 raw 만 들어간
+반쪽 item 49건 (url 29 + youtube 10 + github 8 + telegram 2) 누적. document 47건
+(텔레그램 사진 raw="[binary file: ...]") 은 정상 (Phase 3 OCR 영역). → **D13
+vLLM-embed 인프라 작업으로 전환**.
 
 **slack_sdk 직접 호출은 over-engineering** — 구독 해제 후 코드 거의 dead 자산.
 모듈 자체는 향후 다른 Slack 워크스페이스 처리 또는 다시 쓸 때 재사용 가능
@@ -466,3 +486,61 @@ karpathy 의 llm_wiki + vlm_wiki + multi-agent + 자가학습. 일반 RAG 대신
 
 ### D11. 카테고리 UI 편집 ⏳
 synonyms 추가, 색 지정, pinned 토글, manual link/unlink.
+
+### D12. placeholder / 본문 추출 실패 자료 정리 UI ⏳
+
+**배경** (2026-05-23 사용자 결정): §2 raw-first 원칙의 확장 — LinkedIn / Facebook /
+Medium paywall / 이미지 / PDF placeholder 같은 본문 추출이 어려운 자료도 **raw URL +
+메타 (title, source_url, Slack/텔레그램 context) 는 무조건 DB 에 등록**한다.
+사용자는 LinkMind UI 에서 그 자료의 원본 클릭 + 수동 액션 (본문 직접 입력, 메모
+보강, 카테고리 분류) 할 수 있어야 한다. 학습 데이터 관점에서 사용자가 직접 단
+메모는 가치 높음 (현재 user_notes 보유 item 2794건).
+
+**현재 동작 (확인됨, 2026-05-23)**:
+- ✅ raw + URL 보존 — LinkedIn 도 일부 본문 추출됨 (og:description 기반 1.6-3.3K자)
+- ✅ source_url 보존 → UI 에서 클릭 가능 상태
+- ✅ `source_metadata.fetch_error` 마커 인프라 — 641건 표시 중
+- ✅ user_notes 누적 — Slack/텔레그램 caption append 흐름 동작 (2794건)
+
+**부족한 부분**:
+- ❌ "본문 추출 실패 / placeholder 자료" 를 모아 보는 별도 페이지
+- ❌ 수동 본문 입력 + 카테고리 분류 UI (현재 user_notes 만)
+- ❌ fetch_error 자동 마킹 backfill (짧은 raw + summary 없음 자동 검출)
+
+**작업 단계** (wave-5 또는 wave-6, 반나절~하루):
+1. fetch_error 마커 표준화 — 자동 마킹 backfill job (`backend/jobs/mark_fetch_failed.py`)
+2. frontend_v2 신규 페이지 "정리 필요한 자료" — 필터 (fetch_error / no_summary /
+   short_raw / 이미지 OCR 미처리 / PDF placeholder), 도메인/카테고리 그룹화
+3. 각 item 카드: preview + 원본 링크 + 수동 액션 버튼들
+   - "원본 새 창 열기" (기존)
+   - "본문 직접 붙여넣기" → raw_content 보강 또는 user_notes append
+   - "카테고리 수동 지정" → topic_categories 연결
+   - "재처리 큐 등록" → Wayback / playwright 시도 (D14 와 연결)
+4. 이미지 별도 그리드 뷰 (현재 텔레그램 사진 47건+) — Phase 3 OCR 도입 시
+   자동 채워질 자리. 지금은 사용자 캡션/메모 직접 입력.
+5. PDF placeholder 별도 처리 — 본문 추출 실패한 PDF 의 수동 요약 입력
+
+**연관**: D10 llm_wiki 의 multi-agent 가 wiki 페이지 통합 후처리 시 사용자 메모를
+중요 신호로 인입 가능.
+
+### D13. 임베딩 모델 별도 서버 분리 (vLLM-embed) ⏳ 진행 중 (2026-05-23)
+
+**배경**: Slack ingest 도중 발견된 GPU OOM 문제 (CLAUDE.md §13 Phase C wave-2) 의
+근본 해결. bge-m3 가 프로세스마다 (backend uvicorn / watcher / CLI) GPU 에 따로
+로드되어 vLLM (qwen2.5-7B, 18.8 GB) 과 함께 24 GB GPU 거의 점유, 추가 프로세스가
+OOM. 단기 해결책 (uvicorn stop) 매번 반복은 운영 burden + 실수 위험.
+
+**도구 선택**: vLLM 으로 통일 (2026-05-23 사용자 결정). TEI (HuggingFace) 가
+커뮤니티 표준이지만 시기적 우위일 뿐 vLLM 0.6+ 도 embedding 지원. self-host
+정체성 (§3) 과 운영 단순성 (LinkMind 의 모든 inference 가 vLLM 하나) 우위.
+
+**현재 진행**: TodoWrite 에서 추적. 변경 범위:
+- compose 에 vllm-embed 서비스 추가 (`vllm serve BAAI/bge-m3 --task embed`)
+- `backend/embedding/vllm_embed.py` 신규 (OpenAI-compatible `/v1/embeddings` HTTP client)
+- `backend/embedding/factory.py` 의 env switch (`EMBEDDING_BACKEND=local|vllm`)
+- env / step2_2 script / 단위 테스트
+- 반쪽 49건 backfill (`backfill_summary` 에 `_embed_and_index` 추가)
+- watcher 재기동 → 텔레그램 채널의 OOM 실패 메시지 자동 backfill
+
+GPU 메모리 예상: vLLM-llm 18.8 GB + vLLM-embed 3.8 GB = 22.6 GB / 24 GB
+(여유 1.4 GB). watcher/uvicorn/CLI 는 GPU 안 씀.

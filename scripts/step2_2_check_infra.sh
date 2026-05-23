@@ -186,6 +186,56 @@ else
     fi
 fi
 
+# ---- 7~8. vLLM 인스턴스 (선택, --profile vllm 활성화 시) -------------------
+# 컨테이너 없으면 info 로 skip (필수 아님). starting 상태 (모델 다운로드 중) 는 warn.
+
+check_vllm_instance() {
+    # $1 = label (사람이 보기 좋은 이름), $2 = compose service, $3 = container name,
+    # $4 = 호스트 포트, $5 = 기대 모델 이름 substring (예: "Qwen2.5-7B" 또는 "bge-m3")
+    local label="$1" svc="$2" cname="$3" port="$4" expect_model="$5"
+    local cid health run
+    cid="$(inspect_container "$svc" "$cname")"
+    if [ -z "$cid" ]; then
+        printf '  %s  %s — 미가동 (선택 — `docker compose --profile vllm up -d` 로 활성화)\n' \
+            "$(yellow 'ℹ️ ')" "$label"
+        return
+    fi
+    health="$(docker inspect -f '{{.State.Health.Status}}' "$cid" 2>/dev/null || echo unknown)"
+    run="$(docker inspect -f '{{.State.Running}}' "$cid" 2>/dev/null || echo unknown)"
+    case "$health" in
+        healthy)
+            ok "$label 컨테이너 healthy (running=${run})"
+            ;;
+        starting)
+            warn "$label 컨테이너 starting — 첫 시작이면 모델 다운로드 중일 수 있음 (5-30분)"
+            ;;
+        *)
+            fail "$label 상태: health=${health} running=${run}"
+            return
+            ;;
+    esac
+    # /v1/models endpoint 응답 + 기대 모델 이름 매칭
+    if command -v curl >/dev/null 2>&1; then
+        local resp
+        resp="$(curl -fsS -m 5 "http://127.0.0.1:${port}/v1/models" 2>/dev/null || true)"
+        if [ -z "$resp" ]; then
+            warn "$label /v1/models 응답 없음 (port ${port}) — 모델 로드 중일 수 있음"
+        elif echo "$resp" | grep -q "$expect_model"; then
+            ok "$label /v1/models 응답에 '${expect_model}' 확인"
+        else
+            warn "$label /v1/models 응답에 '${expect_model}' 없음 — VLLM_*_MODEL env 확인"
+        fi
+    fi
+}
+
+echo ""
+echo "[7] vLLM (LLM, 선택)"
+check_vllm_instance "vLLM-llm" vllm linkmind-vllm 8001 "${VLLM_MODEL:-Qwen2.5-7B}"
+
+echo ""
+echo "[8] vLLM-embed (선택, CLAUDE.md §13 D13)"
+check_vllm_instance "vLLM-embed" vllm-embed linkmind-vllm-embed 8002 "${VLLM_EMBED_MODEL:-bge-m3}"
+
 # ---- 요약 ------------------------------------------------------------------
 echo ""
 echo "────────────────────────────────────────────────"

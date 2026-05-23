@@ -54,10 +54,21 @@ class Settings(BaseSettings):
     qdrant_collection: str = Field(default="linkmind_items")
 
     # ─── Embedding ────────────────────────────────────────────────
-    embedding_backend: Literal["local", "tei", "ollama"] = Field(default="local")
+    # backend 선택:
+    #   - local : sentence-transformers 가 같은 프로세스 GPU 로드 (MVP 기본).
+    #             단 watcher / uvicorn / CLI 가 따로 도는 환경에서 같은 GPU 점유 →
+    #             OOM 위험 (CLAUDE.md §13 D13 의 Slack ingest 시 발견).
+    #   - vllm  : 별도 vllm-embed 컨테이너 (--runner pooling). 모든 프로세스가 HTTP
+    #             공유 → GPU 에 모델 1번만. 권장 운영 모드.
+    #   - tei   : HuggingFace Text Embeddings Inference. 도입 안 함 (vllm 으로 통일).
+    #   - ollama: Phase 2 후보.
+    embedding_backend: Literal["local", "vllm", "tei", "ollama"] = Field(default="local")
     embedding_model: str = Field(default="BAAI/bge-m3")
     embedding_dim: int = Field(default=1024)
     tei_url: str = Field(default="http://tei:80")
+    # vllm-embed (CLAUDE.md §13 D13) — `/v1` 포함, 기존 vllm_base_url 패턴 일관.
+    vllm_embed_base_url: str = Field(default="http://vllm-embed:8000/v1")
+    vllm_embed_base_url_local: str = Field(default="http://localhost:8002/v1")
     # 모델 캐시 받힌 후 True 로 두면 HF Hub metadata HEAD 요청 + 토큰 경고 모두 차단.
     # get_settings() 가 이 값을 보고 process env (HF_HUB_OFFLINE, TRANSFORMERS_OFFLINE)
     # 를 setdefault 로 export 해야 sentence-transformers/huggingface_hub 가 효과 봄.
@@ -172,6 +183,15 @@ class Settings(BaseSettings):
         if os.getenv("IN_DOCKER") == "1":
             return self.vllm_base_url
         return self.vllm_base_url_local
+
+    @property
+    def effective_vllm_embed_base_url(self) -> str:
+        """vllm-embed 서버 — backend / watcher / CLI 모두 호스트에서 도니까 보통
+        local (8002). 향후 backend 컨테이너화 시 IN_DOCKER=1 분기로 vllm-embed:8000 사용."""
+        import os
+        if os.getenv("IN_DOCKER") == "1":
+            return self.vllm_embed_base_url
+        return self.vllm_embed_base_url_local
 
     @property
     def storage_local_abs_path(self) -> Path:
