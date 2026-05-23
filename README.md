@@ -339,8 +339,9 @@ LinkMind 는 backend (`backend/`) + multi-channel gateway (`ai_agents/`) + Strea
 | **2.5 wave-3 (단일 self-contained, 2026-05-18)** | (1) §3 재정의 + §14 신규 (AGPL+Privacy+SaaS path) + docs/agent_architecture.md (2) `ai_agents/base.py` ChannelAgent ABC + telegram refactor (3) items 스키마 user_notes/is_read/read_at + GET/PATCH /items/{id} + LLM 키워드 추출 BackgroundTask (4) `backend/ingest/document/` 통합 추출 (PDF + DOCX/PPTX/TXT/MD, 한국어 cp949) (5) 텔레그램 첨부 자동 ingest + caption → user_notes 자동 (6) VOLUMES_ROOT env (compose bind mount root 설정 가능) (7) graph backend `/graph/*` — cytoscape.js 호환 JSON | ✅ 완료 |
 | **2.5 wave-4 (categories 레이어 + Union 그래프 + Theme, 2026-05-18~19)** | (1) **fallback topic** — external_id 없는 url 도 자체 topic 자동 (193 backfill, Houdini 같은 키워드도 카테고리로 살아남음) (2) **categories 스키마** + auto_link_categories job (61 카테고리 + 796 link, items.tags 빈도 ≥3) (3) **3-tier graph endpoint** — `/graph/categories`·`/graph/category/{slug}`·`/graph/topic/{uuid}` (4) **caption append 정책** — 모든 ingest 에 caption 파라미터, `append_item_user_notes` idempotent + timestamp 구분자 (5) **vLLM 가동** — Ollama → vLLM (qwen2.5:14b 3분 → vllm/Qwen2.5-7B 7초, 30x), `default_llm_provider: vllm` (6) **frontend 대개편** — i18n (한/EN 토글), 3-tier sidebar 트리 (cat ▸ topic ▸ item), 색상 그룹화 (Articles=녹/Video=빨/Code=보/Web=파/Note=시안), 양방향 highlight (`relatedIds`), Union 그래프 (`mergeGraph` 유니온 스테이션 hub-spoke), NodeDetails 통합 패널, ItemDetails 자동 expand, ThemeToggle (☀️/🌙/🖥 system + localStorage), Legend 그룹별 + 선택 상태 안내, navigation history (← 이전 / ← 전체) (7) 6개 텔레그램 fail 메시지 자동 처리 (url-only fetch_error key, youtube /live/, github owner-only fallback) (8) 181 topics title cleanup (cross-modal 차용 버그) | ✅ 완료 |
 | **C wave-2 Slack 일회성 backfill (2026-05-19 ~ 23)** | 시한 리스크 (사용자 구독 해제 임박) → 미리 확보. **모듈/CLI/테스트/스크립트**: `backend/ingest/slack/{export_parser,__init__,__main__}.py` (Telegram 패턴 미러: mrkdwn entity 정리, blocks/raw URL 추출, thread parent → 자식 caption 전파, 시스템 메시지 skip), `tests/test_slack_parser.py` 46 케이스, `scripts/slack_ingest_all.sh`. 부수 fix: `_classify_url` 의 `/pdf/` path 인식 (arxiv pdf URL 라우팅 버그). **전체 14241 메시지 ingest 완료** (2026-05-23). 결과: `archive/slack_export/issues/20260519-220427/manifest.json` (953 issues / 6.7% 실패율) — placeholder 633 + exception 320. fix 불가 (~40%): YouTube 영상 삭제 174 / LinkedIn login wall 141 / Facebook 65 / DNS 실패 20. 회수 가능 (~60건+): URL protocol 없음 9 / channel URL 14 / openaccess.thecvf 18 / medium Wayback 88 등. | ✅ 완료 |
-| **2.5 wave-5 인프라 (D13 vLLM-embed, 2026-05-23)** | **OOM 근본 fix**. watcher 재기동 시 발견 — bge-m3 가 프로세스마다 GPU 별도 로드 (uvicorn 4.4 GB + watcher 3.8 GB + vLLM 18.8 GB ≈ 27 GB > 24 GB). 도구 통일 결정 (사용자 직감 — TEI 안 쓰고 vLLM 으로): compose 에 `vllm-embed` (`--runner pooling`) 추가, `backend/embedding/vllm_embed.py` 신규 (OpenAI `/v1/embeddings` HTTP client), `factory.py` env switch (`EMBEDDING_BACKEND=vllm`), 7 단위 테스트, step2_2 check 보강. GPU 메모리 분할: vllm-llm 0.75 (18 GB) + vllm-embed 0.15 (3.6 GB) = ~22 / 24 GB. | 🚧 코드 완료 / 환경 검증 대기 (NVIDIA driver 재부팅 필요) |
-| **2.5 wave-5 1순위 (D13 검증 끝나면)** — D12 placeholder/실패 자료 정리 UI | §2 raw-first 확장 — LinkedIn / Facebook / Medium / 이미지 / PDF placeholder 도 raw + URL 무조건 보존. 별도 UI 페이지에서 원본 클릭 + 수동 본문/메모/카테고리 액션. fetch_error 마커 자동 backfill + frontend_v2 신규 페이지 (필터·도메인·카테고리 그룹) + 수동 액션 버튼 + 이미지 그리드. (사용자 새 제안, 2026-05-23). | 🚧 다음 |
+| **2.5 wave-5 인프라 (D13 vLLM-embed, 2026-05-23)** | **OOM 근본 fix**. bge-m3 가 프로세스마다 GPU 별도 로드 (uvicorn 4.4 GB + watcher 3.8 GB + vLLM 18.8 GB ≈ 27 GB > 24 GB). vLLM 통일 (TEI 안 씀): compose 에 `vllm-embed` (`--runner pooling`) 추가, `backend/embedding/vllm_embed.py` 신규, `factory.py` env switch. GPU: vllm-llm 18.5 + vllm-embed 2.0 = 20.5 / 24 GB. analysis_worker transaction 버그 fix + backfill_summary chunks 보강. | ✅ 완료 (commit 46c36eb) |
+| **Telegram multi-channel via yaml (2026-05-23)** | 단일 LinkMind-Inbox → 15개 채널 통합 inbox. `config/telegram_channels.yaml` 단일 진실 (필수: invite/delete_after_ingest, 선택: name; batch_size). watcher: batch sequential ([join → backfill → 다음]), FloodWait 자동 대기, channel_id cache + dialog cache (rate limit 회피). `ai_agents/telegram_channels.py` 신규 + 17 테스트. 옛 single fallback 완전 제거. | ✅ 완료 (commit 7d20119) |
+| **2.5 wave-5 1순위** — D12 placeholder/실패 자료 정리 UI | §2 raw-first 확장 — LinkedIn / Facebook / Medium / 이미지 / PDF placeholder 도 raw + URL 무조건 보존. 별도 UI 페이지에서 원본 클릭 + 수동 본문/메모/카테고리 액션. fetch_error 마커 자동 backfill + frontend_v2 신규 페이지 (필터·도메인·카테고리 그룹) + 수동 액션 버튼 + 이미지 그리드. manifest exception 318건 자연 흡수. | 🚧 다음 |
 | **2.5 wave-5 2순위** — D10 llm_wiki 아키텍처 (큰 그림) | karpathy llm_wiki + vlm_wiki + multi-agent + 자가학습. 일반 RAG 아닌 **topic = wiki 페이지** 단위. `external/karpathy/llm_wiki/` 분석 → `docs/llm_wiki_design.md` → `backend/agents/` (retriever/writer/critic) → `/wiki/{slug}`. | |
 | 2.5 wave-5 3~5 | D9 arxiv title 재시드 → D11 카테고리 UI 편집 → D8 cross-modality matching (wiki 모델 안에서 흡수) | |
 | 2 후반 (AI 카테고리/feedback/dataset exporter) | AI 카테고리 강화, feedback 테이블, dataset exporter (JSONL) | |
@@ -351,26 +352,40 @@ LinkMind 는 backend (`backend/`) + multi-channel gateway (`ai_agents/`) + Strea
 
 자세한 backlog 와 phase 별 완료/미구현 항목 — `docs/features_backlog.md` + `CLAUDE.md §13` 참고.
 
-### 다음 세션 진입 순서 (2026-05-23 갱신)
+### 다음 세션 진입 순서 (2026-05-23 갱신, 외출 직전)
 
-> **재부팅 직전 상태**: Slack ingest 완료 (953 issues / 6.7% 실패), watcher 재기동 시
-> OOM 발견 → D13 vLLM-embed 인프라 작업 진행 중. 코드 끝, NVIDIA driver 재부팅 대기.
-> 자세한 재개 가이드는 memory `project-next-session-entrypoint`.
+> **현재 상태**: D13 vLLM-embed 인프라 + Telegram multi-channel 둘 다 완료 + commit + push.
+> 다음 세션은 재가동 + watcher 동작 검증 + 우선순위 결정.
+> 자세한 재개 가이드는 memory `project_next_session_entrypoint`.
 
+**Todo list (다음 세션 시작 시 in-progress)**:
+
+| # | 작업 | 상태 |
+|---|---|---|
+| 1 | backend + frontend + watcher 재가동 (`bash scripts/step5_run_dev.sh`) | pending |
+| 2 | Telegram multi-channel watcher 동작 검증 — cache + dialog 시스템, batch sequential 진행, FloodWait reset 후 미들어간 10개 채널 점진 join | pending |
+| 3 | analysis_worker 가 새 텔레그램 메시지 자동 처리 (chunks + summary) 확인 | pending |
+| 4 | 사용자에 우선순위 질문 — D12 (placeholder UI, 빠른 win) vs D10 (llm_wiki, 큰 그림) | pending |
+
+**검증 명령 (다음 세션 시작 직후)**:
+```bash
+nvidia-smi                                                    # driver 정상
+docker ps | grep -E "vllm|postgres|qdrant|ollama"           # 인프라 컨테이너
+bash scripts/step5_run_dev.sh                                 # backend + frontend + watcher
+tail -f /tmp/telegram-watcher.log                             # watcher 진행
+# 기대 로그: "dialog cache: N channels", "batch 1/3 시작", "채널 등록: ..."
 ```
-🚧 [현재]      D13 vLLM-embed 환경 검증 (재부팅 후)
-   │
-   ▼
-☐  [todo 11] backfill_summary 보강 — _embed_and_index 호출 추가
-☐  [todo 12] 반쪽 49건 backfill (raw 있고 summary 없는 url/youtube/github/telegram)
-☐  [todo 13] watcher 재기동 — 텔레그램 채널의 OOM 메시지 자동 backfill
-☐  [todo 14] commit (한국어 메시지, §7)
-   │
-   ▼
+
+**rate limit 풀리지 않으면 — 30분~수시간 기다린 후 재기동**. cache 시스템이 작동하면
+이미 join 한 5개 채널 (LinkMind-Inbox + [김현구] New 논문 Articles + [김현구] Great
+동영상 + [김현구] Three.js 공부 + [운전자모니터링] 인체모델링) 즉시 OK. 나머지
+10개도 reset 후 점진 join.
+
+**우선순위 흐름**:
+```
 ☐  D12 — placeholder/실패 자료 정리 UI (사용자 새 제안 2026-05-23)
    - raw + URL 무조건 보존 + frontend_v2 신규 페이지 + 수동 액션 + 이미지 그리드
-   - issues manifest 재처리 (arxiv `/pdf/` retry / Wayback fallback / 단축 URL /
-     LinkedIn skip) 가 이 안에서 흡수
+   - manifest exception 318건 (YouTube channel URL 등) 자연 흡수
    │
    ▼
 ☐  D10 — llm_wiki 아키텍처 (큰 그림, 여러 세션)
