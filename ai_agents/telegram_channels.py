@@ -5,14 +5,16 @@ config/telegram_channels.yaml 로드 + 검증. multi-channel watcher 가 사용.
 
 yaml 스키마:
 
-    batch_size: 5                                # 선택 (default 5) — batch sequential 단위
     channels:
       - invite: https://t.me/+abc                # 필수
         delete_after_ingest: true                # 필수 (채널별 inbox 패턴 on/off)
         name: LinkMind-Inbox                     # 선택 (로그/식별용, 비우면 채널 title 자동)
 
 비밀이 아닌 운영 데이터라 git commit 가능. env 에는 path 만 (TELEGRAM_CHANNELS_CONFIG).
-yaml 파일 미존재 시 빈 TelegramWatcherConfig (default 값) — watcher 가 single fallback.
+yaml 파일 미존재 시 빈 TelegramWatcherConfig — watcher 가 channel 0 으로 listen 불가 종료.
+
+처리 방식: watcher 가 yaml 의 채널을 한 개씩 [resolve → backfill → 다음] 순차 처리.
+GPU VRAM 한계 (bge-m3 임베딩) 로 어차피 병렬 ingest 불가 — 채널 수 무관 동일 코드.
 """
 
 from __future__ import annotations
@@ -22,10 +24,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 logger = logging.getLogger("telegram-channels")
-
-# batch_size 의 기본값 + 안전 한계 — 너무 크면 Telegram FloodWait 위험.
-_DEFAULT_BATCH_SIZE = 5
-_MAX_BATCH_SIZE = 20
 
 
 @dataclass(frozen=True)
@@ -46,23 +44,22 @@ class TelegramChannelConfig:
 
 @dataclass(frozen=True)
 class TelegramWatcherConfig:
-    """yaml 전체 — batch_size + 채널 list. watcher 가 이 namespace 받아 운영."""
+    """yaml 전체 — 채널 list. watcher 가 이 namespace 받아 한 개씩 순차 처리."""
 
-    batch_size: int = _DEFAULT_BATCH_SIZE
     channels: list[TelegramChannelConfig] = field(default_factory=list)
 
 
 def load_telegram_channels(yaml_path: str | Path) -> TelegramWatcherConfig:
-    """yaml 파일에서 채널 list + batch_size 로드 + 검증.
+    """yaml 파일에서 채널 list 로드 + 검증.
 
     Args:
         yaml_path: yaml 파일 경로 (절대/상대 모두 OK).
 
     Returns:
-        TelegramWatcherConfig — 파일 미존재 시 default (빈 channels + batch_size=5).
+        TelegramWatcherConfig — 파일 미존재 시 default (빈 channels).
 
     Raises:
-        RuntimeError: yaml 파싱 실패 / 필수 필드 누락 / 타입 불일치 / batch_size 범위.
+        RuntimeError: yaml 파싱 실패 / 필수 필드 누락 / 타입 불일치.
     """
     path = Path(yaml_path)
     if not path.exists():
@@ -88,21 +85,6 @@ def load_telegram_channels(yaml_path: str | Path) -> TelegramWatcherConfig:
         raise RuntimeError(
             f"yaml 최상위에 'channels' key 가 없음 ({path}). 스키마는 docstring 참조."
         )
-
-    # batch_size — 선택 필드, default 5. 1 이상 _MAX_BATCH_SIZE 이하.
-    batch_size = _DEFAULT_BATCH_SIZE
-    if "batch_size" in raw:
-        bs = raw["batch_size"]
-        if not isinstance(bs, int) or isinstance(bs, bool):
-            raise RuntimeError(
-                f"batch_size 는 정수여야 함 ({path}, 실제: {type(bs).__name__})"
-            )
-        if bs < 1 or bs > _MAX_BATCH_SIZE:
-            raise RuntimeError(
-                f"batch_size 는 1~{_MAX_BATCH_SIZE} 사이 ({path}, 실제: {bs}). "
-                f"너무 크면 Telegram FloodWait 위험."
-            )
-        batch_size = bs
 
     items = raw["channels"]
     if not isinstance(items, list):
@@ -145,4 +127,4 @@ def load_telegram_channels(yaml_path: str | Path) -> TelegramWatcherConfig:
             delete_after_ingest=delete_flag,
             name=name.strip() if name else None,
         ))
-    return TelegramWatcherConfig(batch_size=batch_size, channels=out)
+    return TelegramWatcherConfig(channels=out)

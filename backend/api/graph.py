@@ -29,6 +29,7 @@ from backend.db.repository import (
     list_items_summary,
     list_topic_category_links,
     list_topics,
+    list_topics_by_ids,
     list_topics_for_item,
     list_topics_in_category,
     search_items_by_text,
@@ -207,11 +208,11 @@ async def graph_all_categories(
     cat_ids = [c["id"] for c in cats]
     cat_topic_links = await list_topic_category_links(session, category_ids=cat_ids)
 
-    # topic 들 (UI 가 그 안의 item 들은 별도 expand 요청 — 가벼움)
+    # topic 들 (UI 가 그 안의 item 들은 별도 expand 요청 — 가벼움).
+    # topic_ids 직접 fetch — 옛 list_topics(limit=20000) 은 topic 23k+ 환경에서 limit
+    # 밖 topic 의 cat_topic_link edge 가 dangling → frontend "node not found". 2026-05-25 fix.
     topic_ids = list({lk["topic_id"] for lk in cat_topic_links})
-    topics = await list_topics(session, limit=20000)  # 전체에서 매칭만 — id 별 lookup
-    topic_by_id = {str(t["id"]): t for t in topics}
-    topics_in_view = [topic_by_id[str(tid)] for tid in topic_ids if str(tid) in topic_by_id]
+    topics_in_view = await list_topics_by_ids(session, topic_ids=topic_ids)
 
     # cytoscape 변환
     nodes: list[GraphNode] = []
@@ -398,13 +399,11 @@ async def graph_search(
     items = await list_items_summary(session, item_ids=item_ids_uuid)
     links = await list_item_topic_links(session, item_ids=item_ids_uuid)
 
-    # 결과 item 의 모든 topic 도 노드로 표시 → 사용자가 어떤 cluster 인지 한 눈에
+    # 결과 item 의 모든 topic 도 노드로 표시 → 사용자가 어떤 cluster 인지 한 눈에.
+    # topic_ids 직접 fetch (옛 list_topics(limit=500) 은 limit 밖 topic 누락 → frontend
+    # force-graph 의 "node not found" 유발). 2026-05-25 fix.
     topic_ids = list({lk["topic_id"] for lk in links})
-    topics = []
-    if topic_ids:
-        all_topics = await list_topics(session, limit=500)
-        topic_map = {t["id"]: t for t in all_topics}
-        topics = [topic_map[tid] for tid in topic_ids if tid in topic_map]
+    topics = await list_topics_by_ids(session, topic_ids=topic_ids)
 
     return build_graph_response(topics, items, links)
 
@@ -444,11 +443,9 @@ async def graph_item_neighborhood(
     self_summary_list = await list_items_summary(session, item_ids=[item_id])
     items_combined = list(neighbor_items_by_id.values()) + self_summary_list
 
-    # topic 노드 변환을 위해 list_topics 의 full row 필요 (item_count 등)
-    topics_full: list[dict[str, Any]] = []
-    if topic_ids:
-        all_topics = await list_topics(session, limit=500)
-        topic_map = {t["id"]: t for t in all_topics}
-        topics_full = [topic_map[tid] for tid in topic_ids if tid in topic_map]
+    # topic 노드 변환 — topic_ids 직접 fetch (옛 list_topics(limit=500) 방식은
+    # topic 23k+ 환경에서 limit 밖 topic 의 node 가 누락돼 frontend force-graph 의
+    # "node not found" runtime error 유발). 2026-05-25 fix.
+    topics_full = await list_topics_by_ids(session, topic_ids=topic_ids)
 
     return build_graph_response(topics_full, items_combined, all_links)

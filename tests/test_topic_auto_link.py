@@ -126,14 +126,41 @@ async def test_youtube_video_creates_video_topic(state: _State):
 
 
 @pytest.mark.asyncio
-async def test_empty_external_ids_noop(state: _State):
-    """external_ids 가 비어 있으면 topic link 호출 없이 빈 list 반환."""
+async def test_empty_external_ids_creates_fallback_topic(state: _State):
+    """external_id 가 하나도 없는 url 도 자체 fallback topic 1개 생성 (wave-3, 2026-05-18).
+
+    이유: 그래프에서 모든 자료가 일급 시민이 되도록. slug=`url:item:<uuid>` 형식.
+    카테고리 link 도 가능해짐 (items.tags → topic.tags 자동 매칭).
+    """
+    item_id = uuid4()
     out = await url_module.auto_link_topics(
-        session=None, item_id=uuid4(), source_type="url",
-        title="any", ids=[],
+        session=None, item_id=item_id, source_type="url",
+        title="My Blog Post", ids=[],
     )
-    assert out == []
-    assert state.links == []
+    assert len(out) == 1
+    fallback = out[0]
+    assert fallback["slug"] == f"url:item:{item_id}"
+    assert fallback["title"] == "My Blog Post"
+    assert fallback["primary_external_id"] is None
+    assert fallback["role"] == "primary"
+    assert fallback["confidence"] == 1.0
+    # link 도 1회 호출됐어야 함 (item ↔ fallback topic)
+    assert len(state.links) == 1
+    assert state.links[0]["topic_id"] == fallback["id"]
+    assert state.links[0]["item_id"] == item_id
+    assert state.links[0]["role"] == "primary"
+
+
+@pytest.mark.asyncio
+async def test_empty_external_ids_no_title_uses_slug_as_title(state: _State):
+    """title 도 없으면 fallback topic 의 title 은 slug 자체."""
+    item_id = uuid4()
+    out = await url_module.auto_link_topics(
+        session=None, item_id=item_id, source_type="url",
+        title=None, ids=[],
+    )
+    assert len(out) == 1
+    assert out[0]["title"] == f"url:item:{item_id}"
 
 
 @pytest.mark.asyncio

@@ -53,8 +53,12 @@ _YT_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"}
 def parse_youtube_url(url: str) -> dict[str, str | None]:
     """YouTube URL 을 video_id / playlist_id / kind 로 분해.
 
-    kind: 'video' | 'playlist' | 'unknown'.
+    kind: 'video' | 'playlist' | 'channel' | 'unknown'.
     동일 URL 에 v=... 와 list=... 둘 다 있으면 list 우선 (playlist 우선 ingest).
+
+    channel handle (/@username, /@username/videos, /c/name, /channel/UC..., /user/name)
+    은 'channel' kind — video/playlist ingest 어렵지만 channel page 의 OG meta 는
+    fetch 가능하므로 dispatcher 가 url ingest 로 fallback.
     """
     u = urlparse(url)
     host = (u.hostname or "").lower()
@@ -73,6 +77,12 @@ def parse_youtube_url(url: str) -> dict[str, str | None]:
 
     if u.path == "/playlist" and "list" in qs:
         return {"kind": "playlist", "video_id": None, "playlist_id": qs["list"][0]}
+
+    # channel handle URL — 모던 (/@username[/videos|/shorts|/streams|...]) +
+    # legacy (/c/<name>, /channel/UC..., /user/<name>). video/playlist 가 아니라
+    # channel 메타 (소개, 최근 영상) 페이지 — url ingest 로 fallback 위임.
+    if u.path.startswith("/@") or u.path.startswith(("/c/", "/channel/", "/user/")):
+        return {"kind": "channel", "video_id": None, "playlist_id": None}
 
     vid: str | None = None
     if u.path == "/watch":
@@ -457,17 +467,156 @@ async def ingest_youtube(
     force: bool = False,
     caption: str | None = None,
 ) -> dict[str, Any]:
-    """URL 의 형태 (video / playlist) 자동 판별 후 적절한 ingester 호출."""
+    """URL 의 형태 (video / playlist / channel) 자동 판별 후 적절한 ingester 호출.
+
+    Fallback chain (video URL 의 경우):
+      1. yt-dlp 본 흐름 — title + channel + duration + description + transcript
+      2. yt-dlp 실패 (IP 차단 가장 흔함, "video not available" 위장) → oEmbed API
+         (public, IP 차단 거의 없음) 로 title + author + thumbnail 만이라도 보존
+      3. oEmbed 도 실패 → url ingest 로 (OG meta + URL 만)
+
+    channel handle / unknown — url ingest 로 직행 (channel page OG meta 활용).
+    2026-05-25.
+    """
     parsed = parse_youtube_url(url)
     if parsed["kind"] == "playlist":
         return await ingest_youtube_playlist(
             url, analyze_now=analyze_now, force=force, caption=caption,
         )
     if parsed["kind"] == "video":
-        return await ingest_youtube_video(
-            url, analyze_now=analyze_now, force=force, caption=caption,
-        )
-    raise ValueError(f"YouTube URL 형식을 판별할 수 없습니다: {url}")
+        try:
+            return await ingest_youtube_video(
+                url, analyze_now=analyze_now, force=force, caption=caption,
+            )
+        except Exception as e:  # noqa: BLE001
+            # yt-dlp 실패 — 가장 흔한 원인은 IP 차단 ("video not available" 위장).
+            # 사용자 브라우저로는 보이는 영상이라도 cloud/서버 IP 면 거절당함.
+            logger.info(
+                "YouTube video yt-dlp 실패 (%s: %s) — oEmbed fallback 시도",
+                type(e).__name__, e,
+            )
+            video_id = parsed.get("video_id")
+            if video_id:
+                try:
+                    return await ingest_youtube_video_via_oembed(
+                        video_id=video_id, video_url=url,
+                        analyze_now=analyze_now, force=force, caption=caption,
+                    )
+                except Exception as oe:  # noqa: BLE001
+                    logger.info(
+                        "oEmbed 도 실패 (%s: %s) — url ingest 로 마지막 fallback",
+                        type(oe).__name__, oe,
+                    )
+            return await _fallback_to_url_ingest(
+                url, analyze_now=analyze_now, force=force, caption=caption,
+            )
+    # channel handle / unknown — url ingest 로 fallback (channel page OG meta 활용)
+    logger.info(
+        "YouTube URL '%s' kind=%s (video/playlist 아님) — url ingest 로 fallback",
+        url, parsed["kind"],
+    )
+    return await _fallback_to_url_ingest(
+        url, analyze_now=analyze_now, force=force, caption=caption,
+    )
+
+
+async def _fallback_to_url_ingest(
+    url: str, *,
+    analyze_now: bool,
+    force: bool,
+    caption: str | None,
+) -> dict[str, Any]:
+    """url ingest 모듈 lazy import 후 호출 — circular import 회피."""
+    from backend.ingest.url import ingest_url
+    return await ingest_url(
+        url, analyze_now=analyze_now, force=force, caption=caption,
+    )
+
+
+async def _fetch_oembed(video_url: str) -> dict[str, Any] | None:
+    """YouTube oEmbed API 호출 — title / author_name / thumbnail_url 등.
+
+    public endpoint 라 IP 차단 거의 없음. yt-dlp 가 거절당한 영상의 메타도 잘 반환.
+    실패 시 None — caller 가 url ingest 등 다음 fallback 으로.
+    """
+    import httpx
+    oembed_url = (
+        "https://www.youtube.com/oembed"
+        f"?url={video_url}&format=json"
+    )
+    try:
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            r = await client.get(oembed_url)
+            r.raise_for_status()
+            return r.json()
+    except Exception as e:  # noqa: BLE001
+        logger.info("oEmbed fetch 실패 (video_url=%s): %s", video_url, e)
+        return None
+
+
+async def ingest_youtube_video_via_oembed(
+    *, video_id: str, video_url: str,
+    analyze_now: bool = True,
+    force: bool = False,
+    caption: str | None = None,
+) -> dict[str, Any]:
+    """oEmbed API 만으로 ingest — yt-dlp IP 차단 시 fallback.
+
+    raw_content = title + channel + thumbnail URL. description 없음 (oEmbed 미제공).
+    그래도 사용자 입력 caption (텔레그램 메모) + LLM 이 title 로 키워드 추출 가능.
+
+    raise: oEmbed 호출 실패 또는 응답이 비정상 — caller 가 catch 해서 다음 fallback.
+    """
+    data = await _fetch_oembed(video_url)
+    if not data:
+        raise RuntimeError(f"oEmbed 응답 없음: {video_url}")
+
+    title = data.get("title") or "(no title)"
+    channel = data.get("author_name") or ""
+    channel_url = data.get("author_url") or ""
+    thumbnail = data.get("thumbnail_url") or ""
+    canonical = _canonical_video_url(video_id)
+
+    raw_body = "\n".join(p for p in [
+        f"YouTube Video: {title}",
+        f"URL: {canonical}",
+        f"Channel: {channel}",
+        f"Channel URL: {channel_url}" if channel_url else "",
+        f"Thumbnail: {thumbnail}" if thumbnail else "",
+        "",
+        "## Description",
+        "(oEmbed fallback — yt-dlp IP 차단으로 description/transcript 미수집)",
+    ] if p)
+
+    doc = ExtractedDoc(
+        body=raw_body,
+        title=title,
+        abstract=None,                           # oEmbed 엔 description 없음
+        paper_keywords=["no-transcript", "oembed-fallback"],
+    )
+
+    ext_ids: list[ExternalId] = [ExternalId(kind="yt", value=video_id)]
+
+    return await _save_with_summary(
+        doc=doc,
+        source_type="youtube",
+        source_id=video_id,
+        source_url=canonical,
+        source_metadata={
+            "kind": "video",
+            "video_id": video_id,
+            "channel": channel,
+            "channel_url": channel_url,
+            "thumbnail_url": thumbnail,
+            "has_transcript": False,
+            "fetch_method": "oembed",            # provenance: 어떤 경로로 들어왔나
+            "external_ids": [{"kind": x.kind, "value": x.value} for x in ext_ids],
+        },
+        analyze_now=analyze_now,
+        force=force,
+        external_ids=ext_ids,
+        user_caption=caption,
+    )
 
 
 # ── 공통 저장 (url ingest 와 동일 helper 재사용) ──────────────

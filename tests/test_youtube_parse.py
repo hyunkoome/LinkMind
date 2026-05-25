@@ -68,3 +68,50 @@ def test_non_youtube_host_returns_unknown():
     assert r["kind"] == "unknown"
     assert r["video_id"] is None
     assert r["playlist_id"] is None
+
+
+# ─── channel handle URL — 2026-05-25 추가 (url ingest fallback 위임) ────────
+
+
+def test_channel_handle_modern():
+    """/@username — 모던 channel handle URL."""
+    r = parse_youtube_url("https://www.youtube.com/@gskim")
+    assert r["kind"] == "channel"
+    assert r["video_id"] is None
+    assert r["playlist_id"] is None
+
+
+def test_channel_handle_with_videos_tab():
+    """/@username/videos — channel 의 영상 탭."""
+    r = parse_youtube_url("https://www.youtube.com/@CppCon/videos")
+    assert r["kind"] == "channel"
+
+
+def test_channel_handle_streams_tab():
+    """/@username/streams — channel 의 라이브 탭."""
+    r = parse_youtube_url("https://www.youtube.com/@somechan/streams")
+    assert r["kind"] == "channel"
+
+
+def test_channel_handle_m_youtube_host():
+    """m.youtube.com 의 channel handle 도 같이."""
+    r = parse_youtube_url("https://m.youtube.com/@Motioncapture/videos")
+    assert r["kind"] == "channel"
+
+
+def test_legacy_channel_path():
+    """legacy /channel/UC... ID 형식."""
+    r = parse_youtube_url("https://www.youtube.com/channel/UCxxxxxxxxxxxxx")
+    assert r["kind"] == "channel"
+
+
+def test_legacy_c_custom_path():
+    """legacy /c/<customname> 커스텀 URL."""
+    r = parse_youtube_url("https://www.youtube.com/c/SomeChannel")
+    assert r["kind"] == "channel"
+
+
+def test_legacy_user_path():
+    """legacy /user/<username> URL."""
+    r = parse_youtube_url("https://www.youtube.com/user/legacyuser")
+    assert r["kind"] == "channel"

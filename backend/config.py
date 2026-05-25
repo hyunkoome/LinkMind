@@ -122,9 +122,11 @@ class Settings(BaseSettings):
     telegram_api_id: str = Field(default="")       # my.telegram.org 에서 발급 (숫자)
     telegram_api_hash: str = Field(default="")     # my.telegram.org 에서 발급 (32자)
     telegram_session_path: str = Field(default="volumes/telegram/inbox.session")
-    # multi-channel 운영 (2026-05-23) — invite link / 채널명 / 메타 / batch_size 를 yaml 로
-    # 단일 관리. 비밀이 아니므로 git commit 가능. env 에는 경로만 (12-factor).
-    # yaml 미존재 시 watcher 가 error 종료 (사용자가 yaml 채우도록 강제).
+    # multi-channel 운영 (2026-05-23) — invite link / 채널명 / 메타를 yaml 로 단일 관리.
+    # watcher 가 yaml 순서대로 한 채널씩 [resolve → backfill → 다음] 순차 처리
+    # (2026-05-25 리팩토링 — GPU VRAM 한계로 어차피 병렬 ingest 불가).
+    # 비밀이 아니므로 git commit 가능. env 에는 경로만 (12-factor).
+    # yaml 미존재 시 watcher 가 channel 0 으로 listen 불가 종료.
     telegram_channels_config: str = Field(default="config/telegram_channels.yaml")
 
     # ─── Storage ──────────────────────────────────────────────────

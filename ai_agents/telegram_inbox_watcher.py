@@ -122,6 +122,9 @@ def _load_watcher_config(s: Settings) -> TelegramWatcherConfig:
 _FLOOD_WAIT_MAX_S = 300
 
 # 채널 resolve (join) 사이 sleep — Telegram rate limit 예방. 보통 2-3초로 충분.
+# 순차 처리 (한 채널씩 [resolve → backfill]) 모드에선 backfill 자체가 시간 buffer 라
+# 큰 채널 사이에선 사실상 redundant 하지만, 메시지 없는 빈 채널 연속이거나 backfill=0
+# 인 경우엔 이게 유일한 rate limit cooldown 이라 유지.
 _CHANNEL_RESOLVE_SLEEP_S = 3.0
 
 
@@ -268,8 +271,6 @@ class TelegramChannelAgent(ChannelAgent):
         텔레그램은 사용자 입력 channel — 채널 빠르게 비우는 게 우선. raw + 채널
         삭제만 즉시, chunks (embedding) + summary (LLM) 는 backend 의 analysis_worker
         가 백그라운드로 천천히 처리.
-
-        batch_size 는 yaml 의 batch_size 필드 (default 5). setup() 에서 자동 결정.
         """
         self.settings: Settings | None = None
         self.client = None       # telethon.TelegramClient — setup 이후 채워짐
@@ -288,12 +289,8 @@ class TelegramChannelAgent(ChannelAgent):
         """yaml 의 채널 list (편의 접근)."""
         return self.watcher_config.channels if self.watcher_config else []
 
-    @property
-    def batch_size(self) -> int:
-        return self.watcher_config.batch_size if self.watcher_config else 5
-
     async def setup(self) -> None:
-        """env 검증 + yaml 로드 + Telethon client start. 채널 resolve 는 run() 에서 batch 별로."""
+        """env 검증 + yaml 로드 + Telethon client start. 채널 resolve 는 run() 에서 한 개씩."""
         _check_telethon()
         self.settings = _check_env()
         self.watcher_config = _load_watcher_config(self.settings)
@@ -314,8 +311,8 @@ class TelegramChannelAgent(ChannelAgent):
             str(session_path), api_id_int, self.settings.telegram_api_hash
         )
         logger.info(
-            "Telethon 시작 — session=%s, channels=%d (batch=%d)",
-            session_path, len(self.channel_configs), self.batch_size,
+            "Telethon 시작 — session=%s, channels=%d (한 채널씩 순차 처리)",
+            session_path, len(self.channel_configs),
         )
         # start() 가 처음 호출 시 전화번호 + SMS 코드 대화식 입력.
         await self.client.start()
@@ -388,53 +385,31 @@ class TelegramChannelAgent(ChannelAgent):
         return resolved
 
     async def run(self, *, backfill: int = 0, listen: bool = True) -> int:
-        """daemon 진입점. batch sequential — [join batch → backfill batch → 다음].
+        """daemon 진입점. 한 채널씩 순차 처리 — [resolve → backfill → 다음 채널 ...].
 
         Args:
-            backfill: 채널별 최근 N개 메시지 먼저 처리 (0 = skip, batch 도 skip).
-            listen:   모든 batch 끝난 후 통합 listen (False = backfill 만 하고 종료).
+            backfill: 채널별 최근 N개 메시지 먼저 처리 (0 = skip).
+            listen:   모든 채널 처리 끝난 후 통합 listen (False = backfill 만 하고 종료).
 
-        batch 패턴 이유 (사용자 결정 2026-05-23):
-        1. Telegram join rate limit 회피 (한 batch 안의 join 사이에 sleep, batch 간
-           긴 sleep + backfill 자체가 시간 buffer).
-        2. backend 부하 분산 — 한 batch 의 backfill 다 끝나야 다음 채널 메시지 쏟아짐.
-        3. progress 가시화 — "batch 1/3 완료" 로그가 사용자 시각적 진척도.
-
-        backfill=0 일 때는 batch 안 나누고 한 번에 모두 join 후 listen (단순).
+        순차 처리 이유 (사용자 결정 2026-05-25):
+        - GPU VRAM 한계 (bge-m3 임베딩) 로 채널간 병렬 ingest 자체가 불가.
+        - 각 채널의 backfill 시간이 자연 rate limit cooldown 역할 → 별도 batch
+          buffer 불필요.
+        - 첫 채널부터 즉시 ingest 시작 (batch 가 모든 채널 join 까지 대기 안 함).
+        - 100 채널이든 1000 채널이든 동일 코드 (batch 수 계산/로그 없음).
         """
         await self.setup()
         try:
-            if backfill > 0 and len(self.channel_configs) > self.batch_size:
-                # batch sequential 모드 — yaml 의 채널을 batch_size 씩 나눠 처리.
-                batches = [
-                    self.channel_configs[i:i + self.batch_size]
-                    for i in range(0, len(self.channel_configs), self.batch_size)
-                ]
-                total = len(batches)
-                for bi, batch_cfgs in enumerate(batches, start=1):
-                    logger.info("─── batch %d/%d 시작 — %d 채널 ───", bi, total, len(batch_cfgs))
-                    batch_resolved: list[ResolvedChannel] = []
-                    for idx, cfg in enumerate(batch_cfgs):
-                        if idx > 0:
-                            await asyncio.sleep(_CHANNEL_RESOLVE_SLEEP_S)
-                        rc = await self._resolve_one(cfg)
-                        if rc:
-                            batch_resolved.append(rc)
-                    # 이 batch 의 채널들 backfill 완주 — 다음 batch 전에.
-                    for rc in batch_resolved:
-                        await self._backfill_channel(rc, backfill)
-                    logger.info("─── batch %d/%d 완료 ───", bi, total)
-                    if bi < total:
-                        # 다음 batch 전 짧은 buffer — backfill 이 이미 시간 buffer 역할.
-                        await asyncio.sleep(_BATCH_BREATHE_S)
-            else:
-                # backfill 안 하거나 채널 수 적으면 단순 모드 — 한 번에 다 join.
-                for idx, cfg in enumerate(self.channel_configs):
-                    if idx > 0:
-                        await asyncio.sleep(_CHANNEL_RESOLVE_SLEEP_S)
-                    rc = await self._resolve_one(cfg)
-                    if rc and backfill > 0:
-                        await self._backfill_channel(rc, backfill)
+            total = len(self.channel_configs)
+            for idx, cfg in enumerate(self.channel_configs, start=1):
+                if idx > 1:
+                    # 채널간 sleep — backfill 자체가 cooldown 이라 보통 redundant 하지만
+                    # 빈 채널 연속 / backfill=0 일 때는 이게 유일한 rate limit 방어.
+                    await asyncio.sleep(_CHANNEL_RESOLVE_SLEEP_S)
+                logger.info("[%d/%d] 채널 처리 시작: %s", idx, total, cfg.display_name())
+                rc = await self._resolve_one(cfg)
+                if rc and backfill > 0:
+                    await self._backfill_channel(rc, backfill)
 
             if not self.channels:
                 logger.error("resolve 된 채널이 0개 — listen 불가. yaml 또는 네트워크 확인.")

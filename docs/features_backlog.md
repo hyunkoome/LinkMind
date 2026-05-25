@@ -544,3 +544,45 @@ OOM. 단기 해결책 (uvicorn stop) 매번 반복은 운영 burden + 실수 위
 
 GPU 메모리 예상: vLLM-llm 18.8 GB + vLLM-embed 3.8 GB = 22.6 GB / 24 GB
 (여유 1.4 GB). watcher/uvicorn/CLI 는 GPU 안 씀.
+
+### D14. wave-5 보강 (운영 자동화 + Graph fix + Ingest fallback) ✅ 완료 (2026-05-25)
+
+오늘 한 세션에 정리된 운영 안정성 + UX 보강 5종. CLAUDE.md §13 의 "wave-5 보강"
+섹션 참고. 핵심:
+
+1. **Telegram watcher batch 구조 제거** — GPU VRAM 한계 (bge-m3) 로 어차피 직렬
+   ingest, batch 효익 X. yaml 순서대로 한 채널씩 `[resolve → backfill → 다음]`.
+   `[N/M] 채널 처리 시작:` 형식 진척 로그. `batch_size` 필드 silent ignore (backward
+   compat).
+2. **`ai_agents/check_telegram_invites.py` 신규** — invite 검증 + 자동 정리 (yaml +
+   `channel_id_cache.json`, `.bak.<ts>` 백업). 분류: ALIVE / NOT-MEMBER (dialog
+   snapshot 검증) / DEAD-HASH / SKIPPED. CLI: `python -m ai_agents.check_telegram_invites`
+   (기본 자동 정리) / `--dry-run` (검증만). 17 unit test.
+3. **`scripts/step5_run_dev.sh` 통합** — watcher 시작 직전 check 자동 실행
+   (`--skip-check` flag 또는 `SKIP_INVITE_CHECK=1`). session lock 충돌 없음 (check
+   가 disconnect 후 watcher session 잡음). 검증: yaml 14→6 / cache 9→3 entries.
+4. **Graph "node not found" 근본 fix** — `backend/api/graph.py` 3 endpoint
+   (`graph_categories` / `graph_search` / `graph_item_neighborhood`) 가
+   `list_topics(limit=500)` 으로 fetch 후 dict lookup. DB 의 23,631 topic 중 limit
+   밖은 dangling → frontend react-force-graph 가 runtime error. `list_topics_by_ids
+   (ids)` 신규로 정확 fetch. smoke: 모든 endpoint dangling=0.
+5. **URL ingest OG meta fallback** — `_parse_og_meta` / `_og_as_body` /
+   `_body_is_meaningless` 신규. body 추출 실패 (또는 readability 빈 wrapper) 시
+   og:title/description/image 로 body 합성. Telegram/Slack 카드와 동일 데이터.
+   abstract cutoff 200자 → 100자 (SNS 카드 description). 17 unit test.
+6. **YouTube channel handle + oEmbed fallback** — `parse_youtube_url` 에 `channel`
+   kind 추가 (`/@username`, `/c/`, `/channel/UC...`, `/user/`). yt-dlp 실패
+   (가장 흔한 원인은 IP 차단, "video not available" 위장) 시 oEmbed API (public,
+   IP 차단 거의 없음) 로 title + author + thumbnail 보존 + LLM summary/tags. 검증:
+   차단됐던 `hYG9uREf4EU` → "CVPR2026 - SV-GS..." title + summary 431자 + tags 10개.
+   7 unit test.
+7. **fallback topic 테스트 갱신** — wave-3 의 fallback topic (`url:item:<uuid>`)
+   동작 반영. 옛 noop 테스트 제거, 신규 2 케이스.
+
+**총 영향**: 327 pytest passed / 0 회귀. 327 = 282 (이전) + 45 (신규 unit test).
+
+**검색 quality 이슈 발견 + D10 이월**: PDF chunk text extraction 실패 (수학식
+PDF 의 pypdf garbage) 로 검색 score 가 낮음. summary 는 정상 한국어인데 embed
+안 됨. 단기 fix (summary chunk 추가 / PDF re-extract) 는 D10 llm_wiki 가 검색
+패턴 재설계 (chunk cosine → wiki 페이지 retriever) 하므로 redundant. memory
+[[project-search-quality-issue]] 보존.

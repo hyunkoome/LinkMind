@@ -552,6 +552,35 @@ async def list_topics(
     return [dict(r) for r in res.mappings().all()]
 
 
+async def list_topics_by_ids(
+    session: AsyncSession, *, topic_ids: list[UUID],
+) -> list[dict[str, Any]]:
+    """주어진 topic id list 의 topic row 만 fetch (LIMIT 없음).
+
+    graph endpoint 들이 "특정 topic 들의 full row 필요" 케이스에 사용. 옛 패턴은
+    list_topics(limit=500) 으로 전체 가져온 후 dict lookup — limit 밖의 topic 은
+    조용히 빠져 frontend force-graph 의 'node not found' runtime error 유발.
+    이 함수는 그 dangling node 문제 근본 fix (2026-05-25).
+
+    빈 list 입력 → 빈 응답 (DB roundtrip 없이).
+    """
+    if not topic_ids:
+        return []
+    res = await session.execute(
+        text("""
+            SELECT t.id, t.slug, t.title, t.primary_external_id, t.tags,
+                   t.created_at, t.updated_at,
+                   COUNT(it.item_id) AS item_count
+            FROM topics t
+            LEFT JOIN item_topics it ON it.topic_id = t.id
+            WHERE t.id = ANY(:tids)
+            GROUP BY t.id
+        """),
+        {"tids": topic_ids},
+    )
+    return [dict(r) for r in res.mappings().all()]
+
+
 # ──────────────────────────────────────────────────────────────
 # categories  +  topic_categories  (키워드 카테고리 노드 계층)
 # ──────────────────────────────────────────────────────────────

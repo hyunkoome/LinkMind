@@ -146,10 +146,35 @@ def extract_doc(html: str, url: str | None = None) -> ExtractedDoc:
         except Exception as e:  # noqa: BLE001
             logger.warning("readability fallback 실패: %s", e)
 
+    # 3) OG (Open Graph) meta fallback — LinkedIn/Facebook/Twitter 같은 SNS 는
+    # login wall / dynamic JS 로 본문 추출 둘 다 실패하지만 HTML head 의 OG meta
+    # (og:title / og:description / og:image) 는 누구나 fetch 가능. Telegram/Slack
+    # 의 URL 카드도 사실 이 데이터. raw 만이라도 보존 + LLM 으로 summary/tags
+    # 뽑는 게 placeholder 만 저장하는 것보다 훨씬 가치 있음. 2026-05-25.
+    #
+    # readability 가 빈 페이지에도 `<body id="readabilityBody"></body>` 같은 wrapper
+    # 를 truthy 로 반환하기 때문에 단순 `if not body` 로는 fallback 분기 못 탐.
+    # text 50자 미만이면 의미 없는 wrapper 로 간주 → OG fallback 으로.
+    og = _parse_og_meta(html)
+    if _body_is_meaningless(body):
+        og_body = _og_as_body(og)
+        if og_body:
+            body = og_body
+            logger.info(
+                "og-only fallback (본문 추출 실패/빈약, OG meta 로 합성): url=%s, body=%d chars",
+                url, len(og_body),
+            )
+        else:
+            body = None  # 진짜로 아무것도 없으면 빈 ExtractedDoc 반환하도록
+    # title 보강 — body 는 추출됐는데 title 없거나 readability 의 placeholder
+    # ('[no-title]') 인 경우. OG title 우선.
+    if not title or title.strip() in ("", "[no-title]"):
+        title = og.get("og:title") or og.get("twitter:title") or title
+
     if not body:
         return ExtractedDoc(body="")
 
-    # 3) abstract + keywords — BeautifulSoup 으로 별도 파싱
+    # 4) abstract + keywords — BeautifulSoup 으로 별도 파싱
     abstract, keywords = _parse_paper_meta(html)
 
     return ExtractedDoc(
@@ -190,11 +215,16 @@ def _parse_paper_meta(html: str) -> tuple[str | None, list[str]]:
             txt = _clean_ws(bq.get_text(" ", strip=True))
             abstract = re.sub(r"^Abstract:\s*", "", txt)
 
-    # og:description / description — 길면 abstract 후보
+    # og:description / description — SNS 카드의 description 은 보통 100-200자라
+    # 200자 cutoff 으로는 LinkedIn/Facebook 등이 abstract 못 만듦. 100자로 완화.
     if not abstract:
-        for sel in ({"property": "og:description"}, {"name": "description"}):
+        for sel in (
+            {"property": "og:description"},
+            {"name": "twitter:description"},
+            {"name": "description"},
+        ):
             tag = soup.find("meta", attrs=sel)
-            if tag and tag.get("content") and len(tag["content"]) > 200:
+            if tag and tag.get("content") and len(tag["content"]) > 100:
                 abstract = _clean_ws(tag["content"])
                 break
 
@@ -226,6 +256,89 @@ def _parse_paper_meta(html: str) -> tuple[str | None, list[str]]:
                 keywords.extend(str(k) for k in kw)
 
     return abstract, _normalize_tags(keywords)
+
+
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+# body 의 text 가 이 길이 미만이면 의미 없는 wrapper 로 간주 (readability 가 빈
+# 페이지에도 `<body id="readabilityBody"></body>` 같은 truthy 값 반환하기 때문).
+# 50자는 conservative — 진짜 짧은 메모 (한두 문장) 도 그 이상은 됨.
+_MIN_MEANINGFUL_BODY_CHARS = 50
+
+
+def _body_is_meaningless(body: str | None) -> bool:
+    """body 가 None / 빈 string / HTML wrapper 만 있는 무의미 케이스 판단.
+
+    OG meta fallback 분기 결정에 사용. text 만 추출해 길이로 판단.
+    """
+    if not body:
+        return True
+    text = _HTML_TAG_RE.sub("", body).strip()
+    return len(text) < _MIN_MEANINGFUL_BODY_CHARS
+
+
+def _parse_og_meta(html: str) -> dict[str, str]:
+    """Open Graph + Twitter Card meta 추출.
+
+    Telegram/Slack 의 URL 카드가 사용하는 데이터. login wall / dynamic JS 페이지
+    (LinkedIn, Facebook, Twitter, Instagram, 일부 medium 등) 도 HTML head 의 OG meta
+    는 대부분 살아있어서 본문 추출 실패해도 raw 로 활용 가능.
+
+    반환 key: og:title / og:description / og:image / og:site_name / og:type / og:url,
+              twitter:title / twitter:description / twitter:image (og:* 보충용).
+    """
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(html, "lxml")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("OG meta 파싱 실패 (bs4): %s", e)
+        return {}
+
+    out: dict[str, str] = {}
+    for prop in ("og:title", "og:description", "og:image", "og:site_name", "og:type", "og:url"):
+        tag = soup.find("meta", attrs={"property": prop})
+        if tag and tag.get("content"):
+            out[prop] = _clean_ws(tag["content"])
+    for name in ("twitter:title", "twitter:description", "twitter:image"):
+        tag = soup.find("meta", attrs={"name": name})
+        if tag and tag.get("content"):
+            out[name] = _clean_ws(tag["content"])
+    # 일반 <title> fallback (og 없는 페이지)
+    if not out.get("og:title") and not out.get("twitter:title"):
+        t = soup.find("title")
+        if t and t.get_text(strip=True):
+            out["og:title"] = _clean_ws(t.get_text(strip=True))
+    return out
+
+
+def _og_as_body(og: dict[str, str]) -> str:
+    """OG meta dict → 사람도 읽고 LLM 도 잘 요약할 수 있는 text body.
+
+    형식: title (#), site / type / image URL 메타, 빈 줄, description.
+    빈 dict 입력 → 빈 string (호출자가 fallback skip 판단).
+    """
+    title = og.get("og:title") or og.get("twitter:title", "")
+    desc = og.get("og:description") or og.get("twitter:description", "")
+    image = og.get("og:image") or og.get("twitter:image", "")
+    site = og.get("og:site_name", "")
+    typ = og.get("og:type", "")
+
+    # title 도 description 도 없으면 body 만들 의미 없음.
+    if not title and not desc:
+        return ""
+
+    lines: list[str] = []
+    if title:
+        lines.append(f"# {title}")
+    if site:
+        lines.append(f"Site: {site}")
+    if typ:
+        lines.append(f"Type: {typ}")
+    if image:
+        lines.append(f"Image: {image}")
+    if desc:
+        lines.append("")
+        lines.append(desc)
+    return "\n".join(lines)
 
 
 _KEYWORD_SPLIT_RE = re.compile(r"[,;|]\s*")

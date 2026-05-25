@@ -13,6 +13,7 @@
 #   bash scripts/step5_run_dev.sh --frontend-only        # = frontend_v2 (Next.js)
 #   bash scripts/step5_run_dev.sh --telegram-only
 #   bash scripts/step5_run_dev.sh --no-telegram          # backend + frontend 만
+#   bash scripts/step5_run_dev.sh --skip-check           # invite 검증 skip (watcher 바로 시작)
 #   bash scripts/step5_run_dev.sh --stop                 # 셋 다 종료
 #   bash scripts/step5_run_dev.sh --status               # 셋 다 상태 + 최근 로그 tail
 #
@@ -150,6 +151,25 @@ _telegram_env_ready() {
     [[ -n "$api_id" && -n "$api_hash" && -f "$session" ]]
 }
 
+_run_invite_check() {
+    # watcher 시작 직전 invite 검증 + 자동 정리 (default). --skip-check 또는
+    # SKIP_INVITE_CHECK=1 환경변수로 끔. session 충돌 없음 — watcher 가 죽어있는
+    # 시점이라 check 가 session 잡음 → disconnect 후 watcher 가 다음 session 잡음.
+    # check 실패해도 watcher 진행 (best effort).
+    if [[ "${SKIP_INVITE_CHECK:-0}" == "1" ]]; then
+        echo "ℹ️  invite check skip (--skip-check)"
+        return 0
+    fi
+    echo "🔎  invite 검증 + auto-cleanup (yaml/cache 의 죽은 invite 정리)…"
+    if "$VENV_PY" -m ai_agents.check_telegram_invites; then
+        echo "✅ invite check 완료"
+    else
+        # exit code != 0 인 경우 — dry-run 에서 정리 대상 발견은 default 모드에선 안 일어남.
+        # 따라서 여기 들어오는 건 env 미설정, session lock, telethon error 등 진짜 실패.
+        echo "⚠️  invite check 실패 (watcher 는 그대로 진행) — log 확인 권장"
+    fi
+}
+
 _start_telegram() {
     if ! _telegram_env_ready; then
         echo "ℹ️  telegram watcher skip — TELEGRAM_API_ID/HASH 또는 session 미설정"
@@ -163,6 +183,8 @@ _start_telegram() {
         _stop_telegram
         sleep 1
     fi
+    # invite 검증 + 자동 정리 (watcher session lock 안 잡힌 시점에 안전).
+    _run_invite_check
     echo "▶️  telegram watcher 기동 — log=$TELEGRAM_LOG"
     nohup "$VENV_PY" ai_agents/telegram_inbox_watcher.py > "$TELEGRAM_LOG" 2>&1 &
     echo $! > "$TELEGRAM_PIDFILE"
@@ -193,6 +215,20 @@ _stop_telegram() {
     fi
     rm -f "$TELEGRAM_PIDFILE"
 }
+
+# ── arg pre-process — flag (--skip-check) 와 명령 분리 ────────────
+# bash case 가 단일 인자 디스패치라 flag 와 명령을 한 줄에 받기 위해 사전 분리.
+SKIP_INVITE_CHECK=0
+POS_ARGS=()
+for _a in "$@"; do
+    case "$_a" in
+        --skip-check) SKIP_INVITE_CHECK=1 ;;
+        *) POS_ARGS+=("$_a") ;;
+    esac
+done
+export SKIP_INVITE_CHECK
+# 위치 인자 (명령) 만 남겨서 기존 case 로 디스패치.
+set -- "${POS_ARGS[@]+"${POS_ARGS[@]}"}"
 
 case "${1:-}" in
     --stop)
@@ -266,7 +302,7 @@ case "${1:-}" in
         ;;
     *)
         echo "알 수 없는 옵션: $1"
-        echo "사용: $0 [--background|--foreground|--backend-only|--frontend-only|--telegram-only|--no-telegram|--stop|--status]"
+        echo "사용: $0 [--background|--foreground|--backend-only|--frontend-only|--telegram-only|--no-telegram|--stop|--status] [--skip-check]"
         exit 2
         ;;
 esac

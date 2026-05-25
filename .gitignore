@@ -124,6 +124,7 @@ tmp/
 temp/
 *.tmp
 *.bak
+*.bak.*
 *.orig
 
 # ---------- slackdump 부산물 (프로젝트 루트에 떨어지는 dump 파일들) ----------

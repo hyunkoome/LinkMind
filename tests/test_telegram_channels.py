@@ -12,11 +12,10 @@ from ai_agents.telegram_channels import (
 
 
 def test_load_missing_yaml_returns_default(tmp_path):
-    """yaml 파일 없으면 default TelegramWatcherConfig (빈 channels, default batch_size)."""
+    """yaml 파일 없으면 default TelegramWatcherConfig (빈 channels)."""
     out = load_telegram_channels(tmp_path / "nope.yaml")
     assert isinstance(out, TelegramWatcherConfig)
     assert out.channels == []
-    assert out.batch_size == 5
 
 
 def test_load_empty_yaml_returns_default(tmp_path):
@@ -25,7 +24,6 @@ def test_load_empty_yaml_returns_default(tmp_path):
     f.write_text("", encoding="utf-8")
     out = load_telegram_channels(f)
     assert out.channels == []
-    assert out.batch_size == 5
 
 
 def test_load_valid_minimal(tmp_path):
@@ -39,7 +37,6 @@ def test_load_valid_minimal(tmp_path):
     )
     out = load_telegram_channels(f)
     assert len(out.channels) == 1
-    assert out.batch_size == 5  # default
     assert out.channels[0].invite == "https://t.me/+abc"
     assert out.channels[0].delete_after_ingest is True
     assert out.channels[0].name is None
@@ -65,60 +62,23 @@ def test_load_with_name_and_mixed_delete(tmp_path):
     assert out.channels[1].delete_after_ingest is False
 
 
-def test_load_custom_batch_size(tmp_path):
-    """yaml 의 batch_size 가 default 를 override."""
-    f = tmp_path / "batch.yaml"
+def test_load_ignores_unknown_top_level_keys(tmp_path):
+    """yaml 최상위에 알 수 없는 key (예: 옛 batch_size) 가 있어도 무시하고 channels 만 로드.
+
+    Why: 기존 yaml 에 남아있을 수 있는 옛 batch_size 필드와의 호환성. 명시 거부하면
+    사용자의 yaml 이 갑자기 RuntimeError — silent ignore 가 운영 안전.
+    """
+    f = tmp_path / "extra.yaml"
     f.write_text(
-        "batch_size: 3\n"
+        "batch_size: 5\n"   # 옛 필드 (2026-05-25 이전), 무시되어야 함
         "channels:\n"
         "  - invite: https://t.me/+abc\n"
         "    delete_after_ingest: true\n",
         encoding="utf-8",
     )
     out = load_telegram_channels(f)
-    assert out.batch_size == 3
-
-
-def test_load_batch_size_out_of_range_raises(tmp_path):
-    """batch_size 가 1~20 범위 밖이면 RuntimeError (FloodWait 위험)."""
-    for bad in (0, -1, 21, 100):
-        f = tmp_path / f"bad_{bad}.yaml"
-        f.write_text(
-            f"batch_size: {bad}\nchannels:\n"
-            "  - invite: https://t.me/+abc\n"
-            "    delete_after_ingest: true\n",
-            encoding="utf-8",
-        )
-        with pytest.raises(RuntimeError, match="batch_size"):
-            load_telegram_channels(f)
-
-
-def test_load_batch_size_non_int_raises(tmp_path):
-    """batch_size 가 정수 아니면 RuntimeError."""
-    f = tmp_path / "wrong.yaml"
-    f.write_text(
-        "batch_size: '5'\n"   # string
-        "channels:\n"
-        "  - invite: https://t.me/+abc\n"
-        "    delete_after_ingest: true\n",
-        encoding="utf-8",
-    )
-    with pytest.raises(RuntimeError, match="batch_size"):
-        load_telegram_channels(f)
-
-
-def test_load_batch_size_bool_raises(tmp_path):
-    """yaml 에서 bool 은 int 의 서브타입이라 명시 거부 (True=1 사고 방어)."""
-    f = tmp_path / "bool.yaml"
-    f.write_text(
-        "batch_size: true\n"
-        "channels:\n"
-        "  - invite: https://t.me/+abc\n"
-        "    delete_after_ingest: true\n",
-        encoding="utf-8",
-    )
-    with pytest.raises(RuntimeError, match="batch_size"):
-        load_telegram_channels(f)
+    assert len(out.channels) == 1
+    assert out.channels[0].invite == "https://t.me/+abc"
 
 
 def test_load_dedup_same_invite(tmp_path):
@@ -218,7 +178,6 @@ def test_real_config_file_loads():
         pytest.skip("config/telegram_channels.yaml 미존재 (운영자가 아직 안 만듦)")
     out = load_telegram_channels(yaml_path)
     assert len(out.channels) >= 1
-    assert 1 <= out.batch_size <= 20
     for c in out.channels:
         assert c.invite.startswith(("https://t.me/", "t.me/", "@")) or "/" not in c.invite
         assert isinstance(c.delete_after_ingest, bool)
