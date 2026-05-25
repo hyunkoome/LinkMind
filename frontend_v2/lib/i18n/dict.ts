@@ -11,6 +11,7 @@ const _raw = {
       graph: "그래프",
       ingest: "수집",
       search: "검색",
+      cleanup: "정리",
       settings: "설정",
     },
     common: {
@@ -158,6 +159,7 @@ const _raw = {
       graph: "Graph",
       ingest: "Ingest",
       search: "Search",
+      cleanup: "Cleanup",
       settings: "Settings",
     },
     common: {

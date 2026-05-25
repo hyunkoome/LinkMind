@@ -170,6 +170,53 @@ class ItemUpdateRequest(BaseModel):
 
 
 # ──────────────────────────────────────────────────────────────
+# Cleanup list (GET /items) — D12 placeholder 정리 UI
+# ──────────────────────────────────────────────────────────────
+
+
+class ItemListCard(BaseModel):
+    """cleanup 페이지의 카드 한 건 — raw_content 는 preview (400자) 로 truncate.
+
+    full raw 가 필요하면 GET /items/{id} 로 별도 요청.
+    """
+    id: UUID
+    source_type: SourceType
+    source_url: str | None = None
+    title: str | None = None
+    summary_preview: str | None = None       # 첫 240자
+    raw_preview: str | None = None           # 첫 400자
+    raw_length: int = 0
+    domain: str | None = None                # source_url 의 hostname
+    fetch_error_kind: str | None = None      # image_no_ocr | extraction_failed | binary_no_extract | short_raw
+    fetch_error_message: str | None = None   # source_metadata.fetch_error (있으면)
+    has_user_notes: bool = False
+    user_notes_preview: str | None = None    # 첫 200자
+    tags: list[str] = Field(default_factory=list)
+    is_read: bool = False
+    ingested_at: datetime
+    attachments: list[ItemAttachmentSummary] = Field(default_factory=list)
+
+
+class ItemListFacets(BaseModel):
+    """필터 사이드바 표시용 집계 — 현재 query 결과의 facet 카운트.
+
+    각 facet 은 {value: count} dict. domain 은 top 30 만.
+    """
+    kind: dict[str, int] = Field(default_factory=dict)
+    source_type: dict[str, int] = Field(default_factory=dict)
+    domain: dict[str, int] = Field(default_factory=dict)
+
+
+class ItemListResponse(BaseModel):
+    """GET /items 응답 — pagination + facets + 카드 목록."""
+    items: list[ItemListCard] = Field(default_factory=list)
+    total: int = 0
+    page: int = 1
+    page_size: int = 50
+    facets: ItemListFacets = Field(default_factory=ItemListFacets)
+
+
+# ──────────────────────────────────────────────────────────────
 # Graph (GET /graph/*) — Phase 2.5 wave-3, cytoscape.js 호환 JSON
 # ──────────────────────────────────────────────────────────────
 

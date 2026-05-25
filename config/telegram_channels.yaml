@@ -19,4 +19,4 @@ channels:
   # LinkMind 의 메인 inbox — 처리 후 자동 삭제 (사용자가 처리 안 된 것만 시각적으로 확인)
   - invite: https://t.me/+2ztAGOP93_Q3NzQ1
     delete_after_ingest: true
-    name: LinkMind-Inbox
+  #  name: LinkMind-Inbox
