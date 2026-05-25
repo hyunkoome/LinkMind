@@ -531,7 +531,7 @@ karpathy 의 llm_wiki + vlm_wiki + multi-agent + 자가학습. 일반 RAG 대신
 3. `docs/llm_wiki_design.md` 설계 문서
 4. `backend/agents/` 신규 — 4 agent 우선
 5. `/wiki/{slug}` endpoint prototype — multi-modality 통합 view
-6. cleanup 페이지 역할 재정의 — placeholder viewer + wiki 자동 분류 결과 확인 (D12-3)
+6. cleanup 페이지 역할 재정의 — placeholder viewer + wiki 자동 분류 결과 확인 (D12-4)
 7. 사용자 검증 → 다음 단계
 
 ### D10.5. ItemDetails user_notes append textarea 통합 ⏳ (D10 안정화 후 작은 wave)
@@ -548,7 +548,7 @@ append, idempotent) 를 ItemDetails 에도 통합. 사용자 결정 (2026-05-25)
 synonyms 추가, 색 지정, pinned 토글, manual link/unlink. D10 wiki 자동 분류 안정화 후
 필요 줄어들 수 있음 (agent 가 자동 처리하면 사용자 편집 minimal).
 
-### D12-3. cleanup 페이지 진화 (D10 후) ⏳
+### D12-4. cleanup 페이지 진화 (D10 후) ⏳
 
 D10 wiki classifier 가 모든 자료 자동 분류한 후 cleanup 페이지의 진화:
 - **"wiki 페이지별 자료 부족 정도"** filter 추가
