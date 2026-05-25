@@ -361,13 +361,16 @@ LinkMind 는 backend (`backend/`) + multi-channel gateway (`ai_agents/`) + Strea
 > 다음 세션은 재가동 + D10 llm_wiki 시작.
 > 자세한 재개 가이드는 memory `project_next_session_entrypoint`.
 
-**Todo list (다음 세션 시작 시)**:
+**Todo list (다음 세션 시작 시)** — 2026-05-25 사용자 결정 반영:
 
 | # | 작업 | 상태 |
 |---|---|---|
 | 1 | backend + frontend + watcher 재가동 (`bash scripts/step5_run_dev.sh`) | pending |
-| 2 | `/cleanup` 페이지 실 사용 — LinkedIn/Medium 등 placeholder 자료에 user_notes paste (사용자 작업) | pending |
-| 3 | D10 llm_wiki 첫 세션 — `external/karpathy/llm_wiki/` 분석 + `docs/llm_wiki_design.md` 작성 + `backend/agents/` 설계 | pending |
+| 2 | **D10 llm_wiki 첫 세션 (최우선)** — `external/karpathy/llm_wiki/` 분석 + `docs/llm_wiki_design.md` + `backend/agents/` 4종 (classifier + retriever + writer + critic) 설계. **agent 가 모든 자료 (placeholder 포함) 자동 wiki 분류 → wave-4 휴리스틱 categories 진화** | pending |
+| 3 | (D10 안정화 후) `ItemDetails.tsx` 에 user_notes append textarea 통합 — 모든 viewer 공통 1급 기능 | pending |
+
+**사용자 수동 cleanup 작업은 미루기** — D10 agent 가 자동 분류하면 보강 우선순위 명확해짐.
+사용자 user_notes 입력은 **모든 viewer 공통 기능** (cleanup 페이지 국한 X) 으로 분리.
 
 **검증 명령 (다음 세션 시작 직후)**:
 ```bash
@@ -394,15 +397,32 @@ curl -X POST http://localhost:8000/ingest/youtube -d '{"url":"...","force":true}
    - Slack 첨부 198개 SHA-256 dedup 영구 보존 검증
    │
    ▼
-🚧 [다음] D10 — llm_wiki 아키텍처 (큰 그림, 여러 세션)
+🚧 [다음 — 최우선] D10 — llm_wiki 아키텍처 (큰 그림, 여러 세션)
    - external/karpathy/llm_wiki/ 분석 → docs/llm_wiki_design.md
-   - backend/agents/ (retriever/writer/critic) + /wiki/{slug} prototype
+   - backend/agents/ 4종 (classifier + retriever + writer + critic) + /wiki/{slug} prototype
+   - **agent 가 모든 자료 (placeholder 포함) 자동 wiki 분류** → wave-4 휴리스틱 categories 진화
+   - vLLM base 모델 inference 만 (학습 X — 학습은 Phase 4)
    - [[project-llm-wiki-arch]] memory 참조
-   - 검색 quality 진단 ([[project-search-quality-issue]]) 도 wiki 모델에서 자연 흡수
-   - cleanup 페이지의 user_notes 보강은 wiki 페이지 합성 신호로 활용
+   │
+   ▼
+☐  ItemDetails 의 user_notes append textarea 통합 (모든 viewer 공통, D10 안정화 후)
+   │
+   ▼
+☐  D12-3 — cleanup 페이지 진화 (wiki 단위 filter + agent 마킹) — D10 후
    │
    ▼
 ☐  D9 (arxiv title 재시드) → D11 (카테고리 UI) → D8 (cross-modality matching, wiki 안 흡수)
+   │
+   ▼
+[Phase 3 후반] feedback 테이블 + dataset exporter (JSONL, LLaMA-Factory 포맷)
+   │
+   ▼
+[Phase 4] sVLL LoRA fine-tune — PyTorch + LLaMA-Factory + Qwen2-VL 7B
+   - 사용자 본인 데이터로 본인 LoRA adapter (~수 MB, base 공유)
+   - 별 conda env `linkmind-train`. vLLM 으로 base + adapter 서빙.
+   │
+   ▼
+[Phase 5] Continuous training loop — 자가학습 (feedback → 재학습 → 배포 → feedback)
 ```
 
 ## 라이센스

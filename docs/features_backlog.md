@@ -380,14 +380,39 @@ vLLM-embed 인프라 작업으로 전환**.
 - arxiv 모듈 (현재는 URL ingest 가 arxiv abs 페이지를 우회 처리 — 별도 모듈로 정돈 시 citation 메타 더 정확)
 - OCR / 멀티모달 이미지 분석 (Phase 3)
 
-### C3. 학습 데이터 파이프라인 (CLAUDE.md Phase 3-5)
-- AI 카테고리/태깅 강화 (현재 LLM 해시태그만)
-- feedback 테이블 — 사용자 평가 (요약/답변 quality) → Continuous training loop
-- dataset exporter — Phase 4 sVLL LoRA 파인튜닝용 JSONL
-- TEI 임베딩 전환 (sentence-transformers 로컬 → TEI 컨테이너)
-- MinIO object storage 전환 (Phase 2 후반)
-- sVLL LoRA 파인튜닝 (Phase 4 — LLaMA-Factory + Qwen2-VL 등), vLLM 서빙
-- Continuous training loop (Phase 5)
+### C3. 학습 데이터 파이프라인 (CLAUDE.md Phase 3-5) — 2026-05-25 사용자 명확화 반영
+
+**중요 원칙**:
+- 지금 단계 (wave-1~5 + D12 + D10 예정) 의 vLLM 모델 (Qwen2.5-7B 등) 은
+  **inference 만** — 사용자 데이터로 학습 절대 X.
+- 학습은 **Phase 4** 에서 시작 — base 모델 + 사용자 본인 LoRA adapter = "내 자체 모델".
+- §11 Privacy 원칙: personal LoRA 는 "사용자 본인 데이터로 본인 모델만" — 운영자 공통
+  모델 학습 절대 금지.
+
+**진행 항목**:
+- AI 카테고리/태깅 강화 ✅ wave-4 (`auto_link_categories`). D10 wiki classifier
+  가 의미 단위 클러스터링으로 진화 예정.
+- feedback 테이블 ⏳ — 사용자 평가 (요약/답변 quality) → Continuous training loop.
+  wave 6~7 예정. `/ask` 답변에 👍/👎/수정 메모.
+- dataset exporter ⏳ — Phase 3 후반. **LLaMA-Factory JSONL 포맷** — raw +
+  summary + user_notes + feedback → 학습 input.
+- TEI 임베딩 전환 🚫 폐기 — D13 (2026-05-23) 에서 **vLLM-embed 로 대체** (self-host
+  정체성 일관성).
+- MinIO object storage ⏳ — Phase 2 후반. 현재 로컬 FS + `volumes/archive/` 4.7GB 로 충분.
+- **sVLL LoRA 파인튜닝** ⏳ — Phase 4 (몇 달 후):
+  - 플랫폼: **PyTorch 기반**, **LLaMA-Factory** (UI + CLI, Qwen/LLaMA/Mistral/Qwen2-VL
+    + LoRA + QLoRA + DPO/RLHF + vision-language 지원). 대안: Unsloth (메모리 효율 ↑),
+    Axolotl (yaml config), torchtune (PyTorch 공식).
+  - base 모델: **Qwen2-VL-7B-Instruct** (vision-language → sVLL = small **V**ision-
+    **L**anguage **L**LM). LinkMind 의 이미지 자료 (PDF figures, Telegram 사진
+    1,751건, YouTube thumbnails) 까지 학습 input.
+  - 결과: **사용자 본인 LoRA adapter** (~수 MB) — base 는 공유, adapter 만 개인별.
+  - 환경: 별 conda env `linkmind-train` (CLAUDE.md §4 — 학습용 환경 별도 생성).
+  - GPU 분배: vLLM 중단 → LLaMA-Factory ~12GB → 학습 종료 후 vLLM 재가동.
+  - 서빙: vLLM 으로 `--enable-lora --lora-modules linkmind=path/to/adapter` —
+    adapter swap 가능.
+- Continuous training loop ⏳ — Phase 5. 자가학습 — 주기적 (예: 매주) feedback
+  누적 → LoRA 재학습 → 새 adapter 배포.
 
 ---
 
@@ -480,12 +505,56 @@ vLLM-embed 인프라 작업으로 전환**.
 wave-4 의 cross-modal title fix 후 arxiv:* topic 들의 title 이 slug 그대로.
 `seed_arxiv_metadata` 재실행으로 진짜 paper title 보강.
 
-### D10. llm_wiki 아키텍처 도입 ⏳
+### D10. llm_wiki 아키텍처 도입 ⏳ (다음 — 최우선)
+
 karpathy 의 llm_wiki + vlm_wiki + multi-agent + 자가학습. 일반 RAG 대신 wiki 페이지
 단위 (topic = wiki 페이지). [[project-llm-wiki-arch]] memory 참조.
 
+**사용자 비전 (2026-05-25 명확화)** — D10 의 scope 확장:
+- **agent 가 모든 자료 (placeholder / extraction_failed / image_no_ocr 포함) 자동 wiki 분류**.
+  wave-4 의 `auto_link_categories` (items.tags 빈도 ≥3 휴리스틱) 를 의미 단위 클러스터링으로 진화.
+- **vLLM base 모델 inference 만 사용** — 학습 X. 학습은 Phase 4 에서 LoRA fine-tune.
+- 사용자 수동 cleanup 작업 (user_notes paste) 은 미루기 — agent 자동 분류 후 우선순위 명확해짐.
+
+**`backend/agents/` 4종 agent**:
+
+| agent | 책임 | 비고 |
+|---|---|---|
+| **classifier** | 모든 16,233 items → wiki 페이지로 자동 클러스터링. 기존 `categories` 테이블 자동 재구성. | placeholder 자료도 "참조 단서" 섹션으로 자동 포함 |
+| **retriever** | 한 wiki 페이지 속 자료 (raw + summary + user_notes + 첨부) 통합 검색 | [[project-search-quality-issue]] 자연 흡수 |
+| **writer** | wiki 페이지 합성 — multi-modality 섹션 (paper / code / video / SNS 카드) | D8 cross-modality matching 자연 흡수 |
+| **critic** | 출처 검증 + placeholder 자료의 정보 부족 명시 (미래 user_notes 보강 신호) | feedback 인프라와 연동 가능 |
+
+**첫 세션 plan**:
+1. `external/karpathy/llm_wiki/` 분석 — 코드 + 데이터 모델 + 검색·응답 흐름
+2. LinkMind 매핑: topic → wiki 페이지 / categories → wiki 자동 분류 / items → wiki source
+3. `docs/llm_wiki_design.md` 설계 문서
+4. `backend/agents/` 신규 — 4 agent 우선
+5. `/wiki/{slug}` endpoint prototype — multi-modality 통합 view
+6. cleanup 페이지 역할 재정의 — placeholder viewer + wiki 자동 분류 결과 확인 (D12-3)
+7. 사용자 검증 → 다음 단계
+
+### D10.5. ItemDetails user_notes append textarea 통합 ⏳ (D10 안정화 후 작은 wave)
+
+현재 `frontend_v2/components/ItemDetails.tsx` 의 user_notes 는 PATCH set 방식 (덮어쓰기).
+**모든 viewer 의 1급 기능** 으로 cleanup 의 ActionPanel 의 textarea (POST `/items/{id}/notes`
+append, idempotent) 를 ItemDetails 에도 통합. 사용자 결정 (2026-05-25):
+> "user_notes 추가는 모든 데이터 대상이라 cleanup 페이지 국한 X 인 다른 기능"
+
+- 작업 단위: 작음 (반나절 이내) — backend POST endpoint 이미 있음.
+- 영향: graph 의 모든 item 클릭 시 user_notes append 가능 — wiki 페이지 viewer 에서도 자연 활용.
+
 ### D11. 카테고리 UI 편집 ⏳
-synonyms 추가, 색 지정, pinned 토글, manual link/unlink.
+synonyms 추가, 색 지정, pinned 토글, manual link/unlink. D10 wiki 자동 분류 안정화 후
+필요 줄어들 수 있음 (agent 가 자동 처리하면 사용자 편집 minimal).
+
+### D12-3. cleanup 페이지 진화 (D10 후) ⏳
+
+D10 wiki classifier 가 모든 자료 자동 분류한 후 cleanup 페이지의 진화:
+- **"wiki 페이지별 자료 부족 정도"** filter 추가
+- agent 가 "보강 가치 높음" 마킹한 자료만 필터링
+- 사용자가 user_notes 추가하면 → 해당 wiki 페이지 **즉시 재합성**
+- cleanup 페이지 = placeholder 자료 viewer + wiki 분류 결과 확인 + 잘못 분류된 자료 사용자 수정 도구
 
 ### D12. placeholder / 본문 추출 실패 자료 정리 UI ✅ 완료 (2026-05-25, commit 39a82d1 + aba9f65)
 
