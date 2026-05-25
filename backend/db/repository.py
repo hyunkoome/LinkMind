@@ -273,6 +273,32 @@ async def append_item_user_notes(
     return (res.rowcount or 0) > 0
 
 
+async def merge_source_metadata(
+    session: AsyncSession, *, item_id: UUID, extra: dict[str, Any],
+) -> bool:
+    """source_metadata 에 새 키들 merge — 최상위 jsonb concat.
+
+    D12 wave 의 slack permalink 보강용. 기존 source_metadata 와 ``extra`` 를
+    jsonb || 연산자로 합쳐 같은 키는 덮어쓴다. **중첩 dict 의 deep merge 가
+    아닌 top-level merge** — Slack 의 경우 'slack' 키 하나가 그대로 들어가니
+    충분.
+
+    Returns: True 면 row 변경됨, False 면 id 가 없거나 extra 가 비어있음.
+    """
+    if not extra:
+        return False
+    import json as _json
+    res = await session.execute(
+        text("""
+            UPDATE items
+            SET source_metadata = source_metadata::jsonb || CAST(:extra AS jsonb)
+            WHERE id = :id
+        """),
+        {"id": item_id, "extra": _json.dumps(extra)},
+    )
+    return (res.rowcount or 0) > 0
+
+
 async def update_item_read(
     session: AsyncSession, *, item_id: UUID, is_read: bool,
 ) -> bool:

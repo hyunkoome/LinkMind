@@ -24,7 +24,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
 
 from backend.db.connection import get_engine
-from backend.db.repository import find_item_by_hash, insert_item
+from backend.db.repository import find_item_by_hash, insert_item, merge_source_metadata
 from backend.ingest.slack.export_parser import (
     SlackAttachment,
     SlackMessage,
@@ -80,6 +80,32 @@ def _resolve_caption(message: SlackMessage) -> str | None:
     if message.urls and message.text:
         return _strip_urls_for_caption(message.text) or None
     return None
+
+
+async def _attach_slack_metadata_to_item(
+    item_id_str: str, message: SlackMessage,
+) -> bool:
+    """ingest 가 만든/찾은 item 에 source_metadata['slack'] 보강.
+
+    URL 자동 라우팅 (ingest_url/youtube/github/pdf) 은 caption 만 받고
+    Slack provenance 는 모름. ingest 후 반환된 item_id 로 별도 session 에서
+    source_metadata 에 'slack' 키 merge.
+
+    동일 URL 이 여러 Slack 메시지에서 공유된 경우엔 마지막 메시지의 메타가
+    덮어쓰기 — provenance 누적이 필요하면 차후 'slack_refs' list 형태로 확장.
+    지금은 첫 등록만 보존 (raw-first 목적엔 충분).
+    """
+    from uuid import UUID as _UUID
+    engine = get_engine()
+    sf = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    async with sf() as session:
+        changed = await merge_source_metadata(
+            session, item_id=_UUID(item_id_str),
+            extra={"slack": _slack_metadata(message)},
+        )
+        if changed:
+            await session.commit()
+        return changed
 
 
 def _slack_metadata(message: SlackMessage, *, file_id: str | None = None) -> dict[str, Any]:
@@ -155,6 +181,11 @@ async def ingest_slack_message(
                 r = {"url": url, "error": str(e)}
             r["url"] = url
             r["kind"] = kind
+            # provenance — ingest 가 만든 item 에 slack metadata merge.
+            # url-only fallback / 정상 item 어떤 경로든 동일하게 보존 (raw-first §2).
+            iid = r.get("item_id")
+            if iid:
+                await _attach_slack_metadata_to_item(iid, message)
             result["urls_ingested"].append(r)
 
     if attachments:
