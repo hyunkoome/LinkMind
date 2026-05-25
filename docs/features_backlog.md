@@ -487,41 +487,72 @@ karpathy 의 llm_wiki + vlm_wiki + multi-agent + 자가학습. 일반 RAG 대신
 ### D11. 카테고리 UI 편집 ⏳
 synonyms 추가, 색 지정, pinned 토글, manual link/unlink.
 
-### D12. placeholder / 본문 추출 실패 자료 정리 UI ⏳
+### D12. placeholder / 본문 추출 실패 자료 정리 UI ✅ 완료 (2026-05-25, commit 39a82d1 + aba9f65)
 
-**배경** (2026-05-23 사용자 결정): §2 raw-first 원칙의 확장 — LinkedIn / Facebook /
-Medium paywall / 이미지 / PDF placeholder 같은 본문 추출이 어려운 자료도 **raw URL +
-메타 (title, source_url, Slack/텔레그램 context) 는 무조건 DB 에 등록**한다.
-사용자는 LinkMind UI 에서 그 자료의 원본 클릭 + 수동 액션 (본문 직접 입력, 메모
-보강, 카테고리 분류) 할 수 있어야 한다. 학습 데이터 관점에서 사용자가 직접 단
-메모는 가치 높음 (현재 user_notes 보유 item 2794건).
+**배경**: §2 raw-first 원칙의 확장 — LinkedIn / Facebook / Medium paywall /
+이미지 / PDF placeholder 같은 본문 추출이 어려운 자료도 **raw URL + 메타는
+무조건 DB 에 등록** + 사용자가 LinkMind UI 에서 수동 보강 (본문/메모/카테고리)
+가능해야 한다는 사용자 요구 (2026-05-23, 2026-05-25 raw-first 확장 결정).
 
-**현재 동작 (확인됨, 2026-05-23)**:
-- ✅ raw + URL 보존 — LinkedIn 도 일부 본문 추출됨 (og:description 기반 1.6-3.3K자)
-- ✅ source_url 보존 → UI 에서 클릭 가능 상태
-- ✅ `source_metadata.fetch_error` 마커 인프라 — 641건 표시 중
-- ✅ user_notes 누적 — Slack/텔레그램 caption append 흐름 동작 (2794건)
+#### Wave-1 (commit 39a82d1) — UI + 분류 인프라
 
-**부족한 부분**:
-- ❌ "본문 추출 실패 / placeholder 자료" 를 모아 보는 별도 페이지
-- ❌ 수동 본문 입력 + 카테고리 분류 UI (현재 user_notes 만)
-- ❌ fetch_error 자동 마킹 backfill (짧은 raw + summary 없음 자동 검출)
+**Backend**:
+- `backend/jobs/mark_fetch_failed.py` 신규 — `source_metadata.fetch_error_kind`
+  표준화. classify_item pure helper + idempotent. **2,594건 자동 마킹**:
+  image_no_ocr 1,751 / extraction_failed 806 / binary_no_extract 36 / short_raw 1.
+- `backend/api/items.py` 의 list endpoint (`GET /items`) — 필터
+  (kind/source_type/domain/has_user_notes/has_summary/q) + pagination + facets
+  drilldown (skip_* 로 자기 facet 제외). raw_content 는 preview 400자만.
+- POST `/items/{id}/notes` — user_notes append (raw-first §2 보전, 덮어쓰기 X,
+  idempotent, LLM 키워드 추출 background task).
+- POST `/items/{id}/categories/{slug}` — item 의 첫 topic 을 카테고리에 manual link.
 
-**작업 단계** (wave-5 또는 wave-6, 반나절~하루):
-1. fetch_error 마커 표준화 — 자동 마킹 backfill job (`backend/jobs/mark_fetch_failed.py`)
-2. frontend_v2 신규 페이지 "정리 필요한 자료" — 필터 (fetch_error / no_summary /
-   short_raw / 이미지 OCR 미처리 / PDF placeholder), 도메인/카테고리 그룹화
-3. 각 item 카드: preview + 원본 링크 + 수동 액션 버튼들
-   - "원본 새 창 열기" (기존)
-   - "본문 직접 붙여넣기" → raw_content 보강 또는 user_notes append
-   - "카테고리 수동 지정" → topic_categories 연결
-   - "재처리 큐 등록" → Wayback / playwright 시도 (D14 와 연결)
-4. 이미지 별도 그리드 뷰 (현재 텔레그램 사진 47건+) — Phase 3 OCR 도입 시
-   자동 채워질 자리. 지금은 사용자 캡션/메모 직접 입력.
-5. PDF placeholder 별도 처리 — 본문 추출 실패한 PDF 의 수동 요약 입력
+**Frontend** (`frontend_v2/app/cleanup/`):
+- FilterSidebar — facet 카운트 + drilldown 필터.
+- ItemCard — 이미지 thumbnail 인라인 + tags + URL + fetch_error_message preview.
+  kind=image_no_ocr 시 grid 레이아웃 (썸네일 시각 인지 우선).
+- ActionPanel — kind별 hint + 원본 새창 + user_notes append textarea + 카테고리
+  검색·link + raw preview.
+- Header 메뉴 "🧹 정리 / Cleanup" + i18n.
 
-**연관**: D10 llm_wiki 의 multi-agent 가 wiki 페이지 통합 후처리 시 사용자 메모를
-중요 신호로 인입 가능.
+**Tests**: 32개 신규 (cpu): classify_item 11 + _build_where / _extract_domain /
+_truncate 21.
+
+#### Wave-2 (commit aba9f65) — Slack manifest 재처리 + provenance 보강
+
+사용자 요구 (2026-05-25): "진짜 데이터 사라진 것 아니면 모두 DB 에 입력해야지" —
+Slack ingest 도중 발생한 953 issues (placeholder 633 + exception 320) 를 모두 재처리.
+
+- `backend/db/repository.merge_source_metadata(item_id, extra)` 신규 — jsonb concat
+  으로 source_metadata 에 top-level 키 merge.
+- `backend/ingest/slack/__init__.py` — URL ingest 분기에서 결과 item_id 로
+  `_attach_slack_metadata_to_item` 호출 → source_metadata 에 'slack' 키 보강.
+  wave-2 시점부터의 한계 (URL 분기에 slack provenance 누락) 해결.
+- `backend/jobs/ingest_slack_manifest.py` 신규 — manifest 재처리 job:
+  - placeholder 633: 이미 DB 에 있는 item 에 slack metadata merge only
+  - exception 320: wave-5/D13 fix 흐름으로 재시도. 성공 시 정상 ingest, 실패 시
+    `_save_url_only` 흐름으로 URL+caption placeholder 저장
+  - 결과 추적: `result_manifest.json` (953건 1:1) + `unresolved_manifest.json`
+    (안 들어간 38건)
+  - `source_metadata.manifest_input_url` 보존 → ingest 가 canonical URL 변환하거나
+    hash dedup 으로 기존 item 반환해도 manifest entry ↔ item 역추적 가능.
+
+**실행 결과**:
+- merged_only 790 (이미 DB 에 있음, slack metadata 보강)
+- retried_success 125 (재시도로 정상 ingest 본문+summary 모두)
+- retried_placeholder 37 (외부 사이트 죽음, placeholder)
+- skip 1
+- **915 / 953 (96%) DB 등록.** unresolved 38건은 YouTube 영상 삭제 37 + 깨진 URL 1.
+
+**Slack 첨부 보존**: 198개 (PDF 48 + 이미지 130 + 영상 13 + 기타) 가 ingest_document
+의 SHA-256 dedup 으로 `volumes/archive/` (4.7GB) 에 영구 복사. sample 8/8 통과.
+→ `archive/slack_export/` 삭제 안전 (2026-05-25 완료).
+
+**Tests**: 14 케이스 신규 (cpu).
+
+**핵심 결과**: cleanup 페이지에서 사용자가 user_notes 로 보강한 메모는 D10
+llm_wiki 의 multi-agent 가 wiki 페이지 합성 시 중요 신호. raw fetch 실패한
+자료도 사용자 메모 풍부하면 wiki 섹션으로 부활.
 
 ### D13. 임베딩 모델 별도 서버 분리 (vLLM-embed) ⏳ 진행 중 (2026-05-23)
 
