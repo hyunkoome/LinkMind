@@ -517,6 +517,56 @@ async def link_item_category(
     )
 
 
+@router.delete("/{item_id}")
+async def delete_item(
+    item_id: UUID,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """item 영구 삭제 (irreversible).
+
+    D12 cleanup 페이지에서 진짜 사라진 자료 (YouTube 영상 삭제 / 도메인 죽음 등)
+    를 사용자 명시적 의사로 정리할 때. §11 Privacy 원칙 §4 (삭제 권리, GDPR/PIPA)
+    에 부합 — §2 raw-first 원칙은 "ingest 시점 raw 무손실 보존" 의미라 사용자
+    명시적 삭제와 충돌 X.
+
+    삭제 흐름:
+      1. Qdrant chunks collection 의 item_id payload 별 points 삭제
+      2. Postgres items row DELETE
+         → ON DELETE CASCADE 로 chunks / attachments / item_topics 자동 삭제
+
+    보존되는 것:
+      - volumes/archive 의 raw 파일 (attachments.file_hash) — SHA-256 dedup 라
+        다른 item 이 같은 file_hash 참조 가능. orphan cleanup 은 별도 job.
+
+    Returns: {deleted: bool, item_id, qdrant_status}.
+      - 존재 안 하면 404.
+    """
+    exists = await get_item_full(session, item_id)
+    if exists is None:
+        raise HTTPException(status_code=404, detail="item not found")
+
+    # 1. Qdrant points 삭제 (Postgres CASCADE 와 별개 — 분리 시스템)
+    from backend.embedding.qdrant_store import delete_chunks_for_item
+    qdrant_status = await delete_chunks_for_item(str(item_id))
+
+    # 2. Postgres DELETE — CASCADE 가 자동 처리
+    await session.execute(
+        sql_text("DELETE FROM items WHERE id = :id"),
+        {"id": item_id},
+    )
+    await session.commit()
+
+    logger.info(
+        "item 삭제 완료 — id=%s, source_type=%s, qdrant_status=%d",
+        item_id, exists.get("source_type"), qdrant_status,
+    )
+    return {
+        "deleted": True,
+        "item_id": str(item_id),
+        "qdrant_status": qdrant_status,
+    }
+
+
 async def _extract_and_merge_tags(item_id_str: str, user_notes: str) -> None:
     """BackgroundTask — LLM 키워드 추출 + tags 병합 (별도 DB session).
 

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   API_BASE,
   appendItemNote,
+  deleteItem,
   getItem,
   linkItemCategory,
   listCategories,
@@ -17,10 +18,11 @@ import type { ItemDetail } from "@/types/graph";
 interface Props {
   card: ItemListCard | null;
   onUpdated: (id: string) => void;   // detail 갱신 후 list refresh 신호
+  onDeleted?: (id: string) => void;  // 삭제 완료 후 list refresh + 패널 닫기
   onClose: () => void;
 }
 
-export default function ActionPanel({ card, onUpdated, onClose }: Props) {
+export default function ActionPanel({ card, onUpdated, onDeleted, onClose }: Props) {
   const { locale, t } = useT();
   const [detail, setDetail] = useState<ItemDetail | null>(null);
   const [categories, setCategories] = useState<CategorySummary[]>([]);
@@ -29,6 +31,7 @@ export default function ActionPanel({ card, onUpdated, onClose }: Props) {
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [categoryQuery, setCategoryQuery] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   useEffect(() => {
     if (!card) {
@@ -36,8 +39,10 @@ export default function ActionPanel({ card, onUpdated, onClose }: Props) {
       setNoteDraft("");
       setStatus(null);
       setError(null);
+      setConfirmDelete(false);
       return;
     }
+    setConfirmDelete(false);  // 카드 바뀌면 confirm 상태 reset
     let alive = true;
     getItem(card.id)
       .then((d) => {
@@ -107,6 +112,22 @@ export default function ActionPanel({ card, onUpdated, onClose }: Props) {
       setSubmitting(false);
     }
   }, [card, locale, onUpdated]);
+
+  const confirmDeleteAction = useCallback(async () => {
+    if (!card) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      await deleteItem(card.id);
+      // 삭제 성공 — 상위에 알리고 패널 닫기
+      onDeleted?.(card.id);
+    } catch (e) {
+      setError((e as Error).message);
+      setConfirmDelete(false);
+    } finally {
+      setSubmitting(false);
+    }
+  }, [card, onDeleted]);
 
   if (!card) {
     return (
@@ -303,7 +324,7 @@ export default function ActionPanel({ card, onUpdated, onClose }: Props) {
 
       {/* raw_content preview (truncated) */}
       {detail && detail.raw_content && (
-        <section>
+        <section className="mb-5">
           <div className="text-[11px] font-medium text-zinc-500 mb-1">
             {locale === "ko" ? "raw_content (첫 800자)" : "raw_content (first 800 chars)"}
           </div>
@@ -313,6 +334,74 @@ export default function ActionPanel({ card, onUpdated, onClose }: Props) {
           </pre>
         </section>
       )}
+
+      {/* 영구 삭제 — 진짜 사라진 자료 (영상 삭제 / 도메인 죽음) 정리용.
+          2단계 confirm — 첫 클릭은 경고 박스, 두 번째 클릭으로 확정. */}
+      <section className="mt-6 pt-4 border-t border-zinc-300 dark:border-zinc-700">
+        <div className="text-[11px] font-medium text-zinc-500 mb-1">
+          {locale === "ko" ? "⚠ 영구 삭제 (irreversible)" : "⚠ Permanent delete"}
+        </div>
+        {!confirmDelete ? (
+          <button
+            type="button"
+            onClick={() => setConfirmDelete(true)}
+            disabled={submitting}
+            className="w-full px-3 py-1.5 text-xs bg-white dark:bg-zinc-900 border border-red-300 dark:border-red-800 text-red-700 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded disabled:opacity-50"
+          >
+            🗑 {locale === "ko" ? "이 자료 삭제..." : "Delete this item..."}
+          </button>
+        ) : (
+          <div className="p-3 text-[11px] bg-red-50 dark:bg-red-900/20 border border-red-300 dark:border-red-800 rounded">
+            <div className="font-medium text-red-800 dark:text-red-200 mb-2">
+              {locale === "ko"
+                ? "정말 삭제하시겠습니까? 이 자료는 영구히 삭제됩니다."
+                : "Really delete? This is irreversible."}
+            </div>
+            <div className="mb-2 text-zinc-700 dark:text-zinc-300">
+              <div className="font-medium truncate" title={card.title || ""}>
+                {card.title || "(no title)"}
+              </div>
+              {url && (
+                <a
+                  href={url}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className="block text-[10px] text-blue-600 dark:text-blue-400 hover:underline break-all"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {url}
+                </a>
+              )}
+              {detail?.raw_content && (
+                <pre className="mt-1 text-[9px] text-zinc-500 dark:text-zinc-400 whitespace-pre-wrap font-mono bg-white dark:bg-zinc-900 p-1.5 rounded max-h-20 overflow-y-auto">
+                  {detail.raw_content.slice(0, 200)}
+                  {detail.raw_content.length > 200 ? "…" : ""}
+                </pre>
+              )}
+            </div>
+            <div className="flex gap-1.5">
+              <button
+                type="button"
+                onClick={() => setConfirmDelete(false)}
+                disabled={submitting}
+                className="flex-1 px-2 py-1 text-[11px] bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800"
+              >
+                {t.common.cancel}
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteAction}
+                disabled={submitting}
+                className="flex-1 px-2 py-1 text-[11px] bg-red-600 hover:bg-red-700 text-white rounded disabled:opacity-50 font-medium"
+              >
+                {submitting
+                  ? t.common.saving
+                  : locale === "ko" ? "삭제 확정" : "Confirm delete"}
+              </button>
+            </div>
+          </div>
+        )}
+      </section>
     </aside>
   );
 }

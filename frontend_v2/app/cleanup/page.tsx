@@ -164,6 +164,11 @@ export default function CleanupPage() {
       <ActionPanel
         card={selectedCard}
         onUpdated={handleUpdated}
+        onDeleted={() => {
+          // 삭제 후 패널 닫고 list 새로고침. 같은 페이지에 머무름.
+          setSelectedId(null);
+          setRefreshTick((t) => t + 1);
+        }}
         onClose={() => setSelectedId(null)}
       />
     </div>

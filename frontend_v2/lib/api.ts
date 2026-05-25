@@ -201,6 +201,18 @@ export async function appendItemNote(
   });
 }
 
+export interface DeleteItemResponse {
+  deleted: boolean;
+  item_id: string;
+  qdrant_status: number;
+}
+
+export async function deleteItem(itemId: string): Promise<DeleteItemResponse> {
+  return fetchJSON<DeleteItemResponse>(`/items/${itemId}`, {
+    method: "DELETE",
+  });
+}
+
 export interface LinkCategoryResponse {
   linked: boolean;
   category_slug: string;
