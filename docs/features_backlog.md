@@ -556,7 +556,7 @@ D10 wiki classifier 가 모든 자료 자동 분류한 후 cleanup 페이지의 
 - 사용자가 user_notes 추가하면 → 해당 wiki 페이지 **즉시 재합성**
 - cleanup 페이지 = placeholder 자료 viewer + wiki 분류 결과 확인 + 잘못 분류된 자료 사용자 수정 도구
 
-### D12. placeholder / 본문 추출 실패 자료 정리 UI ✅ 완료 (2026-05-25, commit 39a82d1 + aba9f65)
+### D12. placeholder / 본문 추출 실패 자료 정리 UI ✅ 완료 (2026-05-25, commit 39a82d1 + aba9f65 + 269b3b5)
 
 **배경**: §2 raw-first 원칙의 확장 — LinkedIn / Facebook / Medium paywall /
 이미지 / PDF placeholder 같은 본문 추출이 어려운 자료도 **raw URL + 메타는
@@ -619,9 +619,44 @@ Slack ingest 도중 발생한 953 issues (placeholder 633 + exception 320) 를 �
 
 **Tests**: 14 케이스 신규 (cpu).
 
+#### Wave-3 (commit 269b3b5) — 영구 삭제 (2단계 confirm)
+
+사용자 발견 (2026-05-25): 진짜 사라진 자료 (YouTube 영상 삭제 / 도메인 죽음 /
+HTTP 429 영구 차단 등) 를 cleanup 페이지에서 정리 가능해야. §11 Privacy 원칙
+§4 (삭제 권리, GDPR/PIPA) 부합 — §2 raw-first 와 충돌 X (raw-first 는 "ingest
+시점 무손실 보존" 의미, 사용자 명시 삭제는 다른 차원).
+
+**Backend**:
+- `DELETE /items/{id}` 신규 (backend/api/items.py):
+  - Qdrant chunks collection 의 item_id payload 별 points 삭제
+    (`delete_chunks_for_item` 기존 helper 재사용 — 이미 존재)
+  - Postgres items row DELETE → schema 의 `ON DELETE CASCADE` 가 chunks /
+    attachments / item_topics 자동 삭제
+  - `volumes/archive` 의 raw 파일은 보존 (SHA-256 dedup 라 다른 item 이 같은
+    file_hash 참조 가능 — orphan cleanup 은 별도 job)
+  - 404 if 존재 안 함, 200 + `{deleted, item_id, qdrant_status}` if 성공
+
+**Frontend** (`ActionPanel.tsx`):
+- 영구 삭제 섹션 신규 (마지막 위치, border-top 으로 시각 분리)
+- 1단계: 빨간 outline "🗑 이 자료 삭제..." 버튼
+- 2단계: 빨간 경고 박스 — title + URL 링크 + raw_content 첫 200자 + "정말
+  삭제하시겠습니까? 이 자료는 영구히 삭제됩니다." + [취소] / [삭제 확정]
+- 카드 바뀌면 confirm 상태 자동 reset
+- 삭제 후 `onDeleted` callback → 패널 닫기 + list refresh
+
+**Smoke 검증** (실 데이터 `1L_Ll_MtrVs` YouTube 자료):
+- 2건 (`&` + `&amp;` 인코딩 중복) DELETE 성공
+- items + chunks + attachments + item_topics 모두 CASCADE 로 0건
+- Qdrant `status=0 (completed)` — points 정리됨
+- 같은 id 재호출 시 404 정상
+
+**추후 (D10 wiki classifier 도입 후)**: wiki 페이지 단위로도 cascade 삭제
+흐름 추가 가능.
+
 **핵심 결과**: cleanup 페이지에서 사용자가 user_notes 로 보강한 메모는 D10
 llm_wiki 의 multi-agent 가 wiki 페이지 합성 시 중요 신호. raw fetch 실패한
-자료도 사용자 메모 풍부하면 wiki 섹션으로 부활.
+자료도 사용자 메모 풍부하면 wiki 섹션으로 부활. **진짜 사라진 자료는 명시적
+영구 삭제** 가능 — wave-3 의 두 단계 confirm UI.
 
 ### D13. 임베딩 모델 별도 서버 분리 (vLLM-embed) ⏳ 진행 중 (2026-05-23)
 

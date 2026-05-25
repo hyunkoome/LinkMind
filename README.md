@@ -342,7 +342,7 @@ LinkMind 는 backend (`backend/`) + multi-channel gateway (`ai_agents/`) + Strea
 | **2.5 wave-5 인프라 (D13 vLLM-embed, 2026-05-23)** | **OOM 근본 fix**. bge-m3 가 프로세스마다 GPU 별도 로드 (uvicorn 4.4 GB + watcher 3.8 GB + vLLM 18.8 GB ≈ 27 GB > 24 GB). vLLM 통일 (TEI 안 씀): compose 에 `vllm-embed` (`--runner pooling`) 추가, `backend/embedding/vllm_embed.py` 신규, `factory.py` env switch. GPU: vllm-llm 18.5 + vllm-embed 2.0 = 20.5 / 24 GB. analysis_worker transaction 버그 fix + backfill_summary chunks 보강. | ✅ 완료 (commit 46c36eb) |
 | **Telegram multi-channel via yaml (2026-05-23)** | 단일 LinkMind-Inbox → 15개 채널 통합 inbox. `config/telegram_channels.yaml` 단일 진실 (필수: invite/delete_after_ingest, 선택: name). watcher: FloodWait 자동 대기, channel_id cache + dialog cache (rate limit 회피). `ai_agents/telegram_channels.py` 신규 + 17 테스트. 옛 single fallback 완전 제거. | ✅ 완료 (commit 7d20119) |
 | **2.5 wave-5 보강 (2026-05-25)** | (1) **batch 구조 제거** — GPU VRAM 한계로 어차피 직렬 ingest, batch 효익 X. yaml 순서대로 한 채널씩 [resolve → backfill → 다음] (`[N/M]` 진척 로그). (2) **`ai_agents/check_telegram_invites.py`** — invite 검증 + yaml/cache 자동 정리 (ALIVE/NOT-MEMBER/DEAD-HASH 분류 + .bak.<ts> 백업). 17 테스트. (3) **`step5_run_dev.sh` 통합** — watcher 시작 직전 check 자동 실행 (`--skip-check` 옵션). 사용자가 텔레그램에서 leave/추방한 채널 자동 정리. 실제 검증: yaml 14→6 / cache 9→3. (4) **Graph "node not found" 근본 fix** — `backend/api/graph.py` 3 endpoint 가 `list_topics(limit=500)` 으로 fetch 후 dict lookup → DB 의 23,631 topic 중 limit 밖은 dangling. `list_topics_by_ids(ids)` 신규로 정확 fetch. (5) **URL ingest OG meta fallback** — 본문 추출 실패 시 og:title/description/image 로 raw body 합성 (LinkedIn/Facebook 같은 SNS 도 카드 데이터 보존). abstract cutoff 200→100자. 17 테스트. (6) **YouTube channel handle + oEmbed fallback** — `/@username` channel URL 인식 (`channel` kind, url ingest fallback). yt-dlp IP 차단 시 (위장: "video not available") oEmbed API → title + author + thumbnail + LLM summary/tags. 차단됐던 영상도 정상 ingest 검증. 7 테스트. (7) **fallback topic 테스트 갱신** (wave-3 동작 반영). **327 passed / 0 회귀**. | ✅ 완료 |
-| **D12 placeholder/실패 자료 정리 (2026-05-25)** | §2 raw-first 의 확장 — 본문 fetch 실패해도 raw + URL + provenance 무조건 DB 보존 + 사용자 수동 보강 UI. **Wave-1** (commit 39a82d1): `backend/jobs/mark_fetch_failed.py` 자동 분류 (2594건 마킹: image_no_ocr 1751 / extraction_failed 806 / binary 36 / short 1). `GET /items` list + facets drilldown + POST `/items/{id}/notes` (user_notes append) + `/categories/{slug}` (manual link). `frontend_v2/app/cleanup/` — FilterSidebar + ItemCard (이미지 grid) + ActionPanel (kind별 hint). 32 단위 테스트. **Wave-2** (commit aba9f65): Slack manifest 재처리 — `backend/db/repository.merge_source_metadata` + Slack URL 분기 slack provenance 보강 + `backend/jobs/ingest_slack_manifest.py` (placeholder 633 메타 보강 + exception 320 wave-5/D13 fix 흐름 재시도). 결과: 915 / 953 (96%) DB 등록, unresolved 38건만 진짜 손실 (YouTube 영상 삭제 37 + 깨진 URL 1). 14 테스트. **Slack 정리**: `archive/slack_export/` 628MB 삭제 (DB items 1307 + volumes/archive 4.7GB 보존 검증). | ✅ 완료 |
+| **D12 placeholder/실패 자료 정리 (2026-05-25)** | §2 raw-first 의 확장 — 본문 fetch 실패해도 raw + URL + provenance 무조건 DB 보존 + 사용자 수동 보강 UI. **Wave-1** (commit 39a82d1): `backend/jobs/mark_fetch_failed.py` 자동 분류 (2594건 마킹: image_no_ocr 1751 / extraction_failed 806 / binary 36 / short 1). `GET /items` list + facets drilldown + POST `/items/{id}/notes` (user_notes append) + `/categories/{slug}` (manual link). `frontend_v2/app/cleanup/` — FilterSidebar + ItemCard (이미지 grid) + ActionPanel (kind별 hint). 32 단위 테스트. **Wave-2** (commit aba9f65): Slack manifest 재처리 — `backend/db/repository.merge_source_metadata` + Slack URL 분기 slack provenance 보강 + `backend/jobs/ingest_slack_manifest.py` (placeholder 633 메타 보강 + exception 320 wave-5/D13 fix 흐름 재시도). 결과: 915 / 953 (96%) DB 등록, unresolved 38건만 진짜 손실 (YouTube 영상 삭제 37 + 깨진 URL 1). 14 테스트. **Slack 정리**: `archive/slack_export/` 628MB 삭제 (DB items 1307 + volumes/archive 4.7GB 보존 검증). **Wave-3** (commit 269b3b5): `DELETE /items/{id}` + ActionPanel 의 2단계 confirm 영구 삭제 UI. 진짜 사라진 자료 (영상 삭제 / 도메인 죽음 / HTTP 429 영구 차단) 정리. Qdrant points + Postgres CASCADE (chunks / attachments / item_topics 자동 삭제). §11 Privacy §4 (삭제 권리) 부합. | ✅ 완료 |
 | **D10 llm_wiki 아키텍처 (큰 그림, 여러 세션)** | karpathy llm_wiki + vlm_wiki + multi-agent + 자가학습. 일반 RAG 아닌 **topic = wiki 페이지** 단위. `external/karpathy/llm_wiki/` 분석 → `docs/llm_wiki_design.md` → `backend/agents/` (retriever/writer/critic) → `/wiki/{slug}`. cleanup 페이지에서 사용자 user_notes 로 보강한 자료도 wiki 페이지 합성 시 중요 신호로 활용. | 🚧 다음 |
 | D9/D11/D8 | D9 arxiv title 재시드 → D11 카테고리 UI 편집 → D8 cross-modality matching (wiki 모델 안에서 흡수) | |
 | 2 후반 (AI 카테고리/feedback/dataset exporter) | AI 카테고리 강화, feedback 테이블, dataset exporter (JSONL) | |
@@ -356,9 +356,10 @@ LinkMind 는 backend (`backend/`) + multi-channel gateway (`ai_agents/`) + Strea
 ### 다음 세션 진입 순서 (2026-05-25 마감 갱신)
 
 > **오늘 한 일 (2026-05-25)**: wave-5 보강 (commit 6294c3f) + D12 wave-1 (commit
-> 39a82d1) + D12 wave-2 (commit aba9f65) + Slack archive 삭제. **3 commit + push.**
-> Slack 데이터는 모두 DB + volumes/archive 에 영구 보존 (1,307 items + 4.7GB raw).
-> 다음 세션은 재가동 + D10 llm_wiki 시작.
+> 39a82d1) + D12 wave-2 (commit aba9f65) + Slack archive 삭제 + D12 wave-3 영구
+> 삭제 (commit 269b3b5) + 문서 정리 (commit 36cb6a0, 1affb83, 1924829). **7 commit +
+> push.** Slack 데이터는 모두 DB + volumes/archive 에 영구 보존 (1,307 items +
+> 4.7GB raw). 다음 세션은 재가동 + D10 llm_wiki 시작.
 > 자세한 재개 가이드는 memory `project_next_session_entrypoint`.
 
 **Todo list (다음 세션 시작 시)** — 2026-05-25 사용자 결정 반영:
@@ -392,8 +393,10 @@ curl -X POST http://localhost:8000/ingest/youtube -d '{"url":"...","force":true}
 
 **우선순위 흐름**:
 ```
-✅ D12 wave-1/2 (2026-05-25 완료) — placeholder UI + Slack manifest 재처리
-   - 915 / 953 (96%) DB 등록, unresolved 38건만 진짜 손실
+✅ D12 wave-1/2/3 (2026-05-25 완료) — placeholder UI + Slack manifest 재처리 + 영구 삭제
+   - wave-1: cleanup 페이지 + mark_fetch_failed 자동 분류 (2594건)
+   - wave-2: Slack manifest 953건 재처리 (915 DB 등록 = 96%, unresolved 38건만 손실)
+   - wave-3: DELETE /items/{id} + 2단계 confirm UI (영상 삭제 등 진짜 사라진 자료 정리)
    - Slack 첨부 198개 SHA-256 dedup 영구 보존 검증
    │
    ▼
