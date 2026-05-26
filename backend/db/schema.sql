@@ -336,3 +336,165 @@ CREATE TABLE IF NOT EXISTS topic_categories (
 
 CREATE INDEX IF NOT EXISTS idx_topic_categories_topic ON topic_categories(topic_id);
 CREATE INDEX IF NOT EXISTS idx_topic_categories_category ON topic_categories(category_id);
+
+
+-- ============================================================================
+-- 2026-05-26 — D10 llm_wiki 아키텍처 (docs/llm_wiki_design.md)
+-- ----------------------------------------------------------------------------
+-- wiki_pages          : 한 의미 단위의 wiki 페이지 (markdown body 가 agent 합성).
+-- wiki_page_versions  : 매 합성마다 이전 버전 보존 (Phase 4 학습 신호).
+-- wiki_page_items     : item ↔ wiki_page M:N. 한 자료가 여러 wiki 에 cross-cutting.
+-- agent_runs          : 4 agent 의 input/output trace (학습 데이터 + 디버그).
+--
+-- 핵심 설계 결정 (사용자 confirm 2026-05-26):
+--   - wiki body 저장 = 별 wiki_pages 테이블 (1:N 확장 + 버전 히스토리)
+--   - 합성 시점 = Eager 즉시 (ingest 시 BackgroundTask) — wiki 가 "그때그때" 진화
+--   - 한 item 이 여러 wiki 에 자동 link (M:N)
+--   - agent orchestration = 자체 sequential (physics-intern state-centric 패턴)
+-- ============================================================================
+
+-- ── wiki_pages ─────────────────────────────────────────────────────────
+-- 한 wiki 페이지 = 한 row. body markdown 은 agent (writer) 가 합성.
+-- topic_id 는 nullable — 대부분 케이스는 topic 1개 와 강 연결,
+-- 단 standalone wiki (lint 결과 / 사용자 직접 생성 등) 도 허용.
+-- slug 는 URL key — variant 까지 포함하면 UNIQUE 자연 보장
+-- (예: 'lora-fine-tuning' / 'lora-fine-tuning--beginner').
+CREATE TABLE IF NOT EXISTS wiki_pages (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    topic_id UUID REFERENCES topics(id) ON DELETE SET NULL,
+
+    slug    TEXT UNIQUE NOT NULL,
+    title   TEXT NOT NULL,
+    description TEXT,                              -- 한 단락 요약 (검색 fallback)
+
+    -- ── 본문 (markdown, agent 합성) ──
+    body                  TEXT,
+    body_model            TEXT,                    -- e.g. 'vllm/Qwen/Qwen2.5-7B-Instruct'
+    body_prompt_version   TEXT,                    -- e.g. 'wiki_writer_v1'
+    body_generated_at     TIMESTAMPTZ,
+    body_status           TEXT NOT NULL DEFAULT 'empty',
+                                                    -- 'empty'      — 한 번도 합성 안 됨
+                                                    -- 'generating' — agent 처리 중 (lock)
+                                                    -- 'ready'      — 최신 상태
+                                                    -- 'stale'      — 새 자료 link 후 재합성 대기
+
+    -- ── 검색용 body embedding (§6.1.5 wiki 단위 검색) ──
+    body_embedding_model  TEXT,                    -- e.g. 'BAAI/bge-m3'
+    body_embedding_dim    INTEGER,
+    -- 실제 vector 는 Qdrant 'wiki_pages' 컬렉션에 (chunks 와 분리)
+
+    -- ── variant (같은 topic 의 multiple 페이지 구분) ──
+    variant TEXT NOT NULL DEFAULT 'default',       -- 'default' | 'beginner' | 'advanced' | 'ko' | ...
+
+    -- ── 사용자 편집 (Phase 후반 wiki 편집 UI) ──
+    user_overrides TEXT,                           -- 사용자가 직접 수정 — 다음 합성 시 merge 보존
+    is_pinned BOOLEAN NOT NULL DEFAULT FALSE,      -- pinned page = priority queue high (wave-3)
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_wiki_pages_topic  ON wiki_pages(topic_id);
+CREATE INDEX IF NOT EXISTS idx_wiki_pages_status ON wiki_pages(body_status);
+CREATE INDEX IF NOT EXISTS idx_wiki_pages_pinned ON wiki_pages(is_pinned) WHERE is_pinned;
+
+DROP TRIGGER IF EXISTS wiki_pages_set_updated_at ON wiki_pages;
+CREATE TRIGGER wiki_pages_set_updated_at
+    BEFORE UPDATE ON wiki_pages
+    FOR EACH ROW EXECUTE FUNCTION trg_set_updated_at();
+
+
+-- ── wiki_page_versions ─────────────────────────────────────────────────
+-- 매 body 합성마다 이전 버전 보존. Phase 4 학습 데이터:
+-- (prev_body, new_body, user_kept_or_modified) 가 LoRA 학습 입력.
+CREATE TABLE IF NOT EXISTS wiki_page_versions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    page_id UUID NOT NULL REFERENCES wiki_pages(id) ON DELETE CASCADE,
+
+    version_number INTEGER NOT NULL,               -- 1 부터 증가 (page 안에서 단조)
+    body TEXT NOT NULL,
+    body_model TEXT NOT NULL,
+    body_prompt_version TEXT NOT NULL,
+    agent_run_id UUID,                             -- agent_runs.id (이 합성을 trigger 한 run)
+
+    -- 합성 trigger 이유 (학습 신호)
+    trigger_reason TEXT,                           -- 'first_gen' | 'stale_regenerate' | 'user_request' | 'lint_fix' | 'incremental_add'
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (page_id, version_number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_wiki_page_versions_page
+    ON wiki_page_versions(page_id, version_number DESC);
+
+
+-- ── wiki_page_items ────────────────────────────────────────────────────
+-- 한 item 이 여러 wiki 에 cross-cutting. classifier 의 list output 결과.
+CREATE TABLE IF NOT EXISTS wiki_page_items (
+    wiki_page_id UUID NOT NULL REFERENCES wiki_pages(id) ON DELETE CASCADE,
+    item_id      UUID NOT NULL REFERENCES items(id)      ON DELETE CASCADE,
+
+    confidence REAL NOT NULL DEFAULT 1.0,          -- 0 ~ 1 (classifier 매칭 강도)
+    source     TEXT NOT NULL DEFAULT 'auto',       -- 'auto' (classifier) | 'manual' | 'topic-inherited'
+
+    -- 이 item 이 이 wiki 에서의 역할
+    role TEXT,                                      -- 'primary' | 'example' | 'context' | 'related-work'
+
+    -- 사용자 override (학습 신호)
+    user_action TEXT,                              -- NULL | 'kept' | 'removed' | 'pinned'
+    user_action_at TIMESTAMPTZ,
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (wiki_page_id, item_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_wiki_page_items_page ON wiki_page_items(wiki_page_id);
+CREATE INDEX IF NOT EXISTS idx_wiki_page_items_item ON wiki_page_items(item_id);
+CREATE INDEX IF NOT EXISTS idx_wiki_page_items_conf ON wiki_page_items(confidence DESC);
+
+
+-- ── agent_runs ─────────────────────────────────────────────────────────
+-- 4 agent 의 input/output 적립 — Phase 4 학습 데이터의 핵심 신호.
+-- input_full / output_meta 는 JSONB 라 추후 export job 이 자유롭게 쿼리.
+CREATE TABLE IF NOT EXISTS agent_runs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    agent_name      TEXT NOT NULL,                 -- 'classifier' | 'retriever' | 'writer' | 'critic'
+    agent_version   TEXT NOT NULL,                 -- prompt version
+    llm_model       TEXT,                          -- nullable — retriever 는 LLM 안 부름
+
+    input_summary   TEXT,                          -- 입력 핵심 (디버그/인덱스)
+    input_full      JSONB,                         -- 전체 입력 (학습 데이터)
+    output_text     TEXT,
+    output_meta     JSONB,
+
+    duration_ms     INTEGER,
+    error           TEXT,
+
+    -- 관련 entity 들 (nullable, agent 마다 다름)
+    related_item_id      UUID REFERENCES items(id)       ON DELETE SET NULL,
+    related_topic_id     UUID REFERENCES topics(id)      ON DELETE SET NULL,
+    related_wiki_page_id UUID REFERENCES wiki_pages(id)  ON DELETE SET NULL,
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_runs_agent     ON agent_runs(agent_name, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_page      ON agent_runs(related_wiki_page_id);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_item      ON agent_runs(related_item_id);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_topic     ON agent_runs(related_topic_id);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_created   ON agent_runs(created_at DESC);
+
+
+-- ============================================================================
+-- 2026-05-26 — D10 wave-2d: wiki_pages.keywords TEXT[] (LLM 자동 + 사용자 편집)
+-- ----------------------------------------------------------------------------
+-- wiki 페이지의 키워드 (tag) — 사용자가 wiki 검색/필터링 + autocomplete 에 활용.
+--   - writer agent 가 body 합성 시 ## Keywords 섹션 자동 추출 → 이 컬럼에 저장
+--   - frontend 의 keyword pill UI 로 사용자 추가/삭제 (source 추적 위한 wave-3 에
+--     별 wiki_page_keywords M:N 으로 진화 가능. 지금은 TEXT[] 단순)
+--   - GET /wiki/keywords?q=... 자동완성: UNNEST + DISTINCT (GIN index)
+-- ============================================================================
+ALTER TABLE wiki_pages ADD COLUMN IF NOT EXISTS keywords TEXT[] DEFAULT '{}';
+CREATE INDEX IF NOT EXISTS idx_wiki_pages_keywords ON wiki_pages USING GIN (keywords);

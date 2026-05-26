@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # step5_run_dev.sh — LinkMind dev 환경 통합 entry (Phase 2.5+, Streamlit 폐기):
 #   - 백엔드 FastAPI (:8000, --reload)
-#   - 프론트엔드 Next.js 3D graph UI (:3001) — frontend_v2/, Graph + Ingest + Search + Settings
+#   - 프론트엔드 Next.js 3D graph UI (:3001) — frontend/, Graph + Ingest + Search + Settings
 #   - Telegram inbox watcher (Telethon daemon) — env 채워져있고 session 있으면 자동 가동
 #
 # 모두 idempotent — bash scripts/step5_run_dev.sh 한 명령으로 stop+start 자동.
@@ -10,7 +10,7 @@
 #   bash scripts/step5_run_dev.sh                # 셋 다 백그라운드 (telegram 미설정이면 skip)
 #   bash scripts/step5_run_dev.sh --foreground   # 백엔드 포어그라운드 (Ctrl+C 종료)
 #   bash scripts/step5_run_dev.sh --backend-only
-#   bash scripts/step5_run_dev.sh --frontend-only        # = frontend_v2 (Next.js)
+#   bash scripts/step5_run_dev.sh --frontend-only        # = frontend (Next.js)
 #   bash scripts/step5_run_dev.sh --telegram-only
 #   bash scripts/step5_run_dev.sh --no-telegram          # backend + frontend 만
 #   bash scripts/step5_run_dev.sh --skip-check           # invite 검증 skip (watcher 바로 시작)
@@ -20,7 +20,7 @@
 # 인프라 컨테이너 (Postgres/Qdrant/Ollama) 가 떠 있어야 함. 죽었으면
 # `bash scripts/step2_2_setup_infra.sh` 로 재기동.
 #
-# 옛 Streamlit (frontend/) 은 deprecated — Settings/Ingest/Search 가 frontend_v2 의
+# 옛 Streamlit (frontend/) 은 deprecated — Settings/Ingest/Search 가 frontend 의
 # /settings /ingest /search 페이지로 마이그레이션됨. frontend/ 폴더 자체는 회고용으로
 # 남겨두지만 step5 가 시작하지 않음. 직접 띄우려면 `streamlit run frontend/app.py`.
 
@@ -100,17 +100,17 @@ _start_backend() {
 }
 
 # frontend (Next.js 3D graph UI + Settings/Ingest/Search, Phase 2.5+).
-# - frontend_v2/ 디렉토리 + npm 둘 다 있어야 가동.
+# - frontend/ 디렉토리 + npm 둘 다 있어야 가동.
 # - node_modules 없으면 첫 1회 npm install 자동 (1-2분, 매번 X).
 # - setsid 로 새 process group — npm 의 자식 process tree 까지 안전 정리.
 _start_frontend() {
-    local dir="$ROOT/frontend_v2"
+    local dir="$ROOT/frontend"
     if [[ ! -d "$dir" ]]; then
-        echo "⚠️  frontend_v2/ 없음 — Next.js UI skip"
+        echo "⚠️  frontend/ 없음 — Next.js UI skip"
         return
     fi
     if ! command -v npm > /dev/null 2>&1; then
-        echo "⚠️  frontend_v2 skip — npm 없음 (Node 22+ 설치 후 자동 가동)"
+        echo "⚠️  frontend skip — npm 없음 (Node 22+ 설치 후 자동 가동)"
         return
     fi
     if _pid_alive "$FRONTEND_PIDFILE"; then
@@ -124,9 +124,9 @@ _start_frontend() {
         sleep 1
     fi
     if [[ ! -d "$dir/node_modules" ]]; then
-        echo "📦  frontend_v2: 첫 npm install (1-2분 소요, 한 번만)…"
+        echo "📦  frontend: 첫 npm install (1-2분 소요, 한 번만)…"
         if ! (cd "$dir" && npm install --no-fund --no-audit 2>&1 | tail -10); then
-            echo "❌  npm install 실패 — 수동: cd frontend_v2 && npm install"
+            echo "❌  npm install 실패 — 수동: cd frontend && npm install"
             return
         fi
     fi

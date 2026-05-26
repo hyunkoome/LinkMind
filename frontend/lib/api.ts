@@ -332,3 +332,173 @@ export async function searchSemantic(body: SearchRequest): Promise<SearchRespons
 }
 
 export { API_BASE };
+
+
+// ============================================================================
+// Wiki API (D10 llm_wiki, 2026-05-26)
+// ============================================================================
+
+export interface WikiPageListItem {
+  id: string;
+  topic_id: string | null;
+  slug: string;
+  title: string;
+  description: string | null;
+  body_status: "empty" | "generating" | "ready" | "stale";
+  body_generated_at: string | null;
+  source_count: number;
+  is_pinned: boolean;
+  updated_at: string;
+}
+
+export interface WikiPageListResponse {
+  total: number;
+  pages: WikiPageListItem[];
+}
+
+export interface WikiSource {
+  item_id: string;
+  title: string | null;
+  summary: string | null;
+  source_type: string;
+  source_url: string | null;
+  confidence: number | null;
+  role: string | null;
+  user_action: string | null;
+  tags: string[];
+  user_notes: string | null;
+  is_read: boolean;
+  attachment_count: number;
+}
+
+export interface WikiCrossLink {
+  slug: string;
+  title: string;
+  shared_items: number;
+}
+
+export interface WikiPageDetail {
+  id: string;
+  topic_id: string | null;
+  slug: string;
+  title: string;
+  description: string | null;
+  variant: string;
+  body: string | null;
+  body_status: "empty" | "generating" | "ready" | "stale";
+  body_model: string | null;
+  body_prompt_version: string | null;
+  body_generated_at: string | null;
+  latest_version: number;
+  is_pinned: boolean;
+  user_overrides: string | null;
+  keywords: string[];
+  sources: WikiSource[];
+  cross_links: WikiCrossLink[];
+  user_notes_combined: string | null;
+}
+
+export interface WikiKeywordsUpdateRequest {
+  add?: string[];
+  remove?: string[];
+}
+
+export interface WikiKeywordsUpdateResponse {
+  slug: string;
+  keywords: string[];
+  added: string[];
+  removed: string[];
+}
+
+export interface WikiKeywordSuggestion {
+  keyword: string;
+  usage_count: number;
+}
+
+export interface WikiKeywordSearchResponse {
+  query: string;
+  suggestions: WikiKeywordSuggestion[];
+}
+
+export interface WikiSearchHit {
+  page_id: string;
+  slug: string;
+  title: string;
+  description: string | null;
+  score: number;
+  body_excerpt: string | null;
+  source_count: number;
+  body_status: string;
+  matched_in: string;
+}
+
+export interface WikiSearchResponse {
+  query: string;
+  hits: WikiSearchHit[];
+}
+
+export interface WikiRegenerateResponse {
+  page_id: string;
+  slug: string;
+  ok: boolean;
+  body_length: number | null;
+  version_number: number | null;
+  duration_ms: number;
+  error: string | null;
+}
+
+export async function listWikiPages(
+  opts: { status?: string; q?: string; keyword?: string; limit?: number; offset?: number } = {},
+): Promise<WikiPageListResponse> {
+  const params = new URLSearchParams();
+  if (opts.status) params.set("status", opts.status);
+  if (opts.q) params.set("q", opts.q);
+  if (opts.keyword) params.set("keyword", opts.keyword);
+  params.set("limit", String(opts.limit ?? 50));
+  params.set("offset", String(opts.offset ?? 0));
+  return fetchJSON<WikiPageListResponse>(`/wiki?${params.toString()}`);
+}
+
+export async function getWikiPage(
+  slug: string,
+  opts: { regenerate?: boolean } = {},
+): Promise<WikiPageDetail> {
+  const params = new URLSearchParams();
+  if (opts.regenerate) params.set("regenerate", "true");
+  const qs = params.toString();
+  return fetchJSON<WikiPageDetail>(`/wiki/${encodeURIComponent(slug)}${qs ? "?" + qs : ""}`);
+}
+
+export async function regenerateWikiPage(slug: string): Promise<WikiRegenerateResponse> {
+  return fetchJSON<WikiRegenerateResponse>(`/wiki/${encodeURIComponent(slug)}/regenerate`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function searchWikiPages(query: string, top_k = 10): Promise<WikiSearchResponse> {
+  return fetchJSON<WikiSearchResponse>(`/wiki/search`, {
+    method: "POST",
+    body: JSON.stringify({ query, top_k }),
+  });
+}
+
+export async function updateWikiKeywords(
+  slug: string,
+  payload: WikiKeywordsUpdateRequest,
+): Promise<WikiKeywordsUpdateResponse> {
+  return fetchJSON<WikiKeywordsUpdateResponse>(
+    `/wiki/${encodeURIComponent(slug)}/keywords`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function searchWikiKeywords(q: string, limit = 20): Promise<WikiKeywordSearchResponse> {
+  const params = new URLSearchParams();
+  if (q) params.set("q", q);
+  params.set("limit", String(limit));
+  return fetchJSON<WikiKeywordSearchResponse>(`/wiki/_keywords/search?${params.toString()}`);
+}

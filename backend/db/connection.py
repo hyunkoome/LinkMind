@@ -52,6 +52,14 @@ async def get_session() -> AsyncIterator[AsyncSession]:
         yield session
 
 
+def get_session_factory() -> async_sessionmaker[AsyncSession]:
+    """async session factory 반환 — FastAPI 밖 (jobs / smoke / BackgroundTask) 용."""
+    if _session_factory is None:
+        get_engine()
+    assert _session_factory is not None
+    return _session_factory
+
+
 async def close_engine() -> None:
     global _engine
     if _engine is not None:

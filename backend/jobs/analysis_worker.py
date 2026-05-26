@@ -30,6 +30,8 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from backend.agents import AgentContext
+from backend.agents.classifier import ClassifierAgent
 from backend.db.connection import get_engine
 from backend.ingest.url import (
     ExtractedDoc,
@@ -83,6 +85,33 @@ async def _has_chunks(session, item_id: UUID) -> bool:
     return res.first() is not None
 
 
+async def _classify_to_wiki(session, item_id) -> None:
+    """D10 wave-2c — summary 가 있는 item 을 wiki_pages 자동 분류.
+
+    flow:
+      - ClassifierAgent.run() — LLM 한 번 호출 + JSON output
+      - 매칭된 wiki_pages 에 wiki_page_items insert (M:N)
+      - 매칭 없으면 새 wiki_page 자동 생성
+      - 매칭된 wiki_pages.body_status='stale' 자동 마킹
+      - 이후 사용자가 wiki page 열 때 lazy 합성 또는 wiki_writer_batch 가 자동
+
+    이건 ingest → analysis_worker → wiki 자동 흐름의 핵심 hook.
+    """
+    ctx = AgentContext(session=session, related_item_id=item_id)
+    classifier = ClassifierAgent()
+    result = await classifier.run(ctx)
+    await session.commit()
+    if not result.ok:
+        logger.warning("classifier 실패 (item=%s): %s", item_id, result.error)
+    else:
+        meta = result.output_meta or {}
+        logger.info(
+            "wiki 분류 — item=%s matched=%d new=%d (%s)",
+            item_id, meta.get("matched_count", 0), meta.get("new_pages_count", 0),
+            result.output_text,
+        )
+
+
 async def _process_one(item: dict[str, Any]) -> bool:
     """한 item 의 chunks + summary 생성. 성공이면 True, 영구 skip 이면 False."""
     item_id = item["id"]
@@ -125,6 +154,16 @@ async def _process_one(item: dict[str, Any]) -> bool:
                     "summary 생성 — item=%s, source=%s, len=%d",
                     item_id, item.get("source_type"), len(summary_text),
                 )
+                # 3. D10 wave-2c — classifier hook. summary 가 있어야 의미 추론 가능.
+                #    classifier 가 wiki_pages 매핑 + wiki_pages.body_status='stale' 마킹.
+                #    body 합성은 사용자가 wiki page 열 때 lazy 또는 wiki_writer_batch 가.
+                try:
+                    await _classify_to_wiki(session, item_id)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(
+                        "wiki classifier 실패 (item=%s, %s: %s) — summary 는 정상",
+                        item_id, type(e).__name__, e,
+                    )
                 return True
             else:
                 logger.info(

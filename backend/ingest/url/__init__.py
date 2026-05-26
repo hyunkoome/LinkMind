@@ -444,6 +444,25 @@ async def ingest_url(
             url, error="본문 추출 실패", force=force, caption=caption,
         )
 
+    # ── arxiv URL hook (2026-05-26 사용자 명시) ──
+    # arxiv.org/abs/N 같은 URL 이면 arxiv API 호출 → 진짜 논문 제목 + abstract.
+    # HTML title 추출은 "arxiv:N.NNNN" 같은 slug-form 으로 나올 때 많아 부정확.
+    # arxiv API 가 권위 있는 메타 (3 req/sec, 안정적). 실패 시 HTML title fallback.
+    from backend.ingest.arxiv import fetch_arxiv_metadata, parse_arxiv_id
+    arxiv_id = parse_arxiv_id(url)
+    if arxiv_id:
+        arxiv_meta = await fetch_arxiv_metadata(arxiv_id)
+        if arxiv_meta and arxiv_meta.get("title"):
+            old_title = doc.title
+            doc.title = arxiv_meta["title"]
+            # abstract 없으면 arxiv summary 로 보강
+            if not doc.abstract and arxiv_meta.get("summary"):
+                doc.abstract = arxiv_meta["summary"]
+            logger.info(
+                "arxiv API 메타 적용 — id=%s, title: %r → %r",
+                arxiv_id, old_title, doc.title[:80],
+            )
+
     # 외부 식별자 (arxiv_id / doi / github_repo / yt video_id 등) — URL + 본문 모두에서.
     ext_ids = extract_external_ids(url=url, text=doc.body)
 

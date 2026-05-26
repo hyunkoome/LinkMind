@@ -20,7 +20,7 @@
 
 → 사용자가 personal AI engine 한 개를 self-host 한다는 비전 (CLAUDE.md §1) 에 일치.
 
-다만 **모듈 경계는 명확히 분리** — `backend/` ↔ `ai_agents/` ↔ `frontend/` ↔ `frontend_v2/`
+다만 **모듈 경계는 명확히 분리** — `backend/` ↔ `ai_agents/` ↔ `frontend/` ↔ `frontend/`
 가 같은 venv 안에 있되 독립 진입점.
 
 ---
@@ -44,7 +44,7 @@ LinkMind/
 │  └─ discord_inbox_watcher.py     (Phase 3+)
 │
 ├─ frontend/app.py          # Streamlit MVP (Settings/Search)
-├─ frontend_v2/             # Next.js 14 graph UI (Phase 2.5+)
+├─ frontend/             # Next.js 14 graph UI (Phase 2.5+)
 │
 └─ external/                # gitignored 벤치마킹 참조 clone
    ├─ openclaw/             # multi-channel routing UX 참조
@@ -158,10 +158,10 @@ LICENSE/copyright notice 만 보존하면 됨. 다운스트림 통합본은 AGPL
 | Channel-specific daemon | hermes-agent gateway 각 channel | `ai_agents/{slack,whatsapp,discord}_inbox_watcher.py` | 일부 코드 vendor 가능 (auth/session 핸들링) | 3+ |
 | Plugins 아키텍처 | hermes-agent `plugins/` | `backend/ingest/` 정리 (auto dispatcher) | 패턴만 (ABC 강제 X) | 2.5 |
 | Auto-skills (자가학습) | hermes-agent `skills/` | `backend/jobs/auto_skill_*.py` (가칭) | 패턴 + 부분 코드 vendor 가능 | 3+ |
-| 3 패널 layout (sidebar + main + details) | hermes-webui | `frontend_v2/` Next.js 페이지 | UX 패턴 재구현 (Tailwind) | 2.5 |
-| SSE streaming chat | hermes-webui `static/messages.js` | `frontend_v2/components/Ask.tsx` | 패턴 재구현 (Server Sent Events + EventSource 표준) | 2.5 |
-| Streaming markdown rendering | hermes-webui | `frontend_v2/` (react-markdown + remark) | 표준 라이브러리 사용 | 2.5 |
-| 9 skin / 다크모드 | hermes-webui CSS | `frontend_v2/` Tailwind | 재구현 (Tailwind dark mode) | 2.5+ (POC 후) |
+| 3 패널 layout (sidebar + main + details) | hermes-webui | `frontend/` Next.js 페이지 | UX 패턴 재구현 (Tailwind) | 2.5 |
+| SSE streaming chat | hermes-webui `static/messages.js` | `frontend/components/Ask.tsx` | 패턴 재구현 (Server Sent Events + EventSource 표준) | 2.5 |
+| Streaming markdown rendering | hermes-webui | `frontend/` (react-markdown + remark) | 표준 라이브러리 사용 | 2.5 |
+| 9 skin / 다크모드 | hermes-webui CSS | `frontend/` Tailwind | 재구현 (Tailwind dark mode) | 2.5+ (POC 후) |
 | Onboard daemon 등록 (launchd/systemd) | openclaw `openclaw onboard` | `scripts/install_*_agent.sh` (가칭) | 패턴 차용 | 3+ |
 
 ---
@@ -187,7 +187,7 @@ semantic + tag 검색. 응답에 topic 정보 포함.
 RAG 답변. 향후 SSE streaming 변형 추가 (Phase 2.5+).
 
 ### `GET /graph/topics` / `/graph/search` / `/graph/item/{id}` (Phase 2.5 신설)
-cytoscape JSON 포맷 — frontend_v2 graph UI 용.
+cytoscape JSON 포맷 — frontend graph UI 용.
 
 ---
 

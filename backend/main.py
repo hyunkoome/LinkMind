@@ -29,10 +29,12 @@ from backend.api import (
     search,
     settings as settings_api,
     topics,
+    wiki,
 )
 from backend.config import get_settings
 from backend.db.connection import close_engine, get_engine
 from backend.jobs.analysis_worker import run_analysis_worker
+from backend.jobs.wiki_writer_worker import run_wiki_writer_worker
 
 settings = get_settings()
 
@@ -64,30 +66,61 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 사용자 architecture 비판 반영 (2026-05-18): 텔레그램 ingest 가 LLM 호출까지
     # 동기로 하면 1메시지 ~30-60초 → 채널 비우는 데 사용자 막힘.
     # → 텔레그램 daemon 은 raw + 채널 삭제만 즉시, 이 worker 가 deferred 분석.
+    # → 그 끝에 wave-2c: classifier hook (item → wiki_pages 자동 분류, M:N).
     worker_stop = asyncio.Event()
     worker_task = asyncio.create_task(
         run_analysis_worker(stop_event=worker_stop),
         name="analysis_worker",
     )
 
+    # wiki_writer_worker — D10 wave-2 (2026-05-26 사용자 명시 정책).
+    # 분리:
+    #   - daemon (이거)        : body_status='stale' 만 → 신규 ingest 자동 wiki body
+    #   - batch CLI (사용자)   : empty + stale 다 → 옛 23k backfill
+    # 두 set 가 disjoint (daemon 은 옛 empty 안 건드림) — 동시 실행 안전.
+    # default ON, env LINKMIND_WIKI_WRITER_DAEMON=0 으로 명시 disable.
+    import os
+    daemon_enabled = os.getenv("LINKMIND_WIKI_WRITER_DAEMON", "1") != "0"
+    wiki_writer_stop: asyncio.Event | None = None
+    wiki_writer_task = None
+    if daemon_enabled:
+        logger.info(
+            "wiki_writer_worker daemon ENABLED (default) — stale 자동 처리. "
+            "끄려면 env LINKMIND_WIKI_WRITER_DAEMON=0"
+        )
+        wiki_writer_stop = asyncio.Event()
+        wiki_writer_task = asyncio.create_task(
+            run_wiki_writer_worker(stop_event=wiki_writer_stop),
+            name="wiki_writer_worker",
+        )
+    else:
+        logger.info(
+            "wiki_writer_worker daemon DISABLED (env LINKMIND_WIKI_WRITER_DAEMON=0)"
+        )
+
     try:
         yield
     finally:
-        logger.info("LinkMind 종료 — analysis_worker 정리 + DB 엔진 close")
+        logger.info("LinkMind 종료 — worker 들 정리 + DB 엔진 close")
         worker_stop.set()
-        # LLM 호출 중일 수 있어 60초까지 graceful 대기. 그 후 force cancel.
-        # (cancel 시 in-flight DB transaction 은 rollback 됨 — 다음 시작 시 그 item 재처리)
-        try:
-            await asyncio.wait_for(worker_task, timeout=60.0)
-        except asyncio.TimeoutError:
-            logger.warning("analysis_worker timeout (60s) — force cancel")
-            worker_task.cancel()
+        if wiki_writer_stop is not None:
+            wiki_writer_stop.set()
+        # 각 worker 가 LLM 호출 중일 수 있어 60초 graceful 대기. 그 후 force cancel.
+        tasks_to_wait = [("analysis_worker", worker_task)]
+        if wiki_writer_task is not None:
+            tasks_to_wait.append(("wiki_writer_worker", wiki_writer_task))
+        for task_name, task in tasks_to_wait:
             try:
-                await worker_task
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001
-                pass
-        except Exception as e:  # noqa: BLE001
-            logger.warning("analysis_worker 종료 중 예외: %s", e)
+                await asyncio.wait_for(task, timeout=60.0)
+            except asyncio.TimeoutError:
+                logger.warning("%s timeout (60s) — force cancel", task_name)
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                    pass
+            except Exception as e:  # noqa: BLE001
+                logger.warning("%s 종료 중 예외: %s", task_name, e)
         await close_engine()
 
 
@@ -118,6 +151,7 @@ app.include_router(topics.router, prefix="/topics", tags=["topics"])
 app.include_router(items.router, prefix="/items", tags=["items"])
 app.include_router(graph.router, prefix="/graph", tags=["graph"])
 app.include_router(categories.router, prefix="/categories", tags=["categories"])
+app.include_router(wiki.router, prefix="/wiki", tags=["wiki"])
 
 
 @app.get("/")

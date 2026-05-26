@@ -21,20 +21,33 @@ GitHub · Arxiv · YouTube · Image           (Phase 3+: Slack/WhatsApp/Discord)
         attachments)
                            │
                            ▼
-                  FastAPI + Streamlit (MVP)
-                  + Next.js graph UI (Phase 2.5+)
+                  FastAPI + Next.js 16 (frontend/)
+                  + 3D Graph (react-force-graph-3d)
+                  + /wiki UI (D10 wave-1+2, 2026-05-26)
+                           │
+            ┌──────────────┼──────────────┬──────────────┐
+            ▼              ▼              ▼              ▼
+       /ingest /search   /ask  /graph  /items /topics  /wiki/*
+                                                       (list + detail +
+                                                        keyword search +
+                                                        regenerate)
                            │
                            ▼
-        /ingest  /search  /ask  /graph  /items  /topics
+        [D10 llm_wiki — 2026-05-26 wave-1+2 완료]
+        - 4 agent (classifier + retriever + writer + critic)
+        - wiki body 자동 합성 (vLLM Qwen2.5-7B, 5 섹션 markdown)
+        - wiki_writer_worker daemon (신규 ingest 자동)
+        - wiki_writer_batch CLI (옛 23k backfill, ~1일)
                            │
                            ▼
-           (Phase 2+) dataset export
+           (Phase 3 후반) dataset exporter
+        — agent_runs + wiki_page_versions diff
                            │
                            ▼
-        sVLL 파인튜닝 (LoRA / QLoRA) — 사용자 본인 데이터로 본인 모델만
+        sVLL LoRA 파인튜닝 — 사용자 본인 데이터로 본인 모델만
                            │
                            ▼
-         vLLM / Ollama 로 온프레미스 서빙
+         vLLM 으로 온프레미스 서빙 + LoRA hot-swap
                            │
                            ▼
             LinkMind LLMProvider 로 dogfooding
@@ -146,7 +159,7 @@ bash scripts/step4_check_qdrant.sh       # 컬렉션 존재 + vector dim 일치 
 
 ```bash
 # 넷 다 idempotent 자동 (기존 process 정리 후 재기동)
-bash scripts/step5_run_dev.sh             # backend + Streamlit + frontend_v2 + telegram
+bash scripts/step5_run_dev.sh             # backend + Streamlit + frontend + telegram
 bash scripts/step5_run_dev.sh --status    # pid + 포트 + 최근 로그
 bash scripts/step5_run_dev.sh --stop      # 넷 다 종료
 bash scripts/step5_run_dev.sh --no-telegram      # telegram 빼고 셋
@@ -154,8 +167,8 @@ bash scripts/step5_run_dev.sh --no-frontend-v2   # Next.js 빼고 셋 (Phase 1-2
 bash scripts/step5_run_dev.sh --backend-only
 bash scripts/step5_run_dev.sh --frontend-v2-only
 
-# 첫 실행 시 frontend_v2/node_modules 가 없으면 자동으로 npm install (1-2분, 1회만).
-# Node 22+ 가 없으면 frontend_v2 만 silent skip.
+# 첫 실행 시 frontend/node_modules 가 없으면 자동으로 npm install (1-2분, 1회만).
+# Node 22+ 가 없으면 frontend 만 silent skip.
 ```
 
 기동되는 서비스:
@@ -163,10 +176,10 @@ bash scripts/step5_run_dev.sh --frontend-v2-only
 | 서비스 | URL | 역할 |
 |---|---|---|
 | FastAPI backend | http://localhost:8000 (`/docs` Swagger) | DB + 검색 + ingest + graph API |
-| **Next.js (frontend_v2/)** | **http://localhost:3001** | Graph (3D) · Ingest · Search · Settings 일원화 UI |
+| **Next.js (frontend/)** | **http://localhost:3001** | Graph (3D) · Ingest · Search · Settings 일원화 UI |
 | Telegram daemon | (백그라운드) | LinkMind-Inbox 채널 listen + 자동 ingest |
 
-> Streamlit (frontend/) 은 Phase 2.5 wave-3 에서 폐기 — Settings/Ingest/Search 가 frontend_v2 페이지로 마이그레이션됨. 폴더 자체는 회고용으로 남기지만 step5 가 시작 안 함.
+> Streamlit (frontend/) 은 Phase 2.5 wave-3 에서 폐기 — Settings/Ingest/Search 가 frontend 페이지로 마이그레이션됨. 폴더 자체는 회고용으로 남기지만 step5 가 시작 안 함.
 
 확인:
 
@@ -183,11 +196,71 @@ python -m backend.ingest.url https://arxiv.org/abs/2106.09685
 python -m backend.ingest.url --force https://arxiv.org/abs/2106.09685
 ```
 
-또는 Streamlit `Ingest` 탭에서 URL 입력 — host 자동 분류 (youtube / github /
+또는 frontend `Ingest` 탭에서 URL 입력 — host 자동 분류 (youtube / github /
 *.pdf / 일반 페이지) + PDF 파일 업로드. force 체크박스로 재계산 가능.
+
+**arxiv / IEEE / DOI URL** 은 자동으로 진짜 논문 제목 추출 (arxiv API hook +
+publisher SSR title). 예: `https://arxiv.org/abs/2003.02014` → title=
+"Redesigning SLAM for Arbitrary Multi-Camera Systems" (URL 이 아닌).
 
 같은 주제 (같은 arxiv_id / github_repo / doi / yt_id) 의 자료가 여러 modality 로
 들어오면 자동으로 한 **topic** 으로 묶임 — `Topics` 탭에서 확인.
+
+### 7.5. D10 wiki — 자료를 wiki 페이지로 자동 합성 (2026-05-26)
+
+수집한 자료를 의미 단위 wiki 페이지로 자동 분류 + LLM markdown 본문 합성.
+일반 chunk-RAG 가 아닌 **karpathy llm_wiki + multi-agent** 패턴.
+
+**신규 ingest 자동 흐름** — 사용자 행동 X. 텔레그램에 URL 던지면:
+```
+ai_agents → /ingest/url
+   ↓
+items raw 저장 + 채널 삭제 (즉시)
+   ↓
+analysis_worker (backend lifespan):
+   - chunks (embedding) + summary (LLM)
+   - classifier hook → wiki_page_items 매핑 + stale 마킹
+   ↓
+wiki_writer_worker daemon (lifespan):
+   - 자동 body 합성 (vLLM Qwen2.5-7B, ~15s/page)
+   ↓
+사용자가 frontend `/wiki/[slug]` 열면 ready 상태
+```
+
+**옛 자료 일괄 backfill** (사용자 직접 1회 실행 — ~1일 / 23,792 pages):
+```bash
+bash scripts/run_wiki_backfill.sh                       # 백그라운드 시작 (nohup)
+bash scripts/run_wiki_backfill.sh --tail                # 진행률 실시간
+bash scripts/run_wiki_backfill.sh --status              # 요약 + log 5줄
+bash scripts/run_wiki_backfill.sh --stop                # graceful (현재 page 끝나고)
+bash scripts/run_wiki_backfill.sh --stop-force          # 즉시 SIGKILL
+bash scripts/run_wiki_backfill.sh --concurrency 8       # 더 빠르게 (VRAM 여유)
+bash scripts/run_wiki_backfill.sh                       # 한 줄 재시작 (옛 거 자동 SIGKILL)
+```
+
+성능: concurrency=4 + vLLM continuous batching → page 당 **~3.7초** (sequential
+17초 대비 4.6x). 23,792 page 약 24 시간.
+
+**frontend `/wiki`**:
+- list — status filter (empty/generating/ready/stale) + q text + keyword filter
+- detail — markdown body + Sources panel + Relationship + KeywordsEditor (✏️ 수정
+  토글 후 ✕ 삭제 / + 추가 / autocomplete / ✨ 신규 등록)
+- 키워드 click → 같은 키워드 가진 모든 wiki page 자동 filter
+- 🔄 재합성 버튼 — 명시적 LLM 재호출
+
+API endpoints (8개):
+```
+GET  /wiki                          # list (status / q / keyword / pagination)
+GET  /wiki/{slug}                   # detail (body 가 empty/stale 면 자동 eager 합성)
+GET  /wiki/{slug}?regenerate=true   # 강제 재합성
+POST /wiki/{slug}/regenerate        # 명시적 재합성 (옛 버전은 wiki_page_versions 보존)
+POST /wiki/{slug}/keywords          # add/remove (case-insensitive)
+GET  /wiki/_keywords/search?q=...   # autocomplete
+POST /wiki/search                   # Qdrant body embedding 의미 검색
+POST /wiki/classify                 # item(s) → wiki_pages 자동 분류
+```
+
+자세한 설계: [docs/llm_wiki_design.md](docs/llm_wiki_design.md)
 
 ### 8. 테스트 (CI 와 로컬 분리)
 
@@ -315,7 +388,7 @@ LinkMind/
 
 ### 단일 self-contained 시스템 (Phase 2.5+, 2026-05-18)
 
-LinkMind 는 backend (`backend/`) + multi-channel gateway (`ai_agents/`) + Streamlit MVP (`frontend/`) + Next.js graph UI (`frontend_v2/`, Phase 2.5+) 를 한 저장소에서 같이 유지. self-host 한 방으로 다 따라온다.
+LinkMind 는 backend (`backend/`) + multi-channel gateway (`ai_agents/`) + Streamlit MVP (`frontend/`) + Next.js graph UI (`frontend/`, Phase 2.5+) 를 한 저장소에서 같이 유지. self-host 한 방으로 다 따라온다.
 
 외부 프로젝트 (openclaw, hermes-agent, hermes-webui) 는 `external/{name}/` 의 gitignored clone — **벤치마킹 참조 전용**. 셋 다 MIT 라이센스라 부분 코드 vendor 도 가능 (attribution 보존). 다만 통째 fork 대신 idea/UX 패턴 차용 후 자체 구현이 일반적.
 
@@ -342,9 +415,10 @@ LinkMind 는 backend (`backend/`) + multi-channel gateway (`ai_agents/`) + Strea
 | **2.5 wave-5 인프라 (D13 vLLM-embed, 2026-05-23)** | **OOM 근본 fix**. bge-m3 가 프로세스마다 GPU 별도 로드 (uvicorn 4.4 GB + watcher 3.8 GB + vLLM 18.8 GB ≈ 27 GB > 24 GB). vLLM 통일 (TEI 안 씀): compose 에 `vllm-embed` (`--runner pooling`) 추가, `backend/embedding/vllm_embed.py` 신규, `factory.py` env switch. GPU: vllm-llm 18.5 + vllm-embed 2.0 = 20.5 / 24 GB. analysis_worker transaction 버그 fix + backfill_summary chunks 보강. | ✅ 완료 (commit 46c36eb) |
 | **Telegram multi-channel via yaml (2026-05-23)** | 단일 LinkMind-Inbox → 15개 채널 통합 inbox. `config/telegram_channels.yaml` 단일 진실 (필수: invite/delete_after_ingest, 선택: name). watcher: FloodWait 자동 대기, channel_id cache + dialog cache (rate limit 회피). `ai_agents/telegram_channels.py` 신규 + 17 테스트. 옛 single fallback 완전 제거. | ✅ 완료 (commit 7d20119) |
 | **2.5 wave-5 보강 (2026-05-25)** | (1) **batch 구조 제거** — GPU VRAM 한계로 어차피 직렬 ingest, batch 효익 X. yaml 순서대로 한 채널씩 [resolve → backfill → 다음] (`[N/M]` 진척 로그). (2) **`ai_agents/check_telegram_invites.py`** — invite 검증 + yaml/cache 자동 정리 (ALIVE/NOT-MEMBER/DEAD-HASH 분류 + .bak.<ts> 백업). 17 테스트. (3) **`step5_run_dev.sh` 통합** — watcher 시작 직전 check 자동 실행 (`--skip-check` 옵션). 사용자가 텔레그램에서 leave/추방한 채널 자동 정리. 실제 검증: yaml 14→6 / cache 9→3. (4) **Graph "node not found" 근본 fix** — `backend/api/graph.py` 3 endpoint 가 `list_topics(limit=500)` 으로 fetch 후 dict lookup → DB 의 23,631 topic 중 limit 밖은 dangling. `list_topics_by_ids(ids)` 신규로 정확 fetch. (5) **URL ingest OG meta fallback** — 본문 추출 실패 시 og:title/description/image 로 raw body 합성 (LinkedIn/Facebook 같은 SNS 도 카드 데이터 보존). abstract cutoff 200→100자. 17 테스트. (6) **YouTube channel handle + oEmbed fallback** — `/@username` channel URL 인식 (`channel` kind, url ingest fallback). yt-dlp IP 차단 시 (위장: "video not available") oEmbed API → title + author + thumbnail + LLM summary/tags. 차단됐던 영상도 정상 ingest 검증. 7 테스트. (7) **fallback topic 테스트 갱신** (wave-3 동작 반영). **327 passed / 0 회귀**. | ✅ 완료 |
-| **D12 placeholder/실패 자료 정리 (2026-05-25)** | §2 raw-first 의 확장 — 본문 fetch 실패해도 raw + URL + provenance 무조건 DB 보존 + 사용자 수동 보강 UI. **Wave-1** (commit 39a82d1): `backend/jobs/mark_fetch_failed.py` 자동 분류 (2594건 마킹: image_no_ocr 1751 / extraction_failed 806 / binary 36 / short 1). `GET /items` list + facets drilldown + POST `/items/{id}/notes` (user_notes append) + `/categories/{slug}` (manual link). `frontend_v2/app/cleanup/` — FilterSidebar + ItemCard (이미지 grid) + ActionPanel (kind별 hint). 32 단위 테스트. **Wave-2** (commit aba9f65): Slack manifest 재처리 — `backend/db/repository.merge_source_metadata` + Slack URL 분기 slack provenance 보강 + `backend/jobs/ingest_slack_manifest.py` (placeholder 633 메타 보강 + exception 320 wave-5/D13 fix 흐름 재시도). 결과: 915 / 953 (96%) DB 등록, unresolved 38건만 진짜 손실 (YouTube 영상 삭제 37 + 깨진 URL 1). 14 테스트. **Slack 정리**: `archive/slack_export/` 628MB 삭제 (DB items 1307 + volumes/archive 4.7GB 보존 검증). **Wave-3** (commit 269b3b5): `DELETE /items/{id}` + ActionPanel 의 2단계 confirm 영구 삭제 UI. 진짜 사라진 자료 (영상 삭제 / 도메인 죽음 / HTTP 429 영구 차단) 정리. Qdrant points + Postgres CASCADE (chunks / attachments / item_topics 자동 삭제). §11 Privacy §4 (삭제 권리) 부합. | ✅ 완료 |
-| **D10 llm_wiki 아키텍처 (큰 그림, 여러 세션)** | karpathy llm_wiki + vlm_wiki + multi-agent + 자가학습. 일반 RAG 아닌 **topic = wiki 페이지** 단위. `external/karpathy/llm_wiki/` 분석 → `docs/llm_wiki_design.md` → `backend/agents/` **4종** (**classifier** + retriever + writer + critic) → `/wiki/{slug}`. **agent 가 모든 자료 (placeholder 포함) 자동 wiki 분류** → wave-4 휴리스틱 categories 진화. vLLM base 모델 inference 만 (학습 X — Phase 4). cleanup 페이지에서 사용자 user_notes 로 보강한 자료도 wiki 페이지 합성 시 중요 신호로 활용. | 🚧 다음 |
-| D9/D11/D8 | D9 arxiv title 재시드 → D11 카테고리 UI 편집 → D8 cross-modality matching (wiki 모델 안에서 흡수) | |
+| **D12 placeholder/실패 자료 정리 (2026-05-25)** | §2 raw-first 의 확장 — 본문 fetch 실패해도 raw + URL + provenance 무조건 DB 보존 + 사용자 수동 보강 UI. **Wave-1** (commit 39a82d1): `backend/jobs/mark_fetch_failed.py` 자동 분류 (2594건 마킹: image_no_ocr 1751 / extraction_failed 806 / binary 36 / short 1). `GET /items` list + facets drilldown + POST `/items/{id}/notes` (user_notes append) + `/categories/{slug}` (manual link). `frontend/app/cleanup/` — FilterSidebar + ItemCard (이미지 grid) + ActionPanel (kind별 hint). 32 단위 테스트. **Wave-2** (commit aba9f65): Slack manifest 재처리 — `backend/db/repository.merge_source_metadata` + Slack URL 분기 slack provenance 보강 + `backend/jobs/ingest_slack_manifest.py` (placeholder 633 메타 보강 + exception 320 wave-5/D13 fix 흐름 재시도). 결과: 915 / 953 (96%) DB 등록, unresolved 38건만 진짜 손실 (YouTube 영상 삭제 37 + 깨진 URL 1). 14 테스트. **Slack 정리**: `archive/slack_export/` 628MB 삭제 (DB items 1307 + volumes/archive 4.7GB 보존 검증). **Wave-3** (commit 269b3b5): `DELETE /items/{id}` + ActionPanel 의 2단계 confirm 영구 삭제 UI. 진짜 사라진 자료 (영상 삭제 / 도메인 죽음 / HTTP 429 영구 차단) 정리. Qdrant points + Postgres CASCADE (chunks / attachments / item_topics 자동 삭제). §11 Privacy §4 (삭제 권리) 부합. | ✅ 완료 |
+| **D10 llm_wiki 아키텍처 wave-1+2 (2026-05-26)** | karpathy llm_wiki + multi-agent (physics-intern state-centric) + YAML prompt (ml-intern) 차용. **wave-1**: schema 4 테이블 + 4 agent (classifier/retriever/writer + critic stub) + wiki API 8 endpoints + Qdrant body embedding 검색 + frontend rename (frontend_v2 → frontend, 44 refs) + `/wiki/` list+detail+KeywordsEditor view/edit + backfill 23,852 pages. **wave-2c**: analysis_worker classifier hook (텔레그램 신규 ingest 자동 wiki 분류). **wave-2d**: keywords 진화 (schema TEXT[] + writer prompt 자동 추출 + 3 API + KeywordsEditor view/edit + matching wiki filter + ✨ 신규 등록). **arxiv URL hook** (`backend/ingest/arxiv/`, 신규 arxiv/IEEE/DOI 진짜 제목). **daemon 분리**: `wiki_writer_worker` (lifespan, stale 만, 신규 ingest 자동) + `wiki_writer_batch` CLI (empty+stale, 사용자 직접). **성능 4.6x**: vLLM prefix-caching + max-num-batched-tokens 16384 + max_tokens 1024 + concurrent N=4 → 17초/page → 3.7초/page. ETA 4.7일 → ~1일. | ✅ 완료 |
+| **D10 wave-3 (다음)** | critic agent 본격 구현 (citation 검증 + contradiction flag + writer 후처리 patch) + lint job (모순/stale/orphan) + filing-back (`/ask` 답변 → wiki 적립) | 🚧 다음 |
+| D9/D11/D8 | D9 arxiv title 재시드 (이미 신규 ingest hook 으로 자동) → D11 카테고리 UI 편집 (keywords API 패턴 재사용) → D8 cross-modality matching (wiki body 안 자연) | |
 | 2 후반 (AI 카테고리/feedback/dataset exporter) | AI 카테고리 강화, feedback 테이블, dataset exporter (JSONL) | |
 | 3 | 이미지/OCR/멀티모달 RAG, MinIO object storage, `ai_agents/` 채널 확장 (Slack/WhatsApp/Discord), 자가학습 (auto prompt/ingester 개선) | |
 | 4 | **sVLL LoRA 파인튜닝** (LLaMA-Factory + Qwen2-VL), vLLM 서빙 — self-host 또는 hosted enterprise tier 옵션 | |
@@ -353,22 +427,39 @@ LinkMind 는 backend (`backend/`) + multi-channel gateway (`ai_agents/`) + Strea
 
 자세한 backlog 와 phase 별 완료/미구현 항목 — `docs/features_backlog.md` + `CLAUDE.md §13` 참고.
 
-### 다음 세션 진입 순서 (2026-05-25 마감 갱신)
+### 다음 세션 진입 순서 (2026-05-26 갱신, D10 wave-1+2 완료 후)
 
-> **오늘 한 일 (2026-05-25)**: wave-5 보강 (commit 6294c3f) + D12 wave-1 (commit
-> 39a82d1) + D12 wave-2 (commit aba9f65) + Slack archive 삭제 + D12 wave-3 영구
-> 삭제 (commit 269b3b5) + 문서 정리 (commit 36cb6a0, 1affb83, 1924829). **7 commit +
-> push.** Slack 데이터는 모두 DB + volumes/archive 에 영구 보존 (1,307 items +
-> 4.7GB raw). 다음 세션은 재가동 + D10 llm_wiki 시작.
-> 자세한 재개 가이드는 memory `project_next_session_entrypoint`.
+> **오늘 한 일 (2026-05-26)**: D10 wave-1 (schema 4 테이블 + 4 agent + wiki API 8
+> + Qdrant body + frontend list/detail + KeywordsEditor + 23,852 backfill) + wave-2c
+> (analysis_worker classifier hook, 신규 ingest 자동 wiki 분류) + wave-2d (keywords:
+> schema + writer prompt + 3 API + view/edit UI + matching wiki filter) + arxiv URL
+> hook + wiki_writer_worker daemon + wiki_writer_batch CLI + scripts/run_wiki_backfill.sh
+> + 성능 최적화 4.6x (concurrent N=4 + vLLM prefix-caching). 자세히는
+> `docs/llm_wiki_design.md` 와 `CLAUDE.md §13`.
 
-**Todo list (다음 세션 시작 시)** — 2026-05-25 사용자 결정 반영:
+**진행 순서**
 
-| # | 작업 | 상태 |
-|---|---|---|
-| 1 | backend + frontend + watcher 재가동 (`bash scripts/step5_run_dev.sh`) | pending |
-| 2 | **D10 llm_wiki 첫 세션 (최우선)** — `external/karpathy/llm_wiki/` 분석 + `docs/llm_wiki_design.md` + `backend/agents/` 4종 (classifier + retriever + writer + critic) 설계. **agent 가 모든 자료 (placeholder 포함) 자동 wiki 분류 → wave-4 휴리스틱 categories 진화** | pending |
-| 3 | (D10 안정화 후) `ItemDetails.tsx` 에 user_notes append textarea 통합 — 모든 viewer 공통 1급 기능 | pending |
+⚠️ **중요 (2026-05-26 사용자 명시)**: backfill 도는 동안 vRAM/vLLM 을 batch 가
+독점. backend / watcher 같이 켜놓으면 LLM 호출 (analysis_worker + 사용자 wiki
+클릭) 이 batch 와 queue 경쟁 → 양쪽 다 느려짐. **backfill 도는 동안에는
+backend 끄고 batch 단독 실행** 권장.
+
+| # | 작업 | 상태 | 비고 |
+|---|---|---|---|
+| 1 | 인프라 점검 — `nvidia-smi` + `docker ps \| grep -E "vllm\|postgres\|qdrant"` | pending | 4 컨테이너 healthy 확인 |
+| 2 | ⚠️ backend / frontend / watcher 정지 — `bash scripts/step5_run_dev.sh --stop` | pending | vLLM 은 docker 라 그대로 살아있음 |
+| 3 | **옛 23k wiki backfill 시작** — `bash scripts/run_wiki_backfill.sh` | 🟢 ~1일 | nohup background, batch 가 vLLM 독점 → 최대 throughput |
+| 4 | 진행률 모니터 — `bash scripts/run_wiki_backfill.sh --tail` 또는 `--status` | pending | tqdm 실시간 / 요약 |
+| 5 | (~1일 대기) backfill 완료 확인 — `--status` | pending | 기대: ready ~23,800, empty 0 |
+| 6 | backend + frontend + watcher 재가동 — `bash scripts/step5_run_dev.sh` | pending | wiki_writer_worker daemon 자동 시작 (이제부터 신규 ingest 자동 wiki) |
+| 7 | **D10.5 — `ItemDetails.tsx` 에 user_notes append textarea 통합** | pending | 모든 viewer 공통. backend POST `/items/{id}/notes` 이미 동작 — frontend 만. 반나절. |
+| 8 | **D10 wave-3 — critic agent 본격** | pending | citation 검증 + contradiction flag + writer 후처리 patch. wave-1 stub 자리에. 중. |
+| 9+ | D12-4 / D11 / D8 / lint / filing-back | future | `CLAUDE.md §13 다음에 할 일` 표 참고 |
+
+**왜 backfill 중 backend 끄나?** vLLM Qwen2.5-7B = sequential model (한 번에 1
+forward pass). batch concurrent N=4 가 continuous batching 으로 max throughput.
+backend 의 analysis_worker / 사용자 frontend wiki 클릭 추가 → vLLM queue 경쟁 →
+batch 느려지고 사용자도 응답 느려짐. backfill 끝날 때까지 batch 단독이 최단.
 
 **사용자 수동 cleanup 작업은 미루기** — D10 agent 가 자동 분류하면 보강 우선순위 명확해짐.
 사용자 user_notes 입력은 **모든 viewer 공통 기능** (cleanup 페이지 국한 X) 으로 분리.

@@ -128,6 +128,12 @@ services:
       - "--gpu-memory-utilization"
       - "${VLLM_GPU_MEM_UTIL:-0.85}"
       - "--enable-lora"                 # Phase 4 LoRA adapter hot-swap 대비
+      # ── throughput 최적화 (2026-05-26) ──
+      - "--enable-prefix-caching"       # system prompt 매번 동일 → KV cache 재사용 (~20% 빨라짐)
+      - "--max-num-batched-tokens"
+      - "${VLLM_MAX_BATCHED_TOKENS:-16384}"  # default 8192 → 4 sequence × 2925 tokens 안전
+      - "--max-num-seqs"
+      - "${VLLM_MAX_NUM_SEQS:-32}"      # 동시 처리 sequence 한계 (concurrent N=4 충분 여유)
     deploy:
       resources:
         reservations:

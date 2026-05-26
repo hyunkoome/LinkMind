@@ -1,7 +1,7 @@
 """
 GET /graph/topics, GET /graph/search, GET /graph/item/{item_id}
 
-cytoscape.js 호환 JSON ({nodes: [...], edges: [...]}) 반환. frontend_v2 의 graph UI
+cytoscape.js 호환 JSON ({nodes: [...], edges: [...]}) 반환. frontend 의 graph UI
 (Phase 2.5+) 가 이 endpoint 만 호출해서 데이터 받음.
 
 설계:

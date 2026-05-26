@@ -505,38 +505,53 @@ vLLM-embed 인프라 작업으로 전환**.
 wave-4 의 cross-modal title fix 후 arxiv:* topic 들의 title 이 slug 그대로.
 `seed_arxiv_metadata` 재실행으로 진짜 paper title 보강.
 
-### D10. llm_wiki 아키텍처 도입 ⏳ (다음 — 최우선)
+### D10. llm_wiki 아키텍처 ✅ wave-1+2 완료 (2026-05-26)
 
-karpathy 의 llm_wiki + vlm_wiki + multi-agent + 자가학습. 일반 RAG 대신 wiki 페이지
-단위 (topic = wiki 페이지). [[project-llm-wiki-arch]] memory 참조.
+karpathy llm_wiki + multi-agent (physics-intern state-centric) + YAML prompt (ml-intern)
+패턴. 일반 chunk-RAG 대신 wiki 페이지 단위 (topic = wiki 페이지). 자세한 설계 +
+구현 trace 는 [docs/llm_wiki_design.md](llm_wiki_design.md).
 
-**사용자 비전 (2026-05-25 명확화)** — D10 의 scope 확장:
-- **agent 가 모든 자료 (placeholder / extraction_failed / image_no_ocr 포함) 자동 wiki 분류**.
-  wave-4 의 `auto_link_categories` (items.tags 빈도 ≥3 휴리스틱) 를 의미 단위 클러스터링으로 진화.
-- **vLLM base 모델 inference 만 사용** — 학습 X. 학습은 Phase 4 에서 LoRA fine-tune.
-- 사용자 수동 cleanup 작업 (user_notes paste) 은 미루기 — agent 자동 분류 후 우선순위 명확해짐.
+**완료 항목 (10 step)**:
 
-**`backend/agents/` 4종 agent**:
-
-| agent | 책임 | 비고 |
+| step | 항목 | 결과 |
 |---|---|---|
-| **classifier** | 모든 16,233 items → wiki 페이지로 자동 클러스터링. 기존 `categories` 테이블 자동 재구성. | placeholder 자료도 "참조 단서" 섹션으로 자동 포함 |
-| **retriever** | 한 wiki 페이지 속 자료 (raw + summary + user_notes + 첨부) 통합 검색 | [[project-search-quality-issue]] 자연 흡수 |
-| **writer** | wiki 페이지 합성 — multi-modality 섹션 (paper / code / video / SNS 카드) | D8 cross-modality matching 자연 흡수 |
-| **critic** | 출처 검증 + placeholder 자료의 정보 부족 명시 (미래 user_notes 보강 신호) | feedback 인프라와 연동 가능 |
+| wave-1a | schema 4 테이블 (wiki_pages + wiki_page_versions + wiki_page_items M:N + agent_runs) | ✅ 65 statements migrate |
+| wave-1b | AgentBase ABC (state-centric, template method) + YAML prompt loader + agent_runs 자동 적립 | ✅ `backend/agents/base.py` |
+| wave-1c | retriever + writer + `prompts/writer_v1.yaml` | ✅ smoke OK |
+| wave-1d | classifier (embedding 후보 + LLM JSON M:N + parse retry) + 새 wiki_page 'stale' 마킹 | ✅ |
+| wave-1e | wiki API 8 endpoints (list/detail/regenerate/search/classify/keywords-add-remove/autocomplete) | ✅ |
+| frontend rename | frontend_v2 → frontend (44 refs sed) + 옛 Streamlit 폐기 | ✅ |
+| wave-1f | Qdrant `linkmind_wiki_pages` 컬렉션 + body embedding upsert (writer hook) + Qdrant search 우선 (FTS fallback) | ✅ |
+| wave-1g | `wiki_backfill_from_topics.py` (23,852 pages) + frontend `/wiki/page.tsx` + `[slug]/page.tsx` + `WikiBody` + `KeywordsEditor` | ✅ |
+| wave-2c | analysis_worker `_classify_to_wiki` hook (텔레그램 ingest 자동 wiki 분류) | ✅ |
+| wave-2d | keywords (schema TEXT[] + writer prompt 자동 추출 + 3 API + view/edit UI + matching wiki filter) | ✅ |
 
-**첫 세션 plan**:
-1. `external/karpathy/llm_wiki/` 분석 — 코드 + 데이터 모델 + 검색·응답 흐름
-2. LinkMind 매핑: topic → wiki 페이지 / categories → wiki 자동 분류 / items → wiki source
-3. `docs/llm_wiki_design.md` 설계 문서
-4. `backend/agents/` 신규 — 4 agent 우선
-5. `/wiki/{slug}` endpoint prototype — multi-modality 통합 view
-6. cleanup 페이지 역할 재정의 — placeholder viewer + wiki 자동 분류 결과 확인 (D12-4)
-7. 사용자 검증 → 다음 단계
+**추가 작업**:
+- ✅ arxiv URL hook (`backend/ingest/arxiv/`) — 신규 arxiv/IEEE/DOI URL 자동 진짜 제목
+- ✅ wiki body 구조 정리 — 5 섹션 narrative 만 (Sources/Cross-links/Keywords 는 aside)
+- ✅ Relationship (Cross-links 이름) + 빈 섹션 표시
+- ✅ daemon 분리 — `wiki_writer_worker` (lifespan, stale 만) + `wiki_writer_batch` CLI (사용자 직접)
+- ✅ `scripts/run_wiki_backfill.sh` — start (자동 SIGKILL 재시작) / stop / restart / tail / status / concurrency
+- ✅ **성능 4.6x** — vLLM `--enable-prefix-caching` + `--max-num-batched-tokens 16384` + max_tokens 1024 + concurrent N=4. page 17초 → 3.7초. ETA 4.7일 → ~1일
+
+**자동 흐름 완성** — 사용자 명시 "텔레그램 ingest → 자동 wiki body":
+```
+텔레그램 → ai_agents → /ingest/url (arxiv API hook)
+   → items raw + 채널 삭제 (즉시)
+   → analysis_worker: chunks + summary + classifier (자동 wiki 매핑 + stale 마킹)
+   → wiki_writer_worker daemon: 자동 body 합성 (~15s/page)
+   → 사용자 wiki page 열 때 항상 ready
+```
+
+**wave-3 다음 작업**:
+- 🚧 critic agent 본격 (citation 검증 + contradiction flag + writer 후처리)
+- 🚧 lint job (모순/stale/orphan)
+- 🚧 `/ask` 답변 filing-back (wiki 적립)
+- 🚧 dataset exporter (Phase 4 LoRA 학습 입력)
 
 ### D10.5. ItemDetails user_notes append textarea 통합 ⏳ (D10 안정화 후 작은 wave)
 
-현재 `frontend_v2/components/ItemDetails.tsx` 의 user_notes 는 PATCH set 방식 (덮어쓰기).
+현재 `frontend/components/ItemDetails.tsx` 의 user_notes 는 PATCH set 방식 (덮어쓰기).
 **모든 viewer 의 1급 기능** 으로 cleanup 의 ActionPanel 의 textarea (POST `/items/{id}/notes`
 append, idempotent) 를 ItemDetails 에도 통합. 사용자 결정 (2026-05-25):
 > "user_notes 추가는 모든 데이터 대상이라 cleanup 페이지 국한 X 인 다른 기능"
@@ -576,7 +591,7 @@ D10 wiki classifier 가 모든 자료 자동 분류한 후 cleanup 페이지의 
   idempotent, LLM 키워드 추출 background task).
 - POST `/items/{id}/categories/{slug}` — item 의 첫 topic 을 카테고리에 manual link.
 
-**Frontend** (`frontend_v2/app/cleanup/`):
+**Frontend** (`frontend/app/cleanup/`):
 - FilterSidebar — facet 카운트 + drilldown 필터.
 - ItemCard — 이미지 thumbnail 인라인 + tags + URL + fetch_error_message preview.
   kind=image_no_ocr 시 grid 레이아웃 (썸네일 시각 인지 우선).

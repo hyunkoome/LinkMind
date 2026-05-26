@@ -245,3 +245,155 @@ class GraphResponse(BaseModel):
     """
     nodes: list[GraphNode] = Field(default_factory=list)
     edges: list[GraphEdge] = Field(default_factory=list)
+
+
+# ──────────────────────────────────────────────────────────────
+# Wiki (GET /wiki/*) — D10 llm_wiki 아키텍처 (2026-05-26)
+# docs/llm_wiki_design.md 참조
+# ──────────────────────────────────────────────────────────────
+
+
+class WikiSource(BaseModel):
+    """한 wiki page 의 source item."""
+    item_id: UUID
+    title: str | None = None
+    summary: str | None = None
+    source_type: str
+    source_url: str | None = None
+    confidence: float | None = None
+    role: str | None = None
+    user_action: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    user_notes: str | None = None
+    is_read: bool = False
+    attachment_count: int = 0
+
+
+class WikiCrossLink(BaseModel):
+    """다른 wiki 페이지 cross-link 후보."""
+    slug: str
+    title: str
+    shared_items: int
+
+
+class WikiPageDetail(BaseModel):
+    """GET /wiki/{slug} 응답 — wiki page 전체."""
+    id: UUID
+    topic_id: UUID | None = None
+    slug: str
+    title: str
+    description: str | None = None
+    variant: str = "default"
+    body: str | None = None
+    body_status: str        # 'empty' | 'generating' | 'ready' | 'stale'
+    body_model: str | None = None
+    body_prompt_version: str | None = None
+    body_generated_at: datetime | None = None
+    latest_version: int = 0
+    is_pinned: bool = False
+    user_overrides: str | None = None
+    keywords: list[str] = Field(default_factory=list)
+    sources: list[WikiSource] = Field(default_factory=list)
+    cross_links: list[WikiCrossLink] = Field(default_factory=list)
+    user_notes_combined: str | None = None
+
+
+class WikiKeywordsUpdateRequest(BaseModel):
+    """POST /wiki/{slug}/keywords — 키워드 add/remove."""
+    add: list[str] = Field(default_factory=list)
+    remove: list[str] = Field(default_factory=list)
+
+
+class WikiKeywordsUpdateResponse(BaseModel):
+    slug: str
+    keywords: list[str]
+    added: list[str]
+    removed: list[str]
+
+
+class WikiKeywordSuggestion(BaseModel):
+    keyword: str
+    usage_count: int       # 이 키워드가 쓰인 wiki page 수
+
+
+class WikiKeywordSearchResponse(BaseModel):
+    query: str
+    suggestions: list[WikiKeywordSuggestion]
+
+
+class WikiPageListItem(BaseModel):
+    """GET /wiki list 의 행."""
+    id: UUID
+    topic_id: UUID | None = None
+    slug: str
+    title: str
+    description: str | None = None
+    body_status: str
+    body_generated_at: datetime | None = None
+    source_count: int = 0
+    is_pinned: bool = False
+    updated_at: datetime
+
+
+class WikiPageListResponse(BaseModel):
+    total: int
+    pages: list[WikiPageListItem]
+
+
+class WikiSearchHit(BaseModel):
+    """POST /wiki/search 의 한 결과 (wiki page 단위)."""
+    page_id: UUID
+    slug: str
+    title: str
+    description: str | None = None
+    score: float
+    body_excerpt: str | None = None        # body 의 일부 (300자)
+    source_count: int = 0
+    body_status: str
+    matched_in: str = "body"               # 'body' | 'description' | 'sources'
+
+
+class WikiSearchRequest(BaseModel):
+    query: str
+    top_k: int = Field(default=10, ge=1, le=100)
+
+
+class WikiSearchResponse(BaseModel):
+    query: str
+    hits: list[WikiSearchHit] = Field(default_factory=list)
+
+
+class WikiRegenerateResponse(BaseModel):
+    """POST /wiki/{slug}/regenerate 응답."""
+    page_id: UUID
+    slug: str
+    ok: bool
+    body_length: int | None = None
+    version_number: int | None = None
+    duration_ms: int = 0
+    error: str | None = None
+
+
+class WikiClassifyRequest(BaseModel):
+    """POST /wiki/classify — 단일 item 또는 batch."""
+    item_id: UUID | None = None
+    item_ids: list[UUID] | None = None
+    threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+
+
+class WikiClassifyItemResult(BaseModel):
+    item_id: UUID
+    ok: bool
+    matched_count: int = 0
+    new_pages_count: int = 0
+    linked_page_slugs: list[str] = Field(default_factory=list)
+    duration_ms: int = 0
+    error: str | None = None
+
+
+class WikiClassifyResponse(BaseModel):
+    """POST /wiki/classify 응답 — 처리된 items 결과."""
+    processed: int
+    succeeded: int
+    failed: int
+    results: list[WikiClassifyItemResult] = Field(default_factory=list)

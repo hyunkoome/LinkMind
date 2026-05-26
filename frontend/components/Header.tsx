@@ -10,6 +10,7 @@ const NAV_HREFS = [
   { href: "/", icon: "🔮", key: "graph" as const },
   { href: "/ingest", icon: "📥", key: "ingest" as const },
   { href: "/search", icon: "🔍", key: "search" as const },
+  { href: "/wiki", icon: "📖", key: "wiki" as const },
   { href: "/cleanup", icon: "🧹", key: "cleanup" as const },
   { href: "/settings", icon: "⚙️", key: "settings" as const },
 ];
