@@ -42,6 +42,13 @@ GitHub · Arxiv · YouTube · Image           (Phase 3+: Slack/WhatsApp/Discord)
         - classifier 1:1 fallback wiki (사용자 자료 1순위)
         - /ask 대화형 RAG (Step 1)
         - wiki list UX (4 tab + pagination + ETA + 7 필드 검색)
+
+        [D10.6 wiki 중복 fix — 2026-05-28 진단 끝, 다음 세션 🔴]
+        - 증상: 같은 자료 1개가 wiki 여러 개로 쪼개짐
+          (yt__ / github__ / url__item__ 동시 primary)
+        - 원인 A: classifier 가 cross-modal 단서(conf 0.7)도 primary wiki 승격
+        - 원인 B: merge job title 기준 + min_len 20 → 한국어 짧은 제목 0건
+        - fix: classifier 는 자기 정체성 topic 만 primary, merge 는 item 기준 패스
                            │
                            ▼
            (Phase 3 후반) dataset exporter
