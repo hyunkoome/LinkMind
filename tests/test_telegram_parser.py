@@ -74,6 +74,49 @@ def test_find_urls_www_dedup_against_https():
     assert out == ["https://www.a.com"]
 
 
+# 2026-05-27: bare domain (protocol + www 둘 다 없는) — 사용자 사례 'unite.ai'
+def test_find_urls_bare_domain():
+    """`unite.ai` → `https://unite.ai` 자동 매칭 + 보강."""
+    assert _find_urls("unite.ai") == ["https://unite.ai"]
+
+
+def test_find_urls_bare_domain_with_path():
+    """`foo.com/path?q=1` (bare + path) 도 매칭."""
+    assert _find_urls("foo.com/article?id=42") == ["https://foo.com/article?id=42"]
+
+
+def test_find_urls_bare_domain_various_tlds():
+    """2-6자 TLD 모두 매칭 — .ai .com .dev .info 등."""
+    out = _find_urls("openai.com 보고 cursor.so 그리고 mit.edu 그리고 nasa.info")
+    assert out == [
+        "https://openai.com",
+        "https://cursor.so",
+        "https://mit.edu",
+        "https://nasa.info",
+    ]
+
+
+def test_find_urls_short_tld_not_matched():
+    """TLD 가 1자면 매칭 안 함 — abbreviation false positive 방지."""
+    # 'e.g.' 와 'i.e' 같은 일반 영어 abbreviation 은 URL 아님
+    assert _find_urls("for example, e.g. or i.e see https://example.com") == [
+        "https://example.com",
+    ]
+
+
+def test_find_urls_bare_and_https_mixed():
+    """bare + https 섞여 있어도 둘 다 정확히 매칭."""
+    out = _find_urls("자료1: https://arxiv.org/abs/123 그리고 자료2: unite.ai")
+    assert out == ["https://arxiv.org/abs/123", "https://unite.ai"]
+
+
+def test_find_urls_korean_text_no_false_positive():
+    """한국어 텍스트 안 영문 단어 안 매칭 — 일반 메모는 URL 로 잘못 잡지 않음."""
+    # '이번주.안에' 같은 한국어는 [a-z] 매칭 안 함 → 영향 X
+    out = _find_urls("이번 주 안에 끝내자. 좋은 자료다 정말.")
+    assert out == []
+
+
 def test_extract_text_string():
     assert _extract_text("hello") == "hello"
 
@@ -160,9 +203,9 @@ def test_parse_export_entity_text_concatenated():
     msgs = list(parse_export_messages(FIXTURE))
     msg3 = next(m for m in msgs if m.msg_id == 3)
     assert msg3.text == "관련 코드 github.com/HengyiWang/amb3r — 같은 주제."
-    # URL 추출도 동작 (https:// 가 아니라 entity href 에 있던 거라 fall-through 안 잡힘 — 의도)
-    # text 안에는 'github.com/...' 만 있고 'https://' 가 없으므로 _find_urls 결과는 []
-    assert _find_urls(msg3.text) == []
+    # 2026-05-27: bare domain 매칭 확장으로 protocol 없는 `github.com/...` 도 잡힘.
+    # 자동 https:// 보강 → 정상 ingest 가능 (옛 동작은 [] 였음).
+    assert _find_urls(msg3.text) == ["https://github.com/HengyiWang/amb3r"]
 
 
 def test_parse_export_date_unixtime():

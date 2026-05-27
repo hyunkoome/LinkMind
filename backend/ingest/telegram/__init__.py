@@ -45,11 +45,22 @@ logger = logging.getLogger(__name__)
 # ──────────────────────────────────────────────────────────────
 
 
-# 2026-05-27: protocol 없는 `www.foo.com` 형태도 매칭 (Slack/Telegram 사용자가
-# 자주 보내는 짧은 형식). 매칭된 URL 에 https:// 없으면 _find_urls 가 자동 추가.
-# 사용자 사례: msg 543 `text='www.unite.ai'` → urls=0 으로 ingest 실패했던 버그.
+# 2026-05-27: 세 가지 URL 형식 자동 매칭
+#   1) https?://foo.com/path — 표준
+#   2) www.foo.com           — protocol 누락 (이전 fix)
+#   3) foo.com / foo.ai      — bare domain (사용자 사례: msg 550 'unite.ai')
+# `_find_urls` 가 매칭된 URL 에 https:// 없으면 자동 prefix.
+#
+# bare domain 정규식 분석:
+#   \b[a-z0-9][a-z0-9-]*       — host 의 첫 segment (영문/숫자/-, 첫 글자는 영문/숫자)
+#   (?:\.[a-z0-9][a-z0-9-]*)*  — sub-domain (옵션, 예: www.foo)
+#   \.[a-z]{2,6}\b             — TLD (2-6자: .ai .com .info .dev 등). TLD 가 1자면 매칭 X
+#                                 → "e.g." 같은 abbreviation 잘못 매칭 방지
+#   (?:/[^\s<>"')]*)?         — path/query (옵션)
 _URL_RE = re.compile(
-    r"(?:https?://|www\.)[^\s<>\"'\)\]]+",
+    r"(?:https?://|www\.)[^\s<>\"'\)\]]+"
+    r"|"
+    r"\b[a-z0-9][a-z0-9\-]*(?:\.[a-z0-9][a-z0-9\-]*)*\.[a-z]{2,6}\b(?:/[^\s<>\"'\)\]]*)?",
     re.IGNORECASE,
 )
 
