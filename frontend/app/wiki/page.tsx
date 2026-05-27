@@ -186,9 +186,9 @@ export default function WikiListPage() {
   type StatusKey = "" | "ready" | "pending" | "completed";
   const STATUS_TABS: { key: StatusKey; label: string; icon: string }[] = [
     { key: "", label: "전체", icon: "" },
+    { key: "completed", label: "completed", icon: "✅" },
     { key: "ready", label: "ready", icon: "⏳" },
     { key: "pending", label: "pending", icon: "⏱" },
-    { key: "completed", label: "completed", icon: "✅" },
   ];
   const countFor = (k: StatusKey): number | null => {
     if (!stats) return null;
