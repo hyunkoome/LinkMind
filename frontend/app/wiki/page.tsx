@@ -306,13 +306,18 @@ export default function WikiListPage() {
             onChange={(e) => setQInput(e.target.value)}
             className="flex-1 px-3 py-1.5 text-sm rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100"
           />
-          {/* 일괄 합성 버튼 — ready tab 일 때만 노출 (재시도 트리거 안전망) */}
-          {statusFilter === "issues" && stats && stats.issues > 0 && (
+          {/* 일괄 합성 버튼 — issues tab 일 때 항상 노출. 0건이면 disabled. */}
+          {statusFilter === "issues" && (
             <button
               type="button"
               onClick={() => setConfirmBatch(true)}
-              disabled={batchInProgress}
-              className="px-3 py-1.5 text-xs rounded border border-blue-400 dark:border-blue-600 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-900/40 disabled:opacity-50"
+              disabled={batchInProgress || !stats || stats.issues === 0}
+              title={
+                stats && stats.issues === 0
+                  ? "처리할 issues 자료 없음"
+                  : "재시도 트리거 — 최대 10건 dispatch"
+              }
+              className="px-3 py-1.5 text-xs rounded border border-blue-400 dark:border-blue-600 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-900/40 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {batchInProgress
                 ? "⏱ 합성 중…"
