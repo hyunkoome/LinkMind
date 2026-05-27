@@ -212,6 +212,46 @@ export async function uploadPdf(
   return res.json();
 }
 
+// ── Ask (대화형 RAG, 2026-05-27) ───────────────────────────────
+
+export interface AskRequest {
+  question: string;
+  top_k?: number;
+  llm_provider?: string;
+  llm_model?: string;
+}
+
+export interface AskCitation {
+  item_id: string;
+  title: string | null;
+  source_url: string | null;
+  snippet: string | null;
+}
+
+export interface AskRelatedWiki {
+  slug: string;
+  title: string;
+  description: string | null;
+  body_status: string;
+  overlap: number;
+}
+
+export interface AskResponse {
+  question: string;
+  answer: string;
+  citations: AskCitation[];
+  related_wikis: AskRelatedWiki[];
+  llm_provider: string;
+  llm_model: string;
+}
+
+export async function askQuestion(body: AskRequest): Promise<AskResponse> {
+  return fetchJSON<AskResponse>(`/ask`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
 export { API_BASE };
 
 

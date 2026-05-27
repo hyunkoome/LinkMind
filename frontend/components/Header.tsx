@@ -9,6 +9,7 @@ import { useT } from "@/lib/i18n/context";
 const NAV_HREFS = [
   { href: "/", icon: "🔮", key: "graph" as const },
   { href: "/ingest", icon: "📥", key: "ingest" as const },
+  { href: "/ask", icon: "🤖", key: "ask" as const },
   { href: "/wiki", icon: "📖", key: "wiki" as const },
   { href: "/settings", icon: "⚙️", key: "settings" as const },
 ];

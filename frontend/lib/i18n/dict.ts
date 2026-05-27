@@ -10,6 +10,7 @@ const _raw = {
     nav: {
       graph: "그래프",
       ingest: "수집",
+      ask: "Ask",
       wiki: "위키",
       settings: "설정",
     },
@@ -144,6 +145,7 @@ const _raw = {
     nav: {
       graph: "Graph",
       ingest: "Ingest",
+      ask: "Ask",
       wiki: "Wiki",
       settings: "Settings",
     },

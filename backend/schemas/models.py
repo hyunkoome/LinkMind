@@ -97,10 +97,22 @@ class AskCitation(BaseModel):
     snippet: str | None = None
 
 
+class AskRelatedWiki(BaseModel):
+    """답변의 citations 와 link 된 wiki_pages — frontend 의 /ask 페이지의 우측
+    panel 에 표시. citation 의 item_id 들이 어느 wiki 와 연결돼 있는지 집계.
+    """
+    slug: str
+    title: str
+    description: str | None = None
+    body_status: str
+    overlap: int           # 이 wiki 와 link 된 citation item 수 (관련도 신호)
+
+
 class AskResponse(BaseModel):
     question: str
     answer: str
     citations: list[AskCitation] = Field(default_factory=list)
+    related_wikis: list[AskRelatedWiki] = Field(default_factory=list)
     llm_provider: str
     llm_model: str
 

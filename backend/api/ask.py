@@ -5,6 +5,7 @@ POST /ask — RAG (search → LLM with retrieved context).
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend import runtime_settings
@@ -14,10 +15,26 @@ from backend.llm.base import ChatMessage
 from backend.llm.factory import get_llm_provider
 from backend.schemas.models import (
     AskCitation,
+    AskRelatedWiki,
     AskRequest,
     AskResponse,
     SearchRequest,
 )
+
+
+# citation 의 item_id 들에서 link 된 wiki_pages 집계 — overlap 큰 순서.
+# 한 wiki 가 여러 citation 의 item 과 link 됐다면 관련도 더 강함.
+_RELATED_WIKIS_SQL = text("""
+    SELECT wp.slug, wp.title, wp.description, wp.body_status,
+           COUNT(*) AS overlap
+    FROM wiki_page_items wpi
+    JOIN wiki_pages wp ON wp.id = wpi.wiki_page_id
+    WHERE wpi.item_id = ANY(:item_ids)
+      AND (wpi.user_action IS NULL OR wpi.user_action != 'removed')
+    GROUP BY wp.id, wp.slug, wp.title, wp.description, wp.body_status, wp.is_pinned
+    ORDER BY overlap DESC, wp.is_pinned DESC
+    LIMIT :limit
+""")
 
 router = APIRouter()
 
@@ -83,10 +100,30 @@ async def ask(
         model=payload.llm_model,
     )
 
+    # 4) Related wikis — citations 의 item_id 들에서 link 된 wiki_pages 집계.
+    #    /ask 페이지의 우측 panel 에 표시 (사용자가 클릭하면 wiki detail 로 이동).
+    related_wikis: list[AskRelatedWiki] = []
+    item_ids = [str(c.item_id) for c in citations]
+    if item_ids:
+        rows = (await session.execute(
+            _RELATED_WIKIS_SQL, {"item_ids": item_ids, "limit": 10},
+        )).mappings().all()
+        related_wikis = [
+            AskRelatedWiki(
+                slug=r["slug"],
+                title=r["title"],
+                description=r["description"],
+                body_status=r["body_status"],
+                overlap=int(r["overlap"]),
+            )
+            for r in rows
+        ]
+
     return AskResponse(
         question=payload.question,
         answer=resp.text,
         citations=citations,
+        related_wikis=related_wikis,
         llm_provider=resp.provider,
         llm_model=resp.model,
     )
