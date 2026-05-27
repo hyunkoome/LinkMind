@@ -74,7 +74,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # wiki_writer_worker — D10 wave-2 (2026-05-26 사용자 명시 정책).
     # 분리:
-    #   - daemon (이거)        : body_status='stale' 만 → 신규 ingest 자동 wiki body
+    #   - daemon (이거)        : body_status='pending' 만 → 신규 ingest 자동 wiki body
     #   - batch CLI (사용자)   : empty + stale 다 → 옛 23k backfill
     # 두 set 가 disjoint (daemon 은 옛 empty 안 건드림) — 동시 실행 안전.
     # default ON, env LINKMIND_WIKI_WRITER_DAEMON=0 으로 명시 disable.

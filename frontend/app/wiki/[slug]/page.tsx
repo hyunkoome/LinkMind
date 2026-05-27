@@ -28,22 +28,14 @@ import {
   type WikiSource,
 } from "@/lib/api";
 
+// 2026-05-27 통일: backend body_status = frontend label.
+//   'ready' (lazy 대기) / 'pending' (처리 중) / 'completed' (완료)
 const STATUS_COLORS: Record<string, string> = {
-  ready:
+  completed:
     "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400",
-  stale: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
-  generating:
+  pending:
     "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 animate-pulse",
-  empty: "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400",
-};
-
-// 사용자 친화 라벨 (2026-05-27, wiki list 와 일관):
-// 'ready' (backend) → 'completed' (label) / 'empty' → 'ready'
-const STATUS_LABEL: Record<string, string> = {
-  ready: "completed",
-  empty: "ready",
-  stale: "stale",
-  generating: "generating",
+  ready: "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400",
 };
 
 interface PageProps {
@@ -189,9 +181,9 @@ export default function WikiDetailPage({ params }: PageProps) {
           </Link>
           <div className="flex items-center gap-2">
             <span
-              className={`text-[10px] px-2 py-0.5 rounded ${STATUS_COLORS[page.body_status] || STATUS_COLORS.empty}`}
+              className={`text-[10px] px-2 py-0.5 rounded ${STATUS_COLORS[page.body_status] || STATUS_COLORS.ready}`}
             >
-              {STATUS_LABEL[page.body_status] || page.body_status}
+              {page.body_status}
             </span>
             <span className="text-[10px] text-zinc-500">
               v{page.latest_version}

@@ -1,6 +1,6 @@
 """
 wiki_writer_worker — backend lifespan 안의 background async daemon.
-body_status='stale' 또는 'empty' 인 wiki_pages 를 자동으로 합성.
+body_status='pending' 또는 'ready' 인 wiki_pages 를 자동으로 합성.
 
 배경 (사용자 명시 2026-05-26):
   - "텔레그램 등에서 입력되면 자동으로 wiki body 까지 합성되게. 따로 안 돌릴거야"
@@ -61,7 +61,7 @@ _recent_failures: dict[str, float] = {}
 _FETCH_NEXT_SQL = text("""
     SELECT id, slug, title
     FROM wiki_pages wp
-    WHERE body_status = 'stale'
+    WHERE body_status = 'pending'
       AND EXISTS (
           SELECT 1 FROM wiki_page_items wpi
           WHERE wpi.wiki_page_id = wp.id

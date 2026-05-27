@@ -92,7 +92,7 @@ async def _classify_to_wiki(session, item_id) -> None:
       - ClassifierAgent.run() — LLM 한 번 호출 + JSON output
       - 매칭된 wiki_pages 에 wiki_page_items insert (M:N)
       - 매칭 없으면 새 wiki_page 자동 생성
-      - 매칭된 wiki_pages.body_status='stale' 자동 마킹
+      - 매칭된 wiki_pages.body_status='pending' 자동 마킹
       - 이후 사용자가 wiki page 열 때 lazy 합성 또는 wiki_writer_batch 가 자동
 
     이건 ingest → analysis_worker → wiki 자동 흐름의 핵심 hook.
@@ -155,7 +155,7 @@ async def _process_one(item: dict[str, Any]) -> bool:
                     item_id, item.get("source_type"), len(summary_text),
                 )
                 # 3. D10 wave-2c — classifier hook. summary 가 있어야 의미 추론 가능.
-                #    classifier 가 wiki_pages 매핑 + wiki_pages.body_status='stale' 마킹.
+                #    classifier 가 wiki_pages 매핑 + wiki_pages.body_status='pending' 마킹.
                 #    body 합성은 사용자가 wiki page 열 때 lazy 또는 wiki_writer_batch 가.
                 try:
                     await _classify_to_wiki(session, item_id)

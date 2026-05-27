@@ -255,7 +255,7 @@ class WikiPageDetail(BaseModel):
     description: str | None = None
     variant: str = "default"
     body: str | None = None
-    body_status: str        # 'empty' | 'generating' | 'ready' | 'stale'
+    body_status: str        # 'ready' | 'pending' | 'completed' | 'pending'
     body_model: str | None = None
     body_prompt_version: str | None = None
     body_generated_at: datetime | None = None
@@ -347,24 +347,23 @@ class WikiRegenerateResponse(BaseModel):
 class WikiStatsResponse(BaseModel):
     """GET /wiki/_stats — body_status 별 wiki_pages 개수 (frontend tab UI 의 count).
 
-    2026-05-27 신규. wiki list 페이지의 status tab 이 mount 시 한 번 + 일괄
-    합성 진행 중일 때 polling.
+    2026-05-27 통일: 3 status (ready/pending/completed). 옛 4종 (empty/stale/
+    generating/ready) 의 통합 — schema migration 동반.
     """
-    ready: int = 0
-    stale: int = 0
-    empty: int = 0
-    generating: int = 0
+    ready: int = 0           # body 없음, lazy 처리 대기 (옛 'empty')
+    pending: int = 0         # 처리 대기/진행 중 (옛 'stale' + 'generating' 통합)
+    completed: int = 0       # 처리 완료 (옛 'ready')
     total: int = 0
 
 
 class WikiBatchRegenerateRequest(BaseModel):
-    """POST /wiki/_batch/regenerate — body_status 가 'empty' 또는 'stale' 인
+    """POST /wiki/_batch/regenerate — body_status 가 'ready' 또는 'pending' 인
     wiki_pages 를 일괄 합성 (batch CLI 와 동일 효과를 HTTP 로).
 
     fire-and-forget — request 즉시 응답, BackgroundTask 가 비동기 처리.
     frontend 가 GET /wiki/_stats polling 으로 진행 확인.
     """
-    status: str = Field(default="empty", description="empty 또는 stale")
+    status: str = Field(default="ready", description="ready 또는 pending")
     limit: int = Field(default=10, ge=1, le=50, description="한 번에 처리할 page 수")
 
 
@@ -378,7 +377,7 @@ class WikiPageEditRequest(BaseModel):
     """PATCH /wiki/{slug} — title / description / body 수동 편집.
 
     셋 다 optional. None 으로 보낸 필드는 변경 없음. 적어도 하나는 제공해야.
-    body 가 제공되면 body_status='ready' + body_model='user' + 새 version 기록 +
+    body 가 제공되면 body_status='completed' + body_model='user' + 새 version 기록 +
     Qdrant body embedding 재upsert.
     """
     title: str | None = None

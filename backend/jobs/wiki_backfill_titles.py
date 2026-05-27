@@ -267,16 +267,16 @@ async def main(only_arxiv: bool, only_items: bool, limit: int, dry_run: bool) ->
         i_total, i_upd = await _fix_titles_from_items(limit, dry_run)
         print(f"  items.title fallback: {i_total} 검사, {i_upd} 갱신\n")
 
-    # body_status='stale' 마킹 (title 바꿨으니 wiki body 재합성 필요)
+    # body_status='pending' 마킹 (title 바꿨으니 wiki body 재합성 필요)
     if not dry_run:
         async with get_session_factory()() as session:
             async with session.begin():
                 affected = (await session.execute(text("""
-                    UPDATE wiki_pages SET body_status = 'stale'
-                    WHERE body_status = 'ready'
+                    UPDATE wiki_pages SET body_status = 'pending'
+                    WHERE body_status = 'completed'
                     RETURNING 1
                 """))).rowcount
-        print(f"♻️  body_status='ready' → 'stale' ({affected} pages) — wiki_writer_worker 가 자동 재합성")
+        print(f"♻️  body_status='completed' → 'pending' ({affected} pages) — wiki_writer_worker 가 자동 재합성")
 
     await close_engine()
 

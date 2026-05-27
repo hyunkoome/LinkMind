@@ -12,7 +12,7 @@ ClassifierAgent — item 1개를 여러 wiki 페이지에 자동 분류 (M:N).
   - DB mutation:
     * matched (confidence ≥ threshold) → wiki_page_items INSERT (ON CONFLICT 시 UPDATE)
     * new_pages → wiki_pages INSERT + wiki_page_items 즉시 link (confidence=1.0)
-    * 매칭된 모든 wiki_pages.body_status = 'stale' (eager 합성 trigger)
+    * 매칭된 모든 wiki_pages.body_status = 'pending' (eager 합성 trigger)
 
 state-centric — agent 내부 상태 X. 매 호출이 fresh.
 
@@ -65,9 +65,9 @@ _UPSERT_WIKI_LINK_SQL = text("""
 
 _CREATE_WIKI_PAGE_SQL = text("""
     INSERT INTO wiki_pages (slug, title, description, body_status)
-    VALUES (:slug, :title, :description, 'stale')
-    -- 'stale' 마킹 (2026-05-26): wiki_writer_worker daemon 가 즉시 자동 합성.
-    -- 신규 ingest 흐름의 자동 wiki body 완성. 옛 wave-1g backfill 의 'empty'
+    VALUES (:slug, :title, :description, 'pending')
+    -- 'pending' 마킹 (2026-05-26): wiki_writer_worker daemon 가 즉시 자동 합성.
+    -- 신규 ingest 흐름의 자동 wiki body 완성. 옛 wave-1g backfill 의 'ready'
     -- 와 구분 — daemon 은 stale 만 처리해 옛 23k 안 건드림.
     ON CONFLICT (slug) DO UPDATE SET slug = EXCLUDED.slug
     RETURNING id, slug
@@ -75,8 +75,8 @@ _CREATE_WIKI_PAGE_SQL = text("""
 
 
 _MARK_STALE_SQL = text("""
-    UPDATE wiki_pages SET body_status = 'stale'
-    WHERE id = ANY(:page_ids) AND body_status IN ('ready', 'empty')
+    UPDATE wiki_pages SET body_status = 'pending'
+    WHERE id = ANY(:page_ids) AND body_status IN ('completed', 'ready')
 """)
 
 
@@ -308,7 +308,7 @@ class ClassifierAgent(AgentBase):
             linked_page_ids.append(self_pid)
             self_wiki_created = True
 
-        # 4) 매칭된 모든 wiki_pages.body_status = 'stale' (eager 합성 trigger)
+        # 4) 매칭된 모든 wiki_pages.body_status = 'pending' (eager 합성 trigger)
         if linked_page_ids:
             await session.execute(_MARK_STALE_SQL, {"page_ids": linked_page_ids})
 

@@ -7,14 +7,14 @@ D10 wave-2a (2026-05-26) — wiki body 일괄 backfill.
   - 백그라운드 일괄 처리 + 진행률 + ETA 표시 필요
 
 설계:
-  - body_status='empty' 또는 'stale' 인 wiki_pages 다 처리
+  - body_status='ready' 또는 'pending' 인 wiki_pages 다 처리
   - tqdm 진행률 + 페이지당 소요 + ETA + 누적 통계
   - vLLM GPU 한 모델 sequential — concurrency=1 자연
   - 실패한 page 도 skip + log (다음 실행 때 재시도)
   - SIGINT / SIGTERM 안전 (graceful — 현재 page 끝나면 종료)
   - 옵션:
       --limit N      : 일부만 처리 (테스트)
-      --status x,y   : 특정 status 만 (default: empty,stale)
+      --status x,y   : 특정 status 만 (default: ready,pending)
       --slug PATTERN : slug 매칭만 (예: 'arxiv*' 또는 'github*')
       --resume       : 마지막 실행에서 처리 안 된 것부터 (default 동작)
       --dry-run      : 실제 합성 안 함, 처리 대상만 표시
@@ -109,20 +109,20 @@ logger = logging.getLogger("linkmind.jobs.wiki_writer_batch")
 # tqdm desc/postfix 용 통계 query — fast
 _COUNT_PENDING_SQL = text("""
     SELECT
-      COUNT(*) FILTER (WHERE body_status = 'empty')      AS empty_count,
-      COUNT(*) FILTER (WHERE body_status = 'stale')      AS stale_count,
-      COUNT(*) FILTER (WHERE body_status = 'ready')      AS ready_count,
-      COUNT(*) FILTER (WHERE body_status = 'generating') AS gen_count,
+      COUNT(*) FILTER (WHERE body_status = 'ready')      AS empty_count,
+      COUNT(*) FILTER (WHERE body_status = 'pending')      AS stale_count,
+      COUNT(*) FILTER (WHERE body_status = 'completed')      AS ready_count,
+      COUNT(*) FILTER (WHERE body_status = 'pending') AS gen_count,
       COUNT(*)                                            AS total_count
     FROM wiki_pages
 """)
 
 # 처리 대상 fetch — body_status + slug 필터. concurrent N 마다 batch fetch.
 # row 1 개 fetch + UPDATE 한 후 다음 fetch — concurrent worker 들이 같은 row 안 잡도록
-# 즉시 'generating' 마킹 (writer 가 다시 'ready' 로 변경).
+# 즉시 'pending' 마킹 (writer 가 다시 'completed' 로 변경).
 _FETCH_NEXT_PAGE_SQL = text("""
     UPDATE wiki_pages wp
-    SET body_status = 'generating'
+    SET body_status = 'pending'
     WHERE id = (
         SELECT id FROM wiki_pages
         WHERE body_status = ANY(:statuses)
@@ -209,7 +209,7 @@ async def _worker_loop(
             async with session_factory() as session:
                 async with session.begin():
                     await session.execute(text(
-                        "UPDATE wiki_pages SET body_status = 'empty' WHERE id = :pid"
+                        "UPDATE wiki_pages SET body_status = 'ready' WHERE id = :pid"
                     ), {"pid": str(page_id)})
             stats["skip"] += 1
             stats["processed"] += 1
@@ -245,7 +245,7 @@ async def _worker_loop(
                 async with session_factory() as session:
                     async with session.begin():
                         await session.execute(text(
-                            "UPDATE wiki_pages SET body_status = 'empty' WHERE id = :pid"
+                            "UPDATE wiki_pages SET body_status = 'ready' WHERE id = :pid"
                         ), {"pid": str(page_id)})
         except Exception as exc:  # noqa: BLE001
             err_msg = f"{type(exc).__name__}: {exc}"
@@ -253,7 +253,7 @@ async def _worker_loop(
             async with session_factory() as session:
                 async with session.begin():
                     await session.execute(text(
-                        "UPDATE wiki_pages SET body_status = 'empty' WHERE id = :pid"
+                        "UPDATE wiki_pages SET body_status = 'ready' WHERE id = :pid"
                     ), {"pid": str(page_id)})
 
         page_dur = time.monotonic() - page_start
@@ -374,8 +374,8 @@ async def main(
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--status", default="empty,stale",
-                    help="처리할 body_status (콤마 구분, default: empty,stale)")
+    ap.add_argument("--status", default="ready,pending",
+                    help="처리할 body_status (콤마 구분, default: ready,pending)")
     ap.add_argument("--slug", default=None,
                     help="slug LIKE 패턴 (예: 'arxiv*' 또는 'github__%')")
     ap.add_argument("--limit", type=int, default=1000000,

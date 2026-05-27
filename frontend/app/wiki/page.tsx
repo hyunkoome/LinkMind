@@ -16,7 +16,6 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import {
-  batchRegenerateWiki,
   getWikiStats,
   listWikiPages,
   type WikiPageListItem,
@@ -26,23 +25,16 @@ import {
 const PAGE_SIZE_OPTIONS = [10, 50, 100] as const;
 const DEFAULT_PAGE_SIZE = 50;
 
+// 2026-05-27 통일: backend body_status = frontend label.
+//   - 'ready'     — ingest 직후, body 미합성 (사용자 클릭 시 lazy)
+//   - 'pending'   — 처리 대기/진행 중 (옛 stale + generating 통합)
+//   - 'completed' — 처리 완료 (body 있음)
 const STATUS_COLORS: Record<string, string> = {
-  ready:
+  completed:
     "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400",
-  stale: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
-  generating:
+  pending:
     "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 animate-pulse",
-  empty: "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400",
-};
-
-// backend body_status → 사용자 친화 라벨 (2026-05-27).
-// 'ready' → 'completed' (처리 완료) / 'empty' → 'ready' (사용자 클릭 시 lazy 합성).
-// stale + generating 은 그대로 표시 (개별 card 의 chip — 디버깅 정보 유지).
-const STATUS_LABEL: Record<string, string> = {
-  ready: "completed",
-  empty: "ready",
-  stale: "stale",
-  generating: "generating",
+  ready: "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400",
 };
 
 export default function WikiListPage() {
@@ -79,10 +71,7 @@ export default function WikiListPage() {
   // 상태별 count — tab UI + 일괄 합성 버튼 라벨 (2026-05-27)
   const [stats, setStats] = useState<WikiStatsResponse | null>(null);
 
-  // 일괄 합성 confirm + 진행 상태
-  const [confirmBatch, setConfirmBatch] = useState(false);
-  const [batchInProgress, setBatchInProgress] = useState(false);
-  const [batchMessage, setBatchMessage] = useState<string | null>(null);
+  // (일괄 합성 state 제거 — daemon 이 자동 처리)
 
   // URL 갱신 헬퍼 — 부분 변경 (다른 param 은 보존). replace 로 history 안 늘림.
   // page 만은 사용자가 의도해서 이동하므로 push 가 자연스럽지만, 단순화 위해 replace 통일.
@@ -131,7 +120,8 @@ export default function WikiListPage() {
     };
   }, [q, statusFilter, keywordFilter, page, pageSize]);
 
-  // stats fetch — mount 시 1회 + 일괄 합성 진행 중 5초 polling.
+  // stats fetch — mount 시 1회 + pending 이 있으면 10초 polling (자동 daemon
+  // 진행 상황 시각화). pending=0 이면 polling 종료.
   const refreshStats = () => {
     getWikiStats()
       .then((s) => setStats(s))
@@ -140,66 +130,26 @@ export default function WikiListPage() {
   useEffect(() => {
     refreshStats();
   }, []);
-
-  // 일괄 합성 진행 중 polling — stats.generating 이 0 되면 종료.
   useEffect(() => {
-    if (!batchInProgress) return;
-    const id = setInterval(() => {
-      getWikiStats()
-        .then((s) => {
-          setStats(s);
-          if (s.generating === 0) {
-            setBatchInProgress(false);
-            setBatchMessage(`✓ 일괄 합성 완료. ready ${s.ready}건`);
-            // list 도 같이 refresh
-            setQInput((v) => v);   // useEffect trigger 위한 no-op
-          }
-        })
-        .catch(() => {});
-    }, 5000);
+    if (!stats || stats.pending === 0) return;
+    const id = setInterval(refreshStats, 10000);
     return () => clearInterval(id);
-  }, [batchInProgress]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stats?.pending]);
 
   const totalPages = response ? Math.max(1, Math.ceil(response.total / pageSize)) : 1;
 
-  const onBatchRegenerate = async () => {
-    setConfirmBatch(false);
-    setBatchInProgress(true);
-    setBatchMessage(null);
-    setError(null);
-    try {
-      // statusFilter 에 따라 stale (pending tab) 또는 empty (empty tab) 처리.
-      // backend 'pending' alias 가 stale 로 매핑됨.
-      const batchStatus =
-        statusFilter === "pending" ? "stale" : "empty";
-      const r = await batchRegenerateWiki({ status: batchStatus, limit: 10 });
-      setBatchMessage(
-        `일괄 합성 시작 — ${r.dispatched}건 dispatch · 예상 ${r.estimated_seconds}초`,
-      );
-      refreshStats();
-    } catch (e) {
-      setError((e as Error).message);
-      setBatchInProgress(false);
-    }
-  };
-
-  // status 별 count chip (2026-05-27 단순화 + 사용자 친화 라벨):
-  //   - stale + generating → 'pending' (둘 다 "처리 대기/진행 중")
-  //   - backend body_status='ready' → 라벨 'completed' (처리 완료, 의미 명확)
-  //   - backend body_status='empty' → 라벨 'ready' (사용자가 클릭하면 lazy 합성됨)
-  //   backend column 값은 그대로 (의미 정확, schema 변경 회피). frontend label
-  //   만 mapping — URL query key (status=ready/empty) 도 backend 값 그대로.
-  type StatusKey = "" | "ready" | "pending" | "empty";
+  // 2026-05-27 통일: tab key = backend body_status value (헷갈림 X).
+  type StatusKey = "" | "ready" | "pending" | "completed";
   const STATUS_TABS: { key: StatusKey; label: string; icon: string }[] = [
     { key: "", label: "전체", icon: "" },
-    { key: "ready", label: "completed", icon: "✅" },
+    { key: "ready", label: "ready", icon: "⏳" },
     { key: "pending", label: "pending", icon: "⏱" },
-    { key: "empty", label: "ready", icon: "⏳" },
+    { key: "completed", label: "completed", icon: "✅" },
   ];
   const countFor = (k: StatusKey): number | null => {
     if (!stats) return null;
     if (k === "") return stats.total;
-    if (k === "pending") return stats.stale + stats.generating;
     return (stats as unknown as Record<string, number>)[k] ?? 0;
   };
 
@@ -304,61 +254,10 @@ export default function WikiListPage() {
             onChange={(e) => setQInput(e.target.value)}
             className="flex-1 px-3 py-1.5 text-sm rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100"
           />
-          {/* 일괄 합성 버튼 — pending/empty tab 둘 다 노출 (2026-05-27) */}
-          {((statusFilter === "pending" && stats && stats.stale > 0) ||
-            (statusFilter === "empty" && stats && stats.empty > 0)) && (
-            <button
-              type="button"
-              onClick={() => setConfirmBatch(true)}
-              disabled={batchInProgress}
-              className="px-3 py-1.5 text-xs rounded border border-blue-400 dark:border-blue-600 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-900/40 disabled:opacity-50"
-            >
-              {batchInProgress
-                ? "⏱ 합성 중…"
-                : `⚡ ${
-                    statusFilter === "pending"
-                      ? stats!.stale
-                      : stats!.empty
-                  }건 일괄 합성 (최대 10건)`}
-            </button>
-          )}
+          {/* 일괄 합성 버튼 제거 (2026-05-27, 사용자 명시):
+              daemon 이 concurrency 4 로 자동 처리 — 사용자가 별도 트리거할 필요 X.
+              옛 큰 backfill 은 CLI 'bash scripts/run_wiki_backfill.sh' 사용. */}
         </div>
-
-        {/* 일괄 합성 confirm 박스 */}
-        {confirmBatch && (
-          <div className="mb-3 p-3 rounded bg-blue-50 dark:bg-blue-900/20 border border-blue-300 dark:border-blue-800 text-xs">
-            <div className="font-medium text-blue-800 dark:text-blue-200 mb-1">
-              empty wiki 일괄 합성?
-            </div>
-            <div className="text-zinc-700 dark:text-zinc-300 mb-2">
-              • 최대 10건의 empty wiki 를 자동 합성 (concurrency 4 — vLLM 부하 분산)<br />
-              • 예상 시간: ~40초 (page 당 ~4초)<br />
-              • 진행 상태는 generating 탭의 count 로 polling 됩니다
-            </div>
-            <div className="flex gap-1.5">
-              <button
-                type="button"
-                onClick={() => setConfirmBatch(false)}
-                className="flex-1 px-3 py-1 text-xs bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded hover:bg-zinc-100"
-              >
-                취소
-              </button>
-              <button
-                type="button"
-                onClick={onBatchRegenerate}
-                className="flex-1 px-3 py-1 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded font-medium"
-              >
-                일괄 합성 시작
-              </button>
-            </div>
-          </div>
-        )}
-
-        {batchMessage && (
-          <div className="mb-3 p-2 rounded bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-300 dark:border-emerald-800 text-xs text-emerald-800 dark:text-emerald-200">
-            {batchMessage}
-          </div>
-        )}
 
         {/* List */}
         {error && (
@@ -458,9 +357,9 @@ export default function WikiListPage() {
                         {p.title}
                       </h3>
                       <span
-                        className={`text-[10px] px-1.5 py-0.5 rounded ${STATUS_COLORS[p.body_status] || STATUS_COLORS.empty}`}
+                        className={`text-[10px] px-1.5 py-0.5 rounded ${STATUS_COLORS[p.body_status] || STATUS_COLORS.ready}`}
                       >
-                        {STATUS_LABEL[p.body_status] || p.body_status}
+                        {p.body_status}
                       </span>
                       <span className="text-[10px] text-zinc-500 dark:text-zinc-400">
                         {p.source_count} sources

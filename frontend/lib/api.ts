@@ -455,11 +455,11 @@ export async function updateWikiKeywords(
 
 // ── Wiki stats + batch regenerate (2026-05-27) ─────────────────
 
+// 2026-05-27 통일: 3 status (backend body_status 와 동일)
 export interface WikiStatsResponse {
-  ready: number;
-  stale: number;
-  empty: number;
-  generating: number;
+  ready: number;       // body 없음, lazy 처리 대기
+  pending: number;     // 처리 대기/진행 중 (옛 stale + generating 통합)
+  completed: number;   // body 있음 (옛 'ready')
   total: number;
 }
 
@@ -468,7 +468,7 @@ export async function getWikiStats(): Promise<WikiStatsResponse> {
 }
 
 export interface WikiBatchRegenerateRequest {
-  status: "empty" | "stale";
+  status: "ready" | "pending";   // ready (옛 empty) or pending (옛 stale)
   limit?: number;
 }
 

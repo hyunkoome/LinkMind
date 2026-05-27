@@ -105,12 +105,10 @@ _SEARCH_PREDICATE = """
     )
 """
 
-# 2026-05-27: status='pending' alias — stale OR generating 둘 다 매칭. 사용자
-# 관점에서는 "처리 대기/진행 중" 으로 묶는 게 자연. backend body_status 자체는
-# 4 종류 유지 (writer 의 동시 합성 방지 락 의미 보존). UI 만 단순화.
+# 2026-05-27: 통일 후 status alias 제거. backend = frontend = 3 종 (ready /
+# pending / completed). 단순 매칭만.
 _STATUS_PREDICATE = """
     CAST(:status AS TEXT) IS NULL
-    OR (CAST(:status AS TEXT) = 'pending' AND wp.body_status IN ('stale', 'generating'))
     OR wp.body_status = CAST(:status AS TEXT)
 """
 
@@ -208,7 +206,7 @@ async def _wiki_context_to_response(wiki_context: dict) -> WikiPageDetail:
         description=page.get("description"),
         variant=page.get("variant", "default"),
         body=page.get("body"),
-        body_status=page.get("body_status", "empty"),
+        body_status=page.get("body_status", "ready"),
         body_model=None,
         body_prompt_version=None,
         body_generated_at=None,
@@ -228,7 +226,7 @@ async def get_wiki_page(
     regenerate: bool = Query(default=False, description="강제 재합성 (status 무시)"),
     session: AsyncSession = Depends(get_session),
 ) -> WikiPageDetail:
-    """wiki page 조회. body 가 'empty' 또는 'stale' 면 자동 eager 합성 (writer 호출).
+    """wiki page 조회. body 가 'ready' 또는 'pending' 면 자동 eager 합성 (writer 호출).
 
     regenerate=true 면 body_status 무관 무조건 재합성.
     """
@@ -240,12 +238,12 @@ async def get_wiki_page(
     status_row = (await session.execute(
         text("SELECT body_status FROM wiki_pages WHERE id = :pid"), {"pid": str(page_id)},
     )).first()
-    current_status = status_row[0] if status_row else "empty"
+    current_status = status_row[0] if status_row else "ready"
 
-    # 합성 필요한지 판단
-    needs_gen = regenerate or current_status in ("empty", "stale")
+    # 합성 필요한지 판단 — ready (lazy 대기) / pending (대기 중) → 합성
+    needs_gen = regenerate or current_status in ("ready", "pending")
 
-    if needs_gen and current_status != "generating":
+    if needs_gen:
         # writer agent 호출 (eager — 사용자가 기다림)
         # 사용자 명시 (2026-05-26): "그때그때 위키화" — UX 일관
         ctx = AgentContext(
@@ -253,7 +251,7 @@ async def get_wiki_page(
             related_wiki_page_id=page_id,
             extra={
                 "trigger_reason": "user_request" if regenerate else (
-                    "stale_regenerate" if current_status == "stale" else "first_gen"
+                    "pending_regenerate" if current_status == "pending" else "first_gen"
                 ),
             },
         )
@@ -309,7 +307,7 @@ async def regenerate_wiki_page(
 # PATCH /wiki/{slug} — title / description / body 수동 편집 (2026-05-27)
 # ────────────────────────────────────────────────────────────────
 #
-# 사용자가 LLM 합성 결과를 수동 보강 / 수정. body 가 변경되면 body_status='ready',
+# 사용자가 LLM 합성 결과를 수동 보강 / 수정. body 가 변경되면 body_status='completed',
 # body_model='user', 새 wiki_page_versions row 적립 (학습 신호 보존), Qdrant body
 # embedding 재upsert.
 
@@ -328,7 +326,7 @@ _UPDATE_PAGE_FIELDS_SQL = text("""
     SET title = COALESCE(:title, title),
         description = COALESCE(:description, description),
         body = CASE WHEN :body_provided THEN :body ELSE body END,
-        body_status = CASE WHEN :body_provided THEN 'ready' ELSE body_status END,
+        body_status = CASE WHEN :body_provided THEN 'completed' ELSE body_status END,
         body_model = CASE WHEN :body_provided THEN 'user' ELSE body_model END,
         body_prompt_version = CASE WHEN :body_provided THEN 'manual' ELSE body_prompt_version END,
         body_generated_at = CASE WHEN :body_provided THEN now() ELSE body_generated_at END
@@ -355,7 +353,7 @@ async def edit_wiki_page(
     """사용자 수동 편집 — title / description / body 각각 optional 변경.
 
     body 변경 시:
-      - body_status='ready', body_model='user', body_prompt_version='manual'
+      - body_status='completed', body_model='user', body_prompt_version='manual'
       - 새 wiki_page_versions row (trigger_reason='manual_edit', 학습 신호 보존)
       - Qdrant linkmind_wiki_pages 의 body embedding 재upsert
     title/description 만 변경 시: 위 절차 생략 (body 안 바뀜).
@@ -766,9 +764,8 @@ async def wiki_stats(
     counts: dict[str, int] = {r["body_status"]: int(r["n"]) for r in rows}
     return WikiStatsResponse(
         ready=counts.get("ready", 0),
-        stale=counts.get("stale", 0),
-        empty=counts.get("empty", 0),
-        generating=counts.get("generating", 0),
+        pending=counts.get("pending", 0),
+        completed=counts.get("completed", 0),
         total=sum(counts.values()),
     )
 
@@ -835,35 +832,31 @@ async def wiki_batch_regenerate(
     background: BackgroundTasks,
     session: AsyncSession = Depends(get_session),
 ) -> WikiBatchRegenerateResponse:
-    """body_status='empty' (또는 'stale') wiki_pages 일괄 합성.
+    """body_status='ready' (또는 'pending') wiki_pages 일괄 합성.
 
-    fire-and-forget. 처리 대상 fetch + 'generating' 마킹은 즉시 (session.commit),
+    fire-and-forget. 처리 대상 fetch + 'pending' 마킹은 즉시 (session.commit),
     실제 LLM 합성은 BackgroundTask 가 async. frontend 가 stats polling 으로 진행 확인.
     """
-    # 2026-05-27: 'pending' alias 추가 (= stale). frontend 가 pending tab 의
-    # '일괄 합성' 버튼에서 호출. generating 은 이미 처리 중이라 skip — pending
-    # → stale 만 매핑 (다음 SQL 의 status param).
-    effective_status = payload.status
-    if effective_status == "pending":
-        effective_status = "stale"
-    if effective_status not in ("empty", "stale"):
+    # 2026-05-27 통일: 3 status (ready/pending/completed) — batch 는 ready/pending
+    # 만 처리 (completed 는 이미 끝).
+    if payload.status not in ("ready", "pending"):
         raise HTTPException(
             status_code=400,
-            detail="status 는 'empty' / 'stale' / 'pending' 만 지원 (현재: {})".format(payload.status),
+            detail="status 는 'ready' 또는 'pending' 만 지원 (현재: {})".format(payload.status),
         )
 
     rows = (await session.execute(
         _FETCH_BATCH_TARGETS_SQL,
-        {"status": effective_status, "limit": payload.limit},
+        {"status": payload.status, "limit": payload.limit},
     )).mappings().all()
     pages = [dict(r) for r in rows]
 
-    # status='generating' 으로 즉시 마킹 → frontend 의 stats polling 이 바로 변화 감지 +
+    # status='pending' 으로 즉시 마킹 → frontend 의 stats polling 이 바로 변화 감지 +
     # 동시 합성 방지 (다른 트리거 — daemon 등 — 이 같은 page 안 잡음).
     if pages:
         await session.execute(
             text("""
-                UPDATE wiki_pages SET body_status = 'generating'
+                UPDATE wiki_pages SET body_status = 'pending'
                 WHERE id = ANY(:ids)
             """),
             {"ids": [p["id"] for p in pages]},

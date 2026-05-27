@@ -6,7 +6,7 @@ WriterAgent — wiki page body (한국어 markdown) 합성.
                    trigger_reason 도 ctx.extra 에서 추출.
   - invoke: YAML prompt (writer_v1) 로드 + WikiContext 를 XML 섹션으로 organize
             → vLLM Qwen2.5-7B chat → markdown body.
-  - persist: wiki_pages.body / body_status='ready' / version_number+1
+  - persist: wiki_pages.body / body_status='completed' / version_number+1
              + wiki_page_versions INSERT (이전 버전 보존, Phase 4 학습 신호).
 
 state-centric — agent 내부에 conversation history X. 매 호출이 fresh.
@@ -45,7 +45,7 @@ _UPDATE_BODY_SQL = text("""
         body_model = :body_model,
         body_prompt_version = :body_prompt_version,
         body_generated_at = :body_generated_at,
-        body_status = 'ready'
+        body_status = 'completed'
     WHERE id = :page_id
 """)
 
@@ -71,7 +71,7 @@ _INSERT_VERSION_SQL = text("""
 
 
 _MARK_GENERATING_SQL = text("""
-    UPDATE wiki_pages SET body_status = 'generating'
+    UPDATE wiki_pages SET body_status = 'pending'
     WHERE id = :page_id
 """)
 
@@ -108,7 +108,7 @@ class WriterAgent(AgentBase):
         wiki_context = retr_result.output_meta
         trigger_reason = ctx.extra.get("trigger_reason", "user_request")
 
-        # body_status = 'generating' 로 마킹 (다른 동시 합성 방지 + UI 가시화)
+        # body_status = 'pending' 로 마킹 (다른 동시 합성 방지 + UI 가시화)
         await ctx.session.execute(
             _MARK_GENERATING_SQL,
             {"page_id": str(ctx.related_wiki_page_id)},

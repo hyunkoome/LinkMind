@@ -40,7 +40,7 @@ async def _bg_classify_to_wiki(item_id_str: str) -> None:
     동기 ingest 흐름 (watcher → /ingest/auto) 에서는 summary 가 이미 만들어지기에
     analysis_worker daemon 이 polling 안 함 (daemon 은 summary IS NULL 만 polling).
     → 이 background task 가 그 빈 자리 — ingest 응답 즉시 반환 + classifier 가 비동기로
-    wiki_page_items 매핑 + 매칭 wiki 의 body_status='stale' 마킹 → wiki_writer_worker
+    wiki_page_items 매핑 + 매칭 wiki 의 body_status='pending' 마킹 → wiki_writer_worker
     가 자동 합성.
 
     request session 과 분리된 별 session — engine 의 sessionmaker.
