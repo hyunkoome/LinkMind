@@ -127,12 +127,27 @@ _LIST_PAGES_SQL = text(f"""
       AND (CAST(:q AS TEXT) IS NULL OR ({_SEARCH_PREDICATE}))
       AND (CAST(:keyword AS TEXT) IS NULL OR CAST(:keyword AS TEXT) = ANY(wp.keywords))
     ORDER BY
-        -- 2026-05-27: generating 먼저 (현재 LLM 호출 중, 사용자 추적 가능),
-        -- 그 다음 pinned, 그 다음 updated_at ASC (오래된 → 다음 처리 순서, daemon
-        -- fetch 와 같은 정렬 — '다음 합성될 순서대로')
-        (wp.body_processing_started_at IS NOT NULL) DESC,
+        -- 2026-05-27 (전체 tab) — completed → pending → ready 그룹 순서
+        -- (CAST :status IS NULL 일 때만 active). 단일 tab 일 때는 의미 없음 (1 그룹).
+        CASE
+            WHEN CAST(:status AS TEXT) IS NULL THEN
+                CASE wp.body_status
+                    WHEN 'completed' THEN 0
+                    WHEN 'pending'   THEN 1
+                    WHEN 'ready'     THEN 2
+                    ELSE 3
+                END
+            ELSE 0
+        END ASC,
+        -- pending tab 일 때 generating (started_at NOT NULL) 먼저 — '실제 합성 중'
+        -- 자료가 list 상단. 다른 tab 은 모두 같은 ordinal (0) — 영향 X.
+        (CAST(:status AS TEXT) = 'pending'
+         AND wp.body_processing_started_at IS NOT NULL) DESC,
         wp.is_pinned DESC,
-        wp.updated_at ASC
+        -- 같은 그룹 안 알파벳 (title ASC, case-insensitive).
+        -- pending tab 의 'queuing' 자료는 사실 updated_at ASC 가 자연 (다음 처리
+        -- 순서) 인데, 사용자 명시: 알파벳. queuing 안에서도 title 정렬.
+        LOWER(wp.title) ASC
     LIMIT :limit OFFSET :offset
 """)
 
