@@ -28,17 +28,17 @@ const DEFAULT_PAGE_SIZE = 50;
 
 // 2026-05-27 통일: backend body_status = frontend label.
 //   - 'ready'     — ingest 직후, body 미합성 (사용자 클릭 시 lazy)
-//   - 'pending'   — 처리 대기/진행 중 (옛 stale + generating 통합)
+//   - 'pending'   — 처리 대기/진행 (옛 stale + generating 통합). pending 안에서
+//                    sub-state 두 종 — 'generating' (LLM 합성 중) / 'queuing' (대기열).
+//                    started_at NOT NULL + 5분 안 → generating, 그 외 → queuing.
 //   - 'completed' — 처리 완료 (body 있음)
-// pending 안에서 진행 중 (body_processing_started_at NOT NULL + 5분 안) 시각 강조.
 const STATUS_COLORS: Record<string, string> = {
   completed:
     "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400",
-  pending:
-    "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
-  // pending 중에서도 LLM 처리 중 (started_at NOT NULL) — animate-pulse blue
-  pending_active:
+  generating:
     "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 animate-pulse",
+  queuing:
+    "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
   ready: "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400",
 };
 
@@ -46,11 +46,11 @@ const PROCESSING_TIMEOUT_MS = 5 * 60 * 1000;   // 5분 후엔 stuck 으로 간�
 
 function effectiveStatusKey(p: WikiPageListItem): string {
   if (p.body_status !== "pending") return p.body_status;
-  if (!p.body_processing_started_at) return "pending";
+  if (!p.body_processing_started_at) return "queuing";
   const startedMs = new Date(p.body_processing_started_at).getTime();
-  if (Number.isNaN(startedMs)) return "pending";
-  if (Date.now() - startedMs > PROCESSING_TIMEOUT_MS) return "pending";
-  return "pending_active";
+  if (Number.isNaN(startedMs)) return "queuing";
+  if (Date.now() - startedMs > PROCESSING_TIMEOUT_MS) return "queuing";
+  return "generating";
 }
 
 export default function WikiListPage() {
@@ -445,17 +445,15 @@ export default function WikiListPage() {
                       <h3 className="font-medium text-zinc-900 dark:text-zinc-100 truncate flex-1">
                         {p.title}
                       </h3>
-                      {/* pending 안에서 진행 중 (started_at NOT NULL + 5분 안) 인 자료는
-                          'pending · 합성중' 으로 시각 강조 (animate-pulse blue). 그 외 pending
-                          은 amber (대기). */}
+                      {/* pending 의 sub-state — 'generating' (LLM 합성 중, animate-pulse
+                          blue) / 'queuing' (대기열, amber). list ORDER BY 가 generating 먼저 */}
                       {(() => {
                         const ek = effectiveStatusKey(p);
-                        const label = ek === "pending_active" ? "pending · 합성중" : p.body_status;
                         return (
                           <span
                             className={`text-[10px] px-1.5 py-0.5 rounded ${STATUS_COLORS[ek] || STATUS_COLORS.ready}`}
                           >
-                            {label}
+                            {ek}
                           </span>
                         );
                       })()}

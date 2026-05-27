@@ -126,7 +126,13 @@ _LIST_PAGES_SQL = text(f"""
     WHERE ({_STATUS_PREDICATE})
       AND (CAST(:q AS TEXT) IS NULL OR ({_SEARCH_PREDICATE}))
       AND (CAST(:keyword AS TEXT) IS NULL OR CAST(:keyword AS TEXT) = ANY(wp.keywords))
-    ORDER BY wp.is_pinned DESC, wp.updated_at DESC
+    ORDER BY
+        -- 2026-05-27: generating 먼저 (현재 LLM 호출 중, 사용자 추적 가능),
+        -- 그 다음 pinned, 그 다음 updated_at ASC (오래된 → 다음 처리 순서, daemon
+        -- fetch 와 같은 정렬 — '다음 합성될 순서대로')
+        (wp.body_processing_started_at IS NOT NULL) DESC,
+        wp.is_pinned DESC,
+        wp.updated_at ASC
     LIMIT :limit OFFSET :offset
 """)
 
