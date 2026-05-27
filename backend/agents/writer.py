@@ -58,6 +58,10 @@ _UPDATE_KEYWORDS_SQL = text("""
 """)
 
 
+# 2026-05-27: ON CONFLICT DO NOTHING 추가 — daemon (concurrency 4) + batch CLI
+# (concurrency 4) 가 같은 page 동시 처리 시 (page_id, version_number) UNIQUE
+# 충돌. 두 번째 INSERT silent skip — 어차피 같은 body 라 정합성 OK.
+# _UPDATE_BODY_SQL 은 idempotent (last writer wins).
 _INSERT_VERSION_SQL = text("""
     INSERT INTO wiki_page_versions (
         page_id, version_number, body, body_model, body_prompt_version,
@@ -66,6 +70,7 @@ _INSERT_VERSION_SQL = text("""
         :page_id, :version_number, :body, :body_model, :body_prompt_version,
         :agent_run_id, :trigger_reason
     )
+    ON CONFLICT (page_id, version_number) DO NOTHING
     RETURNING id
 """)
 
