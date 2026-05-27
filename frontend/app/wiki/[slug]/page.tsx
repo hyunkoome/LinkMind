@@ -13,13 +13,17 @@
  */
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { use, useEffect, useState } from "react";
 
 import KeywordsEditor from "@/components/wiki/KeywordsEditor";
 import WikiBody from "@/components/wiki/WikiBody";
 import {
+  deleteWikiPage,
   getWikiPage,
   regenerateWikiPage,
+  updateWikiPage,
+  type WikiPageDeleteResponse,
   type WikiPageDetail,
   type WikiSource,
 } from "@/lib/api";
@@ -40,10 +44,23 @@ interface PageProps {
 
 export default function WikiDetailPage({ params }: PageProps) {
   const { slug } = use(params);
+  const router = useRouter();
   const [page, setPage] = useState<WikiPageDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [regenerating, setRegenerating] = useState(false);
+
+  // 편집 모드 (2026-05-27) — title / description / body 수동 수정
+  const [editing, setEditing] = useState(false);
+  const [editTitle, setEditTitle] = useState("");
+  const [editDescription, setEditDescription] = useState("");
+  const [editBody, setEditBody] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  // 삭제 confirm (2단계) — wiki + 연결 items 영구 삭제
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteResult, setDeleteResult] = useState<WikiPageDeleteResponse | null>(null);
 
   const load = (regenerate = false) => {
     setLoading(true);
@@ -66,6 +83,62 @@ export default function WikiDetailPage({ params }: PageProps) {
       setError((e as Error).message);
     } finally {
       setRegenerating(false);
+    }
+  };
+
+  const onStartEdit = () => {
+    if (!page) return;
+    setEditTitle(page.title);
+    setEditDescription(page.description || "");
+    setEditBody(page.body || "");
+    setEditing(true);
+    setConfirmDelete(false);
+  };
+
+  const onCancelEdit = () => {
+    setEditing(false);
+    setEditTitle("");
+    setEditDescription("");
+    setEditBody("");
+  };
+
+  const onSaveEdit = async () => {
+    if (!page) return;
+    // 변경된 필드만 patch (없으면 null 그대로 — backend 가 COALESCE)
+    const payload: { title?: string; description?: string; body?: string } = {};
+    if (editTitle !== page.title) payload.title = editTitle;
+    if (editDescription !== (page.description || "")) payload.description = editDescription;
+    if (editBody !== (page.body || "")) payload.body = editBody;
+
+    if (Object.keys(payload).length === 0) {
+      setEditing(false);
+      return;
+    }
+
+    setSaving(true);
+    setError(null);
+    try {
+      const updated = await updateWikiPage(slug, payload);
+      setPage(updated);
+      setEditing(false);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const onConfirmDelete = async () => {
+    setDeleting(true);
+    setError(null);
+    try {
+      const result = await deleteWikiPage(slug);
+      setDeleteResult(result);
+      // 1.5초 후 wiki 목록으로 이동 (사용자가 결과 메시지 읽을 시간)
+      setTimeout(() => router.push("/wiki"), 1500);
+    } catch (e) {
+      setError((e as Error).message);
+      setDeleting(false);
     }
   };
 
@@ -114,22 +187,109 @@ export default function WikiDetailPage({ params }: PageProps) {
             <span className="text-[10px] text-zinc-500">
               v{page.latest_version}
             </span>
-            <button
-              type="button"
-              onClick={onRegenerate}
-              disabled={regenerating}
-              className="text-xs px-2 py-1 rounded border border-orange-300 dark:border-orange-700 text-orange-700 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20 disabled:opacity-50"
-            >
-              {regenerating ? "재합성 중…" : "🔄 재합성"}
-            </button>
+            {!editing && (
+              <>
+                <button
+                  type="button"
+                  onClick={onStartEdit}
+                  disabled={regenerating || deleting}
+                  className="text-xs px-2 py-1 rounded border border-blue-300 dark:border-blue-700 text-blue-700 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 disabled:opacity-50"
+                >
+                  ✏️ 편집
+                </button>
+                <button
+                  type="button"
+                  onClick={onRegenerate}
+                  disabled={regenerating || deleting}
+                  className="text-xs px-2 py-1 rounded border border-orange-300 dark:border-orange-700 text-orange-700 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20 disabled:opacity-50"
+                >
+                  {regenerating ? "재합성 중…" : "🔄 재합성"}
+                </button>
+              </>
+            )}
           </div>
         </div>
 
+        {/* 삭제 결과 메시지 (1.5초 표시 후 /wiki 로 redirect) */}
+        {deleteResult && (
+          <div className="mb-4 p-4 rounded bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-300 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200">
+            <div className="font-medium">
+              ✓ 위키 페이지 영구 삭제 완료
+            </div>
+            <div className="text-xs mt-1">
+              연결된 자료 {deleteResult.deleted_items_count}개 삭제 ·
+              영향받은 다른 위키 {deleteResult.affected_other_wikis_count}개 ·
+              Wiki 목록으로 돌아갑니다…
+            </div>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6">
-          {/* Body */}
-          <article className="bg-white dark:bg-zinc-900 rounded border border-zinc-200 dark:border-zinc-800 p-6">
-            <WikiBody body={page.body || ""} />
-          </article>
+          {/* Body — view mode 면 markdown render, edit mode 면 form */}
+          {editing ? (
+            <article className="bg-white dark:bg-zinc-900 rounded border border-blue-300 dark:border-blue-700 p-6">
+              <div className="text-xs text-blue-700 dark:text-blue-400 font-medium mb-3">
+                ✏️ 편집 모드 — markdown 자유롭게 수정. body 변경 시 새 버전이 적립됩니다.
+              </div>
+
+              <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">
+                Title
+              </label>
+              <input
+                type="text"
+                value={editTitle}
+                onChange={(e) => setEditTitle(e.target.value)}
+                disabled={saving}
+                className="w-full px-3 py-2 mb-4 text-sm rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-blue-500 disabled:opacity-50"
+              />
+
+              <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">
+                Description (선택)
+              </label>
+              <textarea
+                value={editDescription}
+                onChange={(e) => setEditDescription(e.target.value)}
+                disabled={saving}
+                rows={2}
+                className="w-full px-3 py-2 mb-4 text-sm rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-blue-500 disabled:opacity-50"
+              />
+
+              <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">
+                Body (markdown — 5섹션 자유 수정)
+              </label>
+              <textarea
+                value={editBody}
+                onChange={(e) => setEditBody(e.target.value)}
+                disabled={saving}
+                rows={24}
+                spellCheck={false}
+                className="w-full px-3 py-2 mb-4 text-sm font-mono rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-blue-500 disabled:opacity-50"
+              />
+
+              <div className="flex gap-2 justify-end">
+                <button
+                  type="button"
+                  onClick={onCancelEdit}
+                  disabled={saving}
+                  className="px-4 py-1.5 text-xs rounded border border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-50"
+                >
+                  취소
+                </button>
+                <button
+                  type="button"
+                  onClick={onSaveEdit}
+                  disabled={saving}
+                  className="px-4 py-1.5 text-xs rounded bg-blue-600 hover:bg-blue-700 text-white font-medium disabled:opacity-50"
+                >
+                  {saving ? "저장 중…" : "✓ 저장"}
+                </button>
+              </div>
+            </article>
+          ) : (
+            <article className="bg-white dark:bg-zinc-900 rounded border border-zinc-200 dark:border-zinc-800 p-6">
+              <WikiBody body={page.body || ""} />
+            </article>
+          )}
 
           {/* aside — 사용자 요청 순서 (2026-05-26): Sources → Relationship → Keywords */}
           <aside className="space-y-4">
@@ -224,6 +384,61 @@ export default function WikiDetailPage({ params }: PageProps) {
                 </div>
               )}
             </section>
+
+            {/* 영구 삭제 — wiki + 연결 items (raw DB) 모두 제거. irreversible.
+                2단계 confirm — 첫 클릭은 경고 박스, 두 번째 클릭으로 확정 (D12 패턴). */}
+            {!editing && !deleteResult && (
+              <section className="bg-white dark:bg-zinc-900 rounded border border-red-200 dark:border-red-900 p-4">
+                <div className="text-[11px] font-medium text-red-700 dark:text-red-400 mb-2">
+                  ⚠ 영구 삭제 (irreversible)
+                </div>
+                {!confirmDelete ? (
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDelete(true)}
+                    disabled={deleting}
+                    className="w-full px-3 py-1.5 text-xs bg-white dark:bg-zinc-900 border border-red-300 dark:border-red-800 text-red-700 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded disabled:opacity-50"
+                  >
+                    🗑 위키 페이지 삭제…
+                  </button>
+                ) : (
+                  <div className="p-3 text-[11px] bg-red-50 dark:bg-red-900/20 border border-red-300 dark:border-red-800 rounded space-y-2">
+                    <div className="font-medium text-red-800 dark:text-red-200">
+                      정말 삭제하시겠습니까? 영구 삭제입니다.
+                    </div>
+                    <div className="text-zinc-700 dark:text-zinc-300 space-y-1">
+                      <div>
+                        <span className="font-medium">{page.title}</span>
+                      </div>
+                      <div className="text-[10px] text-zinc-500 dark:text-zinc-400">
+                        • 이 위키 페이지 삭제<br />
+                        • 연결된 자료 (raw DB) <span className="font-medium text-red-700 dark:text-red-300">{page.sources.length}개</span> 영구 삭제<br />
+                        • 다른 위키와 공유된 자료도 함께 삭제됨 → 그 위키의 sources 에서도 자동 제거<br />
+                        • 다시 텔레그램에 입력하면 새로 추가할 수 있습니다
+                      </div>
+                    </div>
+                    <div className="flex gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDelete(false)}
+                        disabled={deleting}
+                        className="flex-1 px-2 py-1 text-[11px] bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                      >
+                        취소
+                      </button>
+                      <button
+                        type="button"
+                        onClick={onConfirmDelete}
+                        disabled={deleting}
+                        className="flex-1 px-2 py-1 text-[11px] bg-red-600 hover:bg-red-700 text-white rounded disabled:opacity-50 font-medium"
+                      >
+                        {deleting ? "삭제 중…" : "삭제 확정"}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </section>
+            )}
           </aside>
         </div>
       </div>

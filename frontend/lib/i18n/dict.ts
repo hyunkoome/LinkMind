@@ -10,9 +10,7 @@ const _raw = {
     nav: {
       graph: "그래프",
       ingest: "수집",
-      search: "검색",
       wiki: "위키",
-      cleanup: "정리",
       settings: "설정",
     },
     common: {
@@ -106,19 +104,6 @@ const _raw = {
         duplicate: "중복",
       },
     },
-    search: {
-      pageTitle: "검색 (Semantic)",
-      pageSubtitle:
-        "Qdrant 의미 검색 (벡터) — 동의어 / paraphrase 도 매칭. 빠른 graph subset 은 그래프 페이지의 사이드바 검색 (FTS) 사용.",
-      placeholder: "예: 포인트클라우드 압축, attention mechanism, 3D Gaussian Splatting…",
-      topK: "top",
-      searchBtn: "Search",
-      searching: "검색 중…",
-      resultsCount: "건",
-      noResults: "매칭되는 자료 없음. 키워드를 바꾸거나 더 많은 자료를 ingest 하세요.",
-      hitScore: "score",
-      hitOpenInGraph: "→ graph 에서 보기",
-    },
     settings: {
       pageTitle: "설정",
       pageSubtitle:
@@ -159,9 +144,7 @@ const _raw = {
     nav: {
       graph: "Graph",
       ingest: "Ingest",
-      search: "Search",
       wiki: "Wiki",
-      cleanup: "Cleanup",
       settings: "Settings",
     },
     common: {
@@ -254,19 +237,6 @@ const _raw = {
         refreshed: "refreshed",
         duplicate: "duplicate",
       },
-    },
-    search: {
-      pageTitle: "Search (Semantic)",
-      pageSubtitle:
-        "Qdrant vector search — paraphrase / synonym matching. For quick graph subset, use the sidebar search on Graph page (FTS).",
-      placeholder: "e.g. point cloud compression, attention mechanism, 3D Gaussian Splatting…",
-      topK: "top",
-      searchBtn: "Search",
-      searching: "searching…",
-      resultsCount: "results",
-      noResults: "No matches. Try different keywords or ingest more resources.",
-      hitScore: "score",
-      hitOpenInGraph: "→ view in graph",
     },
     settings: {
       pageTitle: "Settings",

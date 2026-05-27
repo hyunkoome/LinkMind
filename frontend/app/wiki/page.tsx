@@ -31,26 +31,47 @@ const STATUS_COLORS: Record<string, string> = {
 export default function WikiListPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const keywordFilter = searchParams.get("keyword") || "";
 
-  const [q, setQ] = useState("");
-  const [statusFilter, setStatusFilter] = useState<string>("");
-  const [page, setPage] = useState(1);
+  // URL query 가 단일 진실 (2026-05-27) — detail 페이지에서 뒤로가기 시 검색/
+  // 페이지 상태 보존. q/status/page/keyword 모두 URL query.
+  // 의미 검색은 별 페이지 (/ask) — 여기는 단순 title/slug ILIKE 매칭 + filter 만.
+  const q = searchParams.get("q") || "";
+  const statusFilter = searchParams.get("status") || "";
+  const keywordFilter = searchParams.get("keyword") || "";
+  const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10) || 1);
+
+  // 입력창 local state (debounce 위함) — URL 의 q 와 분리, debounce 후 URL 반영
+  const [qInput, setQInput] = useState(q);
+  // URL 의 q 가 외부에서 바뀌면 (브라우저 history 등) input 도 sync
+  useEffect(() => {
+    setQInput(q);
+  }, [q]);
+
   const [response, setResponse] = useState<{ total: number; pages: WikiPageListItem[] } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // q debounce
-  const [debouncedQ, setDebouncedQ] = useState(q);
-  useEffect(() => {
-    const id = setTimeout(() => setDebouncedQ(q), 250);
-    return () => clearTimeout(id);
-  }, [q]);
+  // URL 갱신 헬퍼 — 부분 변경 (다른 param 은 보존). replace 로 history 안 늘림.
+  // page 만은 사용자가 의도해서 이동하므로 push 가 자연스럽지만, 단순화 위해 replace 통일.
+  const updateQuery = (updates: Record<string, string | null>) => {
+    const params = new URLSearchParams(searchParams.toString());
+    for (const [k, v] of Object.entries(updates)) {
+      if (v === null || v === "") params.delete(k);
+      else params.set(k, v);
+    }
+    const qs = params.toString();
+    router.replace(qs ? `/wiki?${qs}` : "/wiki", { scroll: false });
+  };
 
-  // keyword 변경 시 page 1 로 reset
+  // q 입력 → 250ms debounce 후 URL 반영 (+ page=1 reset)
   useEffect(() => {
-    setPage(1);
-  }, [keywordFilter]);
+    if (qInput === q) return;     // 외부 sync 일 때 loop 방지
+    const id = setTimeout(() => {
+      updateQuery({ q: qInput || null, page: null });
+    }, 250);
+    return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [qInput]);
 
   useEffect(() => {
     let alive = true;
@@ -58,7 +79,7 @@ export default function WikiListPage() {
     setError(null);
     listWikiPages({
       status: statusFilter || undefined,
-      q: debouncedQ || undefined,
+      q: q || undefined,
       keyword: keywordFilter || undefined,
       limit: PAGE_SIZE,
       offset: (page - 1) * PAGE_SIZE,
@@ -75,7 +96,7 @@ export default function WikiListPage() {
     return () => {
       alive = false;
     };
-  }, [debouncedQ, statusFilter, keywordFilter, page]);
+  }, [q, statusFilter, keywordFilter, page]);
 
   const totalPages = response ? Math.max(1, Math.ceil(response.total / PAGE_SIZE)) : 1;
 
@@ -99,7 +120,7 @@ export default function WikiListPage() {
             <span className="font-medium">{keywordFilter}</span>
             <button
               type="button"
-              onClick={() => router.push("/wiki")}
+              onClick={() => updateQuery({ keyword: null, page: null })}
               className="text-orange-500 hover:text-orange-700"
               title="필터 해제"
             >
@@ -113,19 +134,15 @@ export default function WikiListPage() {
           <input
             type="search"
             placeholder="제목 / slug 검색…"
-            value={q}
-            onChange={(e) => {
-              setQ(e.target.value);
-              setPage(1);
-            }}
+            value={qInput}
+            onChange={(e) => setQInput(e.target.value)}
             className="flex-1 px-3 py-1.5 text-sm rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100"
           />
           <select
             value={statusFilter}
-            onChange={(e) => {
-              setStatusFilter(e.target.value);
-              setPage(1);
-            }}
+            onChange={(e) =>
+              updateQuery({ status: e.target.value || null, page: null })
+            }
             className="px-3 py-1.5 text-sm rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100"
           >
             <option value="">전체 상태</option>
@@ -190,7 +207,10 @@ export default function WikiListPage() {
               <div className="flex items-center justify-center gap-2 mt-6">
                 <button
                   type="button"
-                  onClick={() => setPage((x) => Math.max(1, x - 1))}
+                  onClick={() => {
+                    const next = Math.max(1, page - 1);
+                    updateQuery({ page: next > 1 ? String(next) : null });
+                  }}
                   disabled={page <= 1}
                   className="px-3 py-1 text-xs rounded border border-zinc-300 dark:border-zinc-700 disabled:opacity-40"
                 >
@@ -201,7 +221,10 @@ export default function WikiListPage() {
                 </span>
                 <button
                   type="button"
-                  onClick={() => setPage((x) => Math.min(totalPages, x + 1))}
+                  onClick={() => {
+                    const next = Math.min(totalPages, page + 1);
+                    updateQuery({ page: String(next) });
+                  }}
                   disabled={page >= totalPages}
                   className="px-3 py-1 text-xs rounded border border-zinc-300 dark:border-zinc-700 disabled:opacity-40"
                 >

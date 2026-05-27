@@ -28,6 +28,14 @@ from backend.agents.retriever import _build_wiki_context
 from backend.agents.writer import WriterAgent
 from backend.db.connection import get_session
 from backend.embedding.factory import get_embedding_provider
+from backend.embedding.qdrant_store import delete_chunks_for_item
+from backend.embedding.wiki_qdrant import (
+    delete_wiki_page as qdrant_delete_wiki_page,
+)
+from backend.embedding.wiki_qdrant import (
+    ensure_wiki_collection,
+    upsert_wiki_page,
+)
 from backend.embedding.wiki_qdrant import search_wiki_pages as qdrant_search_wiki_pages
 from backend.schemas.models import (
     WikiClassifyItemResult,
@@ -38,7 +46,9 @@ from backend.schemas.models import (
     WikiKeywordSuggestion,
     WikiKeywordsUpdateRequest,
     WikiKeywordsUpdateResponse,
+    WikiPageDeleteResponse,
     WikiPageDetail,
+    WikiPageEditRequest,
     WikiPageListItem,
     WikiPageListResponse,
     WikiRegenerateResponse,
@@ -253,6 +263,242 @@ async def regenerate_wiki_page(
         version_number=meta.get("version_number"),
         duration_ms=wr_result.duration_ms,
         error=wr_result.error,
+    )
+
+
+# ────────────────────────────────────────────────────────────────
+# PATCH /wiki/{slug} — title / description / body 수동 편집 (2026-05-27)
+# ────────────────────────────────────────────────────────────────
+#
+# 사용자가 LLM 합성 결과를 수동 보강 / 수정. body 가 변경되면 body_status='ready',
+# body_model='user', 새 wiki_page_versions row 적립 (학습 신호 보존), Qdrant body
+# embedding 재upsert.
+
+_FETCH_PAGE_FULL_SQL = text("""
+    SELECT id, slug, title, description, body, body_status,
+           is_pinned, keywords
+    FROM wiki_pages WHERE slug = :slug
+""")
+
+_LATEST_VERSION_NUMBER_SQL = text("""
+    SELECT COALESCE(MAX(version_number), 0) FROM wiki_page_versions WHERE page_id = :page_id
+""")
+
+_UPDATE_PAGE_FIELDS_SQL = text("""
+    UPDATE wiki_pages
+    SET title = COALESCE(:title, title),
+        description = COALESCE(:description, description),
+        body = CASE WHEN :body_provided THEN :body ELSE body END,
+        body_status = CASE WHEN :body_provided THEN 'ready' ELSE body_status END,
+        body_model = CASE WHEN :body_provided THEN 'user' ELSE body_model END,
+        body_prompt_version = CASE WHEN :body_provided THEN 'manual' ELSE body_prompt_version END,
+        body_generated_at = CASE WHEN :body_provided THEN now() ELSE body_generated_at END
+    WHERE id = :page_id
+""")
+
+_INSERT_MANUAL_VERSION_SQL = text("""
+    INSERT INTO wiki_page_versions (
+        page_id, version_number, body, body_model, body_prompt_version,
+        agent_run_id, trigger_reason
+    ) VALUES (
+        :page_id, :version_number, :body, 'user', 'manual',
+        NULL, 'manual_edit'
+    )
+""")
+
+
+@router.patch("/{slug}", response_model=WikiPageDetail)
+async def edit_wiki_page(
+    slug: str,
+    payload: WikiPageEditRequest,
+    session: AsyncSession = Depends(get_session),
+) -> WikiPageDetail:
+    """사용자 수동 편집 — title / description / body 각각 optional 변경.
+
+    body 변경 시:
+      - body_status='ready', body_model='user', body_prompt_version='manual'
+      - 새 wiki_page_versions row (trigger_reason='manual_edit', 학습 신호 보존)
+      - Qdrant linkmind_wiki_pages 의 body embedding 재upsert
+    title/description 만 변경 시: 위 절차 생략 (body 안 바뀜).
+
+    셋 다 None 이면 400.
+    """
+    has_title = payload.title is not None
+    has_desc = payload.description is not None
+    has_body = payload.body is not None
+    if not (has_title or has_desc or has_body):
+        raise HTTPException(
+            status_code=400,
+            detail="title / description / body 중 적어도 하나는 제공해야 합니다.",
+        )
+
+    row = (await session.execute(_FETCH_PAGE_FULL_SQL, {"slug": slug})).mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail=f"wiki page not found: slug={slug}")
+    page_id = row["id"]
+
+    # title / description / body UPDATE (body 면 status/model 까지 manual 마킹)
+    await session.execute(_UPDATE_PAGE_FIELDS_SQL, {
+        "page_id": str(page_id),
+        "title": payload.title,
+        "description": payload.description,
+        "body": payload.body or "",          # CASE WHEN 안 가서 무방
+        "body_provided": has_body,
+    })
+
+    # body 변경 시 version 적립 + Qdrant 재upsert
+    if has_body:
+        latest = (await session.execute(
+            _LATEST_VERSION_NUMBER_SQL, {"page_id": str(page_id)},
+        )).scalar() or 0
+        new_version = int(latest) + 1
+        await session.execute(_INSERT_MANUAL_VERSION_SQL, {
+            "page_id": str(page_id),
+            "version_number": new_version,
+            "body": payload.body,
+        })
+
+        # Qdrant body embedding 재upsert — 실패해도 DB 변경은 보존 (writer 와 동일 정책)
+        try:
+            embedder = get_embedding_provider()
+            await ensure_wiki_collection(dim=embedder.dim)
+            emb_result = await embedder.embed([payload.body])
+            await upsert_wiki_page(
+                page_id=str(page_id),
+                vector=emb_result.vectors[0],
+                payload={
+                    "slug": row["slug"],
+                    "title": payload.title if has_title else row["title"],
+                    "description": payload.description if has_desc else row.get("description"),
+                    "source_count": 0,    # 별 query 없이 — sources 는 detail GET 때 채워짐
+                    "body_status": "ready",
+                    "is_pinned": bool(row.get("is_pinned", False)),
+                    "version_number": new_version,
+                },
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Qdrant wiki_pages upsert 실패 (수동 편집, slug=%s, 계속): %s",
+                slug, exc,
+            )
+
+    await session.commit()
+    logger.info(
+        "wiki page 수동 편집 — slug=%s, title=%s, description=%s, body=%s",
+        slug,
+        "변경" if has_title else "유지",
+        "변경" if has_desc else "유지",
+        "변경" if has_body else "유지",
+    )
+
+    # 응답: 최신 wiki_context 다시 build (latest_version / sources / cross_links 채움)
+    wiki_context = await _build_wiki_context(session, page_id)
+    return await _wiki_context_to_response(wiki_context)
+
+
+# ────────────────────────────────────────────────────────────────
+# DELETE /wiki/{slug} — wiki + 연결 items 영구 삭제 (2026-05-27)
+# ────────────────────────────────────────────────────────────────
+#
+# 사용자 의도: 자료가 깨진 (live URL X / 영상 삭제 / 도메인 죽음 등) 경우 wiki
+# 페이지와 raw items 둘 다 영구 제거 → 새 텔레그램 입력으로 다시 채울 수 있게.
+#
+# 절차:
+#   1. wiki_page_items 의 모든 item_id 조회
+#   2. 각 item: Qdrant chunks 삭제 + Postgres items DELETE
+#      → ON DELETE CASCADE 가 wiki_page_items 양방향 매핑 자동 정리.
+#      → 다른 wiki 에 link 된 같은 item 도 함께 사라짐 (sources 에서 빠짐).
+#   3. wiki_pages row DELETE — Qdrant wiki body point 도 delete.
+#   4. 영향받은 다른 wiki 수 집계 (응답용).
+#
+# 보존: volumes/archive 의 raw 파일 (attachments.file_hash) — SHA-256 dedup 라
+# 다른 item 이 같은 file_hash 참조 가능. orphan cleanup 은 별도 job.
+
+_FETCH_PAGE_ITEM_IDS_SQL = text("""
+    SELECT item_id FROM wiki_page_items WHERE wiki_page_id = :page_id
+""")
+
+_COUNT_AFFECTED_OTHER_WIKIS_SQL = text("""
+    SELECT COUNT(DISTINCT wpi.wiki_page_id)
+    FROM wiki_page_items wpi
+    WHERE wpi.item_id = ANY(:item_ids)
+      AND wpi.wiki_page_id != :this_page_id
+""")
+
+
+@router.delete("/{slug}", response_model=WikiPageDeleteResponse)
+async def delete_wiki_page(
+    slug: str,
+    session: AsyncSession = Depends(get_session),
+) -> WikiPageDeleteResponse:
+    """wiki page + 연결 items (raw DB) 영구 삭제. irreversible.
+
+    사용자가 frontend 의 2단계 confirm 통과 시 호출. 응답에 영향받은 다른 wiki
+    수 포함 — 사용자가 사후 인지 가능.
+
+    §11 Privacy §4 (삭제 권리, GDPR/PIPA) 부합 — §2 raw-first 원칙은 "ingest
+    시점 무손실 보존" 의미라 사용자 명시 삭제와 충돌 X.
+    """
+    row = (await session.execute(_FETCH_PAGE_FULL_SQL, {"slug": slug})).mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail=f"wiki page not found: slug={slug}")
+    page_id = row["id"]
+
+    # 1. 연결된 item_ids 조회
+    item_id_rows = (await session.execute(
+        _FETCH_PAGE_ITEM_IDS_SQL, {"page_id": str(page_id)},
+    )).all()
+    item_ids = [str(r[0]) for r in item_id_rows]
+
+    # 2. 영향받을 다른 wiki 수 (item 삭제 전에 집계)
+    affected_other_wikis = 0
+    if item_ids:
+        affected_other_wikis = int(
+            (await session.execute(
+                _COUNT_AFFECTED_OTHER_WIKIS_SQL,
+                {"item_ids": item_ids, "this_page_id": str(page_id)},
+            )).scalar() or 0
+        )
+
+    # 3. 각 item: Qdrant chunks 삭제 + Postgres DELETE (CASCADE 양방향 자동 정리)
+    qdrant_items_status_sum = 0
+    for iid in item_ids:
+        try:
+            status_code = await delete_chunks_for_item(iid)
+            qdrant_items_status_sum += status_code
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Qdrant chunks 삭제 실패 (item=%s, 계속): %s", iid, exc,
+            )
+            qdrant_items_status_sum -= 1
+        await session.execute(
+            text("DELETE FROM items WHERE id = :id"), {"id": iid},
+        )
+
+    # 4. wiki_pages row DELETE (wiki_page_items 잔여 CASCADE + agent_runs SET NULL)
+    await session.execute(
+        text("DELETE FROM wiki_pages WHERE id = :id"), {"id": str(page_id)},
+    )
+    await session.commit()
+
+    # 5. Qdrant wiki body point 삭제
+    try:
+        qdrant_wiki_status = await qdrant_delete_wiki_page(str(page_id))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Qdrant wiki page 삭제 실패 (slug=%s): %s", slug, exc)
+        qdrant_wiki_status = -1
+
+    logger.info(
+        "wiki page 영구 삭제 — slug=%s, items=%d, affected_other_wikis=%d",
+        slug, len(item_ids), affected_other_wikis,
+    )
+    return WikiPageDeleteResponse(
+        deleted_wiki_slug=slug,
+        deleted_wiki_page_id=page_id,
+        deleted_items_count=len(item_ids),
+        affected_other_wikis_count=affected_other_wikis,
+        qdrant_wiki_status=qdrant_wiki_status,
+        qdrant_items_status_sum=qdrant_items_status_sum,
     )
 
 

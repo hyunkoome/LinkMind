@@ -20,7 +20,6 @@ import asyncio
 from backend import runtime_settings
 from backend.api import (
     ask,
-    categories,
     files,
     graph,
     health,
@@ -150,7 +149,6 @@ app.include_router(files.router, prefix="/files", tags=["files"])
 app.include_router(topics.router, prefix="/topics", tags=["topics"])
 app.include_router(items.router, prefix="/items", tags=["items"])
 app.include_router(graph.router, prefix="/graph", tags=["graph"])
-app.include_router(categories.router, prefix="/categories", tags=["categories"])
 app.include_router(wiki.router, prefix="/wiki", tags=["wiki"])
 
 

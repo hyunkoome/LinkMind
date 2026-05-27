@@ -9,8 +9,6 @@ import type {
   LLMSettingsUpdate,
   ModelsListResponse,
   PromptVersion,
-  SearchRequest,
-  SearchResponse,
   UrlIngestRequest,
   UrlIngestResponse,
 } from "@/types/graph";
@@ -137,114 +135,6 @@ export interface ItemAttachmentSummary {
   height: number | null;
 }
 
-export interface ItemListCard {
-  id: string;
-  source_type: string;
-  source_url: string | null;
-  title: string | null;
-  summary_preview: string | null;
-  raw_preview: string | null;
-  raw_length: number;
-  domain: string | null;
-  fetch_error_kind: string | null;
-  fetch_error_message: string | null;
-  has_user_notes: boolean;
-  user_notes_preview: string | null;
-  tags: string[];
-  is_read: boolean;
-  ingested_at: string;
-  attachments: ItemAttachmentSummary[];
-}
-
-export interface ItemListFacets {
-  kind: Record<string, number>;
-  source_type: Record<string, number>;
-  domain: Record<string, number>;
-}
-
-export interface ItemListResponse {
-  items: ItemListCard[];
-  total: number;
-  page: number;
-  page_size: number;
-  facets: ItemListFacets;
-}
-
-export interface ItemListFilters {
-  kind?: string;
-  source_type?: string;
-  domain?: string;
-  has_user_notes?: boolean;
-  has_summary?: boolean;
-  q?: string;
-  sort?: string;
-  page?: number;
-  page_size?: number;
-}
-
-export async function listItems(filters: ItemListFilters): Promise<ItemListResponse> {
-  const params = new URLSearchParams();
-  for (const [k, v] of Object.entries(filters)) {
-    if (v === undefined || v === null || v === "") continue;
-    params.set(k, String(v));
-  }
-  const qs = params.toString();
-  return fetchJSON<ItemListResponse>(`/items${qs ? "?" + qs : ""}`);
-}
-
-export async function appendItemNote(
-  itemId: string, note: string,
-): Promise<ItemDetail> {
-  return fetchJSON<ItemDetail>(`/items/${itemId}/notes`, {
-    method: "POST",
-    body: JSON.stringify({ note }),
-  });
-}
-
-export interface DeleteItemResponse {
-  deleted: boolean;
-  item_id: string;
-  qdrant_status: number;
-}
-
-export async function deleteItem(itemId: string): Promise<DeleteItemResponse> {
-  return fetchJSON<DeleteItemResponse>(`/items/${itemId}`, {
-    method: "DELETE",
-  });
-}
-
-export interface LinkCategoryResponse {
-  linked: boolean;
-  category_slug: string;
-  topic_id: string;
-  topic_slug: string;
-}
-
-export async function linkItemCategory(
-  itemId: string, slug: string,
-): Promise<LinkCategoryResponse> {
-  return fetchJSON<LinkCategoryResponse>(
-    `/items/${itemId}/categories/${encodeURIComponent(slug)}`,
-    { method: "POST" },
-  );
-}
-
-export interface CategorySummary {
-  id: string;
-  slug: string;
-  label: string;
-  description: string | null;
-  synonyms: string[];
-  color: string | null;
-  pinned: boolean;
-  topic_count: number;
-  item_count: number;
-}
-
-export async function listCategories(limit = 1000): Promise<CategorySummary[]> {
-  return fetchJSON<CategorySummary[]>(`/categories?limit=${limit}`);
-}
-
 // 첨부 파일 inline URL (PDF viewer 등) — backend 의 /files/{hash}
 export function fileUrl(fileHash: string): string {
   return `${API_BASE}/files/${fileHash}`;
@@ -320,15 +210,6 @@ export async function uploadPdf(
     throw new Error(`${res.status} ${res.statusText}: ${text}`);
   }
   return res.json();
-}
-
-// ── Search (Qdrant 의미 검색 — graph 의 FTS 와 별개) ────────────
-
-export async function searchSemantic(body: SearchRequest): Promise<SearchResponse> {
-  return fetchJSON<SearchResponse>(`/search`, {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
 }
 
 export { API_BASE };
@@ -473,6 +354,42 @@ export async function regenerateWikiPage(slug: string): Promise<WikiRegenerateRe
   return fetchJSON<WikiRegenerateResponse>(`/wiki/${encodeURIComponent(slug)}/regenerate`, {
     method: "POST",
     body: JSON.stringify({}),
+  });
+}
+
+// PATCH /wiki/{slug} — title / description / body 수동 편집 (2026-05-27).
+// 셋 다 optional. 적어도 하나 제공 필요. body 변경 시 backend 가 body_status='ready'
+// + new wiki_page_versions row + Qdrant body embedding 재upsert.
+export interface WikiPageEditRequest {
+  title?: string;
+  description?: string;
+  body?: string;
+}
+
+export async function updateWikiPage(
+  slug: string,
+  payload: WikiPageEditRequest,
+): Promise<WikiPageDetail> {
+  return fetchJSON<WikiPageDetail>(`/wiki/${encodeURIComponent(slug)}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+// DELETE /wiki/{slug} — wiki + 연결 items (raw DB) 영구 삭제. irreversible.
+// CASCADE 가 양방향이라 items 삭제 시 다른 wiki 의 sources 에서도 자동 제거.
+export interface WikiPageDeleteResponse {
+  deleted_wiki_slug: string;
+  deleted_wiki_page_id: string;
+  deleted_items_count: number;
+  affected_other_wikis_count: number;
+  qdrant_wiki_status: number;
+  qdrant_items_status_sum: number;
+}
+
+export async function deleteWikiPage(slug: string): Promise<WikiPageDeleteResponse> {
+  return fetchJSON<WikiPageDeleteResponse>(`/wiki/${encodeURIComponent(slug)}`, {
+    method: "DELETE",
   });
 }
 

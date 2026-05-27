@@ -174,48 +174,6 @@ class ItemUpdateRequest(BaseModel):
 # ──────────────────────────────────────────────────────────────
 
 
-class ItemListCard(BaseModel):
-    """cleanup 페이지의 카드 한 건 — raw_content 는 preview (400자) 로 truncate.
-
-    full raw 가 필요하면 GET /items/{id} 로 별도 요청.
-    """
-    id: UUID
-    source_type: SourceType
-    source_url: str | None = None
-    title: str | None = None
-    summary_preview: str | None = None       # 첫 240자
-    raw_preview: str | None = None           # 첫 400자
-    raw_length: int = 0
-    domain: str | None = None                # source_url 의 hostname
-    fetch_error_kind: str | None = None      # image_no_ocr | extraction_failed | binary_no_extract | short_raw
-    fetch_error_message: str | None = None   # source_metadata.fetch_error (있으면)
-    has_user_notes: bool = False
-    user_notes_preview: str | None = None    # 첫 200자
-    tags: list[str] = Field(default_factory=list)
-    is_read: bool = False
-    ingested_at: datetime
-    attachments: list[ItemAttachmentSummary] = Field(default_factory=list)
-
-
-class ItemListFacets(BaseModel):
-    """필터 사이드바 표시용 집계 — 현재 query 결과의 facet 카운트.
-
-    각 facet 은 {value: count} dict. domain 은 top 30 만.
-    """
-    kind: dict[str, int] = Field(default_factory=dict)
-    source_type: dict[str, int] = Field(default_factory=dict)
-    domain: dict[str, int] = Field(default_factory=dict)
-
-
-class ItemListResponse(BaseModel):
-    """GET /items 응답 — pagination + facets + 카드 목록."""
-    items: list[ItemListCard] = Field(default_factory=list)
-    total: int = 0
-    page: int = 1
-    page_size: int = 50
-    facets: ItemListFacets = Field(default_factory=ItemListFacets)
-
-
 # ──────────────────────────────────────────────────────────────
 # Graph (GET /graph/*) — Phase 2.5 wave-3, cytoscape.js 호환 JSON
 # ──────────────────────────────────────────────────────────────
@@ -372,6 +330,32 @@ class WikiRegenerateResponse(BaseModel):
     version_number: int | None = None
     duration_ms: int = 0
     error: str | None = None
+
+
+class WikiPageEditRequest(BaseModel):
+    """PATCH /wiki/{slug} — title / description / body 수동 편집.
+
+    셋 다 optional. None 으로 보낸 필드는 변경 없음. 적어도 하나는 제공해야.
+    body 가 제공되면 body_status='ready' + body_model='user' + 새 version 기록 +
+    Qdrant body embedding 재upsert.
+    """
+    title: str | None = None
+    description: str | None = None
+    body: str | None = None
+
+
+class WikiPageDeleteResponse(BaseModel):
+    """DELETE /wiki/{slug} — wiki page + 연결 items 모두 삭제 응답.
+
+    wiki_page_items FK ON DELETE CASCADE 가 양방향이므로, items 삭제 시 다른
+    wiki 의 sources 에서도 자동 제거된다 (사용자 명시 2026-05-27).
+    """
+    deleted_wiki_slug: str
+    deleted_wiki_page_id: UUID
+    deleted_items_count: int                # 이 wiki 에 연결됐던 items 총 개수
+    affected_other_wikis_count: int          # items 삭제로 sources 가 줄어든 다른 wiki 수
+    qdrant_wiki_status: int                  # 0=ok, -1=fail
+    qdrant_items_status_sum: int             # 각 item 의 chunk 삭제 status 합 (0=all ok)
 
 
 class WikiClassifyRequest(BaseModel):
