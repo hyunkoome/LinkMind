@@ -105,6 +105,15 @@ _SEARCH_PREDICATE = """
     )
 """
 
+# 2026-05-27: status='pending' alias — stale OR generating 둘 다 매칭. 사용자
+# 관점에서는 "처리 대기/진행 중" 으로 묶는 게 자연. backend body_status 자체는
+# 4 종류 유지 (writer 의 동시 합성 방지 락 의미 보존). UI 만 단순화.
+_STATUS_PREDICATE = """
+    CAST(:status AS TEXT) IS NULL
+    OR (CAST(:status AS TEXT) = 'pending' AND wp.body_status IN ('stale', 'generating'))
+    OR wp.body_status = CAST(:status AS TEXT)
+"""
+
 _LIST_PAGES_SQL = text(f"""
     SELECT
         wp.id, wp.topic_id, wp.slug, wp.title, wp.description,
@@ -114,7 +123,7 @@ _LIST_PAGES_SQL = text(f"""
               AND (wpi.user_action IS NULL OR wpi.user_action != 'removed')
         ) AS source_count
     FROM wiki_pages wp
-    WHERE (CAST(:status AS TEXT) IS NULL OR wp.body_status = CAST(:status AS TEXT))
+    WHERE ({_STATUS_PREDICATE})
       AND (CAST(:q AS TEXT) IS NULL OR ({_SEARCH_PREDICATE}))
       AND (CAST(:keyword AS TEXT) IS NULL OR CAST(:keyword AS TEXT) = ANY(wp.keywords))
     ORDER BY wp.is_pinned DESC, wp.updated_at DESC
@@ -124,7 +133,7 @@ _LIST_PAGES_SQL = text(f"""
 
 _COUNT_PAGES_SQL = text(f"""
     SELECT COUNT(*) FROM wiki_pages wp
-    WHERE (CAST(:status AS TEXT) IS NULL OR wp.body_status = CAST(:status AS TEXT))
+    WHERE ({_STATUS_PREDICATE})
       AND (CAST(:q AS TEXT) IS NULL OR ({_SEARCH_PREDICATE}))
       AND (CAST(:keyword AS TEXT) IS NULL OR CAST(:keyword AS TEXT) = ANY(wp.keywords))
 """)
@@ -831,15 +840,21 @@ async def wiki_batch_regenerate(
     fire-and-forget. 처리 대상 fetch + 'generating' 마킹은 즉시 (session.commit),
     실제 LLM 합성은 BackgroundTask 가 async. frontend 가 stats polling 으로 진행 확인.
     """
-    if payload.status not in ("empty", "stale"):
+    # 2026-05-27: 'pending' alias 추가 (= stale). frontend 가 pending tab 의
+    # '일괄 합성' 버튼에서 호출. generating 은 이미 처리 중이라 skip — pending
+    # → stale 만 매핑 (다음 SQL 의 status param).
+    effective_status = payload.status
+    if effective_status == "pending":
+        effective_status = "stale"
+    if effective_status not in ("empty", "stale"):
         raise HTTPException(
             status_code=400,
-            detail="status 는 'empty' 또는 'stale' 만 지원 (현재: {})".format(payload.status),
+            detail="status 는 'empty' / 'stale' / 'pending' 만 지원 (현재: {})".format(payload.status),
         )
 
     rows = (await session.execute(
         _FETCH_BATCH_TARGETS_SQL,
-        {"status": payload.status, "limit": payload.limit},
+        {"status": effective_status, "limit": payload.limit},
     )).mappings().all()
     pages = [dict(r) for r in rows]
 

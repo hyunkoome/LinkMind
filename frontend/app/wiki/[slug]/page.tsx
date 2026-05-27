@@ -37,6 +37,15 @@ const STATUS_COLORS: Record<string, string> = {
   empty: "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400",
 };
 
+// 사용자 친화 라벨 (2026-05-27, wiki list 와 일관):
+// 'ready' (backend) → 'completed' (label) / 'empty' → 'ready'
+const STATUS_LABEL: Record<string, string> = {
+  ready: "completed",
+  empty: "ready",
+  stale: "stale",
+  generating: "generating",
+};
+
 interface PageProps {
   // Next.js 16: params 는 Promise — `use()` 로 unwrap.
   params: Promise<{ slug: string }>;
@@ -182,7 +191,7 @@ export default function WikiDetailPage({ params }: PageProps) {
             <span
               className={`text-[10px] px-2 py-0.5 rounded ${STATUS_COLORS[page.body_status] || STATUS_COLORS.empty}`}
             >
-              {page.body_status}
+              {STATUS_LABEL[page.body_status] || page.body_status}
             </span>
             <span className="text-[10px] text-zinc-500">
               v{page.latest_version}

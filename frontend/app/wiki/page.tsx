@@ -35,6 +35,16 @@ const STATUS_COLORS: Record<string, string> = {
   empty: "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400",
 };
 
+// backend body_status → 사용자 친화 라벨 (2026-05-27).
+// 'ready' → 'completed' (처리 완료) / 'empty' → 'ready' (사용자 클릭 시 lazy 합성).
+// stale + generating 은 그대로 표시 (개별 card 의 chip — 디버깅 정보 유지).
+const STATUS_LABEL: Record<string, string> = {
+  ready: "completed",
+  empty: "ready",
+  stale: "stale",
+  generating: "generating",
+};
+
 export default function WikiListPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -158,7 +168,11 @@ export default function WikiListPage() {
     setBatchMessage(null);
     setError(null);
     try {
-      const r = await batchRegenerateWiki({ status: "empty", limit: 10 });
+      // statusFilter 에 따라 stale (pending tab) 또는 empty (empty tab) 처리.
+      // backend 'pending' alias 가 stale 로 매핑됨.
+      const batchStatus =
+        statusFilter === "pending" ? "stale" : "empty";
+      const r = await batchRegenerateWiki({ status: batchStatus, limit: 10 });
       setBatchMessage(
         `일괄 합성 시작 — ${r.dispatched}건 dispatch · 예상 ${r.estimated_seconds}초`,
       );
@@ -169,19 +183,38 @@ export default function WikiListPage() {
     }
   };
 
-  // status 별 count chip — 0 이면 회색.
-  type StatusKey = "" | "ready" | "stale" | "empty" | "generating";
+  // status 별 count chip (2026-05-27 단순화 + 사용자 친화 라벨):
+  //   - stale + generating → 'pending' (둘 다 "처리 대기/진행 중")
+  //   - backend body_status='ready' → 라벨 'completed' (처리 완료, 의미 명확)
+  //   - backend body_status='empty' → 라벨 'ready' (사용자가 클릭하면 lazy 합성됨)
+  //   backend column 값은 그대로 (의미 정확, schema 변경 회피). frontend label
+  //   만 mapping — URL query key (status=ready/empty) 도 backend 값 그대로.
+  type StatusKey = "" | "ready" | "pending" | "empty";
   const STATUS_TABS: { key: StatusKey; label: string; icon: string }[] = [
     { key: "", label: "전체", icon: "" },
-    { key: "ready", label: "ready", icon: "✅" },
-    { key: "stale", label: "stale", icon: "🔄" },
-    { key: "empty", label: "empty", icon: "⏳" },
-    { key: "generating", label: "generating", icon: "⏱" },
+    { key: "ready", label: "completed", icon: "✅" },
+    { key: "pending", label: "pending", icon: "⏱" },
+    { key: "empty", label: "ready", icon: "⏳" },
   ];
   const countFor = (k: StatusKey): number | null => {
     if (!stats) return null;
     if (k === "") return stats.total;
+    if (k === "pending") return stats.stale + stats.generating;
     return (stats as unknown as Record<string, number>)[k] ?? 0;
+  };
+
+  // pending 예상 처리 시간 — daemon sequential ~15s/page (LLM body 합성).
+  // CLAUDE.md §13: "page 당 17초 → 3.7초" 은 batch concurrency 4 — daemon 은 1.
+  // 사용자에게 어림 시간 보여줌 (정확한 추정은 vLLM 부하 따라 변동).
+  const formatEta = (pendingCount: number): string => {
+    if (pendingCount <= 0) return "";
+    const sec = pendingCount * 15;
+    if (sec < 60) return `~${sec}초`;
+    if (sec < 3600) return `~${Math.round(sec / 60)}분`;
+    if (sec < 86400) return `~${Math.round(sec / 3600)}시간`;
+    const days = Math.floor(sec / 86400);
+    const hours = Math.round((sec % 86400) / 3600);
+    return hours > 0 ? `~${days}일 ${hours}시간` : `~${days}일`;
   };
 
   return (
@@ -246,6 +279,15 @@ export default function WikiListPage() {
                     ({count.toLocaleString()})
                   </span>
                 )}
+                {/* pending tab 에 ETA chip — daemon ~15s/page sequential */}
+                {tab.key === "pending" && count !== null && count > 0 && (
+                  <span
+                    className="ml-1.5 text-[10px] text-blue-600 dark:text-blue-400"
+                    title="daemon 의 자동 합성 예상 시간 (~15초/page). batch 일괄 합성 시 4배 빠름"
+                  >
+                    {formatEta(count)}
+                  </span>
+                )}
               </button>
             );
           })}
@@ -260,7 +302,9 @@ export default function WikiListPage() {
             onChange={(e) => setQInput(e.target.value)}
             className="flex-1 px-3 py-1.5 text-sm rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100"
           />
-          {statusFilter === "empty" && stats && stats.empty > 0 && (
+          {/* 일괄 합성 버튼 — pending/empty tab 둘 다 노출 (2026-05-27) */}
+          {((statusFilter === "pending" && stats && stats.stale > 0) ||
+            (statusFilter === "empty" && stats && stats.empty > 0)) && (
             <button
               type="button"
               onClick={() => setConfirmBatch(true)}
@@ -269,7 +313,11 @@ export default function WikiListPage() {
             >
               {batchInProgress
                 ? "⏱ 합성 중…"
-                : `⚡ ${stats.empty}건 일괄 합성 (최대 10건)`}
+                : `⚡ ${
+                    statusFilter === "pending"
+                      ? stats!.stale
+                      : stats!.empty
+                  }건 일괄 합성 (최대 10건)`}
             </button>
           )}
         </div>
@@ -410,7 +458,7 @@ export default function WikiListPage() {
                       <span
                         className={`text-[10px] px-1.5 py-0.5 rounded ${STATUS_COLORS[p.body_status] || STATUS_COLORS.empty}`}
                       >
-                        {p.body_status}
+                        {STATUS_LABEL[p.body_status] || p.body_status}
                       </span>
                       <span className="text-[10px] text-zinc-500 dark:text-zinc-400">
                         {p.source_count} sources

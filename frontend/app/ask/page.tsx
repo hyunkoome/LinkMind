@@ -43,6 +43,14 @@ const STATUS_COLORS: Record<string, string> = {
   empty: "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400",
 };
 
+// 사용자 친화 라벨 (2026-05-27, wiki list 와 일관):
+const STATUS_LABEL: Record<string, string> = {
+  ready: "completed",
+  empty: "ready",
+  stale: "stale",
+  generating: "generating",
+};
+
 export default function AskPage() {
   const [input, setInput] = useState("");
   const [pending, setPending] = useState(false);
@@ -210,7 +218,7 @@ export default function AskPage() {
                           <span
                             className={`ml-1 inline-block text-[9px] px-1 rounded ${STATUS_COLORS[w.body_status] || STATUS_COLORS.empty}`}
                           >
-                            {w.body_status}
+                            {STATUS_LABEL[w.body_status] || w.body_status}
                           </span>
                         </button>
                       </li>
