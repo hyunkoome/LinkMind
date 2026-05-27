@@ -16,6 +16,7 @@ ingest/slack 과 동일한 위치.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -289,7 +290,66 @@ async def ingest_telegram_message(
             note_id = await _save_text_message(message, analyze_now=analyze_now)
             result["note_item_id"] = note_id
 
+    # D11 classifier hook (2026-05-27, in-process 흐름용):
+    #   watcher 가 backend HTTP API 안 쓰고 ingest_telegram_message 를 직접 호출
+    #   → backend/api/ingest.py 의 BackgroundTask hook (router 단) 우회됨.
+    #   여기서 fire-and-forget asyncio.create_task 로 classifier 호출 — 새 item 이
+    #   자동으로 wiki_pages 에 매핑되어 wiki 검색에 등장.
+    new_item_ids: list[str] = []
+    for r in result["urls_ingested"]:
+        # summary 만들어진 신규/refresh item 만 — error 있거나 summary 없으면 skip
+        if r.get("error"):
+            continue
+        if r.get("item_id") and r.get("summary_generated"):
+            new_item_ids.append(str(r["item_id"]))
+    for r in result["attachments_ingested"]:
+        if r.get("error"):
+            continue
+        if r.get("item_id") and r.get("summary_generated"):
+            new_item_ids.append(str(r["item_id"]))
+    if result.get("note_item_id"):
+        # note 는 summary 가 거의 없지만 의미 추론 시도해볼 가치 — classifier 가
+        # 후보 못 찾으면 skip 으로 끝남 (silent, 부담 작음).
+        new_item_ids.append(str(result["note_item_id"]))
+
+    for iid in new_item_ids:
+        # fire-and-forget — 응답 즉시 반환, classifier 는 백그라운드. watcher 의
+        # 채널 삭제 흐름은 ingest_telegram_message return 값만 보므로 영향 X.
+        asyncio.create_task(_bg_classify_item(iid))
+
     return result
+
+
+async def _bg_classify_item(item_id_str: str) -> None:
+    """fire-and-forget classifier — 별 session, 실패 시 silent log."""
+    from uuid import UUID
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from backend.agents import AgentContext
+    from backend.agents.classifier import ClassifierAgent
+    from backend.db.connection import get_engine
+
+    try:
+        engine = get_engine()
+        SessionMaker = async_sessionmaker(engine, expire_on_commit=False)
+        async with SessionMaker() as session:
+            ctx = AgentContext(session=session, related_item_id=UUID(item_id_str))
+            classifier = ClassifierAgent()
+            ag_result = await classifier.run(ctx)
+            await session.commit()
+            meta = ag_result.output_meta or {}
+            logger.info(
+                "telegram ingest classifier hook — item=%s, matched=%s, new_pages=%s, linked=%d",
+                item_id_str,
+                meta.get("matched_count"),
+                meta.get("new_pages_count"),
+                len(meta.get("linked_page_ids") or []),
+            )
+    except Exception as e:  # noqa: BLE001
+        logger.warning(
+            "telegram ingest classifier hook 실패 (item=%s, %s: %s)",
+            item_id_str, type(e).__name__, e,
+        )
 
 
 async def _save_text_message(
