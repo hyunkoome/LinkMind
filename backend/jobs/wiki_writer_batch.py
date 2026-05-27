@@ -122,7 +122,7 @@ _COUNT_PENDING_SQL = text("""
 # 즉시 'pending' 마킹 (writer 가 다시 'completed' 로 변경).
 _FETCH_NEXT_PAGE_SQL = text("""
     UPDATE wiki_pages wp
-    SET body_status = 'pending'
+    SET body_status = 'pending', body_processing_started_at = now()
     WHERE id = (
         SELECT id FROM wiki_pages
         WHERE body_status = ANY(:statuses)
@@ -209,7 +209,7 @@ async def _worker_loop(
             async with session_factory() as session:
                 async with session.begin():
                     await session.execute(text(
-                        "UPDATE wiki_pages SET body_status = 'ready' WHERE id = :pid"
+                        "UPDATE wiki_pages SET body_status = 'ready', body_processing_started_at = NULL WHERE id = :pid"
                     ), {"pid": str(page_id)})
             stats["skip"] += 1
             stats["processed"] += 1
@@ -245,7 +245,7 @@ async def _worker_loop(
                 async with session_factory() as session:
                     async with session.begin():
                         await session.execute(text(
-                            "UPDATE wiki_pages SET body_status = 'ready' WHERE id = :pid"
+                            "UPDATE wiki_pages SET body_status = 'ready', body_processing_started_at = NULL WHERE id = :pid"
                         ), {"pid": str(page_id)})
         except Exception as exc:  # noqa: BLE001
             err_msg = f"{type(exc).__name__}: {exc}"
@@ -253,7 +253,7 @@ async def _worker_loop(
             async with session_factory() as session:
                 async with session.begin():
                     await session.execute(text(
-                        "UPDATE wiki_pages SET body_status = 'ready' WHERE id = :pid"
+                        "UPDATE wiki_pages SET body_status = 'ready', body_processing_started_at = NULL WHERE id = :pid"
                     ), {"pid": str(page_id)})
 
         page_dur = time.monotonic() - page_start

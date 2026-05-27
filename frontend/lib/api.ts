@@ -265,8 +265,9 @@ export interface WikiPageListItem {
   slug: string;
   title: string;
   description: string | null;
-  body_status: "empty" | "generating" | "ready" | "stale";
+  body_status: "ready" | "pending" | "completed";   // 2026-05-27 통일
   body_generated_at: string | null;
+  body_processing_started_at: string | null;        // NOT NULL ⇒ writer 진행 중
   source_count: number;
   is_pinned: boolean;
   updated_at: string;

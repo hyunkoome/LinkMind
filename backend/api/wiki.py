@@ -115,7 +115,9 @@ _STATUS_PREDICATE = """
 _LIST_PAGES_SQL = text(f"""
     SELECT
         wp.id, wp.topic_id, wp.slug, wp.title, wp.description,
-        wp.body_status, wp.body_generated_at, wp.is_pinned, wp.updated_at,
+        wp.body_status, wp.body_generated_at,
+        wp.body_processing_started_at,
+        wp.is_pinned, wp.updated_at,
         (SELECT COUNT(*) FROM wiki_page_items wpi
             WHERE wpi.wiki_page_id = wp.id
               AND (wpi.user_action IS NULL OR wpi.user_action != 'removed')
@@ -158,6 +160,7 @@ async def list_wiki_pages(
             description=r["description"],
             body_status=r["body_status"],
             body_generated_at=r["body_generated_at"],
+            body_processing_started_at=r["body_processing_started_at"],
             source_count=int(r["source_count"] or 0),
             is_pinned=bool(r["is_pinned"]),
             updated_at=r["updated_at"],

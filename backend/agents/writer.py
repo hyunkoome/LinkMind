@@ -45,7 +45,8 @@ _UPDATE_BODY_SQL = text("""
         body_model = :body_model,
         body_prompt_version = :body_prompt_version,
         body_generated_at = :body_generated_at,
-        body_status = 'completed'
+        body_status = 'completed',
+        body_processing_started_at = NULL    -- 처리 끝났으니 marker clear
     WHERE id = :page_id
 """)
 
@@ -75,8 +76,13 @@ _INSERT_VERSION_SQL = text("""
 """)
 
 
+# writer 시작 시 — body_processing_started_at 마킹 (시각 구분용, 2026-05-27).
+# body_status 는 'pending' 그대로 (이미 pending 이거나 ready → pending). frontend 가
+# started_at NOT NULL 이면 '진행 중' 으로 시각 강조.
 _MARK_GENERATING_SQL = text("""
-    UPDATE wiki_pages SET body_status = 'pending'
+    UPDATE wiki_pages
+    SET body_status = 'pending',
+        body_processing_started_at = now()
     WHERE id = :page_id
 """)
 

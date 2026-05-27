@@ -30,13 +30,28 @@ const DEFAULT_PAGE_SIZE = 50;
 //   - 'ready'     — ingest 직후, body 미합성 (사용자 클릭 시 lazy)
 //   - 'pending'   — 처리 대기/진행 중 (옛 stale + generating 통합)
 //   - 'completed' — 처리 완료 (body 있음)
+// pending 안에서 진행 중 (body_processing_started_at NOT NULL + 5분 안) 시각 강조.
 const STATUS_COLORS: Record<string, string> = {
   completed:
     "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400",
   pending:
+    "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
+  // pending 중에서도 LLM 처리 중 (started_at NOT NULL) — animate-pulse blue
+  pending_active:
     "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 animate-pulse",
   ready: "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400",
 };
+
+const PROCESSING_TIMEOUT_MS = 5 * 60 * 1000;   // 5분 후엔 stuck 으로 간주
+
+function effectiveStatusKey(p: WikiPageListItem): string {
+  if (p.body_status !== "pending") return p.body_status;
+  if (!p.body_processing_started_at) return "pending";
+  const startedMs = new Date(p.body_processing_started_at).getTime();
+  if (Number.isNaN(startedMs)) return "pending";
+  if (Date.now() - startedMs > PROCESSING_TIMEOUT_MS) return "pending";
+  return "pending_active";
+}
 
 export default function WikiListPage() {
   const router = useRouter();
@@ -430,11 +445,20 @@ export default function WikiListPage() {
                       <h3 className="font-medium text-zinc-900 dark:text-zinc-100 truncate flex-1">
                         {p.title}
                       </h3>
-                      <span
-                        className={`text-[10px] px-1.5 py-0.5 rounded ${STATUS_COLORS[p.body_status] || STATUS_COLORS.ready}`}
-                      >
-                        {p.body_status}
-                      </span>
+                      {/* pending 안에서 진행 중 (started_at NOT NULL + 5분 안) 인 자료는
+                          'pending · 합성중' 으로 시각 강조 (animate-pulse blue). 그 외 pending
+                          은 amber (대기). */}
+                      {(() => {
+                        const ek = effectiveStatusKey(p);
+                        const label = ek === "pending_active" ? "pending · 합성중" : p.body_status;
+                        return (
+                          <span
+                            className={`text-[10px] px-1.5 py-0.5 rounded ${STATUS_COLORS[ek] || STATUS_COLORS.ready}`}
+                          >
+                            {label}
+                          </span>
+                        );
+                      })()}
                       <span className="text-[10px] text-zinc-500 dark:text-zinc-400">
                         {p.source_count} sources
                       </span>

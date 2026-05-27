@@ -300,6 +300,9 @@ class WikiPageListItem(BaseModel):
     description: str | None = None
     body_status: str
     body_generated_at: datetime | None = None
+    # 2026-05-27: writer 가 LLM 합성 시작 시 set, 완료/실패 시 NULL.
+    # frontend 가 (NOT NULL AND now() - started < 5min) 이면 "진행 중" 시각 강조.
+    body_processing_started_at: datetime | None = None
     source_count: int = 0
     is_pinned: bool = False
     updated_at: datetime
