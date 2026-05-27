@@ -116,9 +116,56 @@ class ClassifierAgent(AgentBase):
         if not item_row:
             raise LookupError(f"items 에 id={ctx.related_item_id} 없음")
 
-        candidates = (await session.execute(
-            _FETCH_CANDIDATE_PAGES_SQL, {"limit": self.MAX_CANDIDATES},
-        )).mappings().all()
+        # wave-1f (2026-05-27): Qdrant linkmind_wiki_pages top-K 의미 검색으로 후보 추출.
+        # 옛 wave-1d 의 ORDER BY updated_at DESC LIMIT 30 은 23k wiki 중 최근 30 만 — 새
+        # item 의 의미 매칭이 거의 fail. item 의 title+summary 를 bge-m3 로 embed → Qdrant
+        # cosine top-K → 후보 wiki_pages. Qdrant 실패하면 fallback 으로 옛 방식.
+        query_text = " ".join(
+            filter(None, [
+                item_row.get("title") or "",
+                item_row.get("summary") or "",
+            ])
+        )[:2000].strip()
+
+        candidates: list[Any] = []
+        if query_text:
+            try:
+                from backend.embedding.factory import get_embedding_provider
+                from backend.embedding.wiki_qdrant import (
+                    ensure_wiki_collection,
+                    search_wiki_pages,
+                )
+
+                embedder = get_embedding_provider()
+                await ensure_wiki_collection(dim=embedder.dim)
+                emb = await embedder.embed([query_text])
+                points = await search_wiki_pages(
+                    query_vector=emb.vectors[0],
+                    top_k=self.MAX_CANDIDATES,
+                )
+                ids = [str(p.id) for p in points]
+                if ids:
+                    rows = (await session.execute(
+                        text("""
+                            SELECT id, slug, title, description, variant
+                            FROM wiki_pages WHERE id = ANY(:ids)
+                        """),
+                        {"ids": ids},
+                    )).mappings().all()
+                    # Qdrant score 순서 유지 (id list 순서)
+                    id_to_row = {str(r["id"]): r for r in rows}
+                    candidates = [id_to_row[i] for i in ids if i in id_to_row]
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Qdrant wiki candidate 실패 (item=%s) — fallback ORDER BY updated_at: %s",
+                    ctx.related_item_id, exc,
+                )
+
+        # fallback — Qdrant 빈 결과 / 실패 / item 의 query_text 없을 때
+        if not candidates:
+            candidates = (await session.execute(
+                _FETCH_CANDIDATE_PAGES_SQL, {"limit": self.MAX_CANDIDATES},
+            )).mappings().all()
 
         return {
             "item_id": str(ctx.related_item_id),

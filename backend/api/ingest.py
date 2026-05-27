@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,6 +32,47 @@ from backend.embedding.qdrant_store import ensure_collection, upsert_chunks
 from backend.schemas.models import IngestRequest, IngestResponse
 from backend.utils.chunking import chunk_text
 from backend.utils.hashing import sha256_text
+
+
+async def _bg_classify_to_wiki(item_id_str: str) -> None:
+    """BackgroundTask — 신규 ingest 된 item 을 wiki 에 자동 분류 (2026-05-27).
+
+    동기 ingest 흐름 (watcher → /ingest/auto) 에서는 summary 가 이미 만들어지기에
+    analysis_worker daemon 이 polling 안 함 (daemon 은 summary IS NULL 만 polling).
+    → 이 background task 가 그 빈 자리 — ingest 응답 즉시 반환 + classifier 가 비동기로
+    wiki_page_items 매핑 + 매칭 wiki 의 body_status='stale' 마킹 → wiki_writer_worker
+    가 자동 합성.
+
+    request session 과 분리된 별 session — engine 의 sessionmaker.
+    """
+    from uuid import UUID
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from backend.agents import AgentContext
+    from backend.agents.classifier import ClassifierAgent
+    from backend.db.connection import get_engine
+
+    engine = get_engine()
+    SessionMaker = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with SessionMaker() as session:
+            ctx = AgentContext(session=session, related_item_id=UUID(item_id_str))
+            classifier = ClassifierAgent()
+            result = await classifier.run(ctx)
+            await session.commit()
+            meta = result.output_meta or {}
+            logger.info(
+                "ingest classifier hook — item=%s, matched=%s, new_pages=%s, linked=%d",
+                item_id_str,
+                meta.get("matched_count"),
+                meta.get("new_pages_count"),
+                len(meta.get("linked_page_ids") or []),
+            )
+    except Exception as e:  # noqa: BLE001
+        logger.warning(
+            "ingest classifier hook 실패 (item=%s, %s: %s)",
+            item_id_str, type(e).__name__, e,
+        )
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -61,12 +102,36 @@ class UrlIngestResponse(BaseModel):
     title: str | None = None
 
 
-def _wrap_result(result: dict[str, Any]) -> "UrlIngestResponse":
-    return UrlIngestResponse(**{k: result.get(k) for k in (
+def _wrap_result(
+    result: dict[str, Any],
+    background: BackgroundTasks | None = None,
+) -> "UrlIngestResponse":
+    """ingest result → response + (옵션) wiki classifier 자동 호출.
+
+    background 가 주어지고 summary 가 생성된 새 item 이면 classifier BackgroundTask
+    를 schedule. ingest 응답은 즉시, classifier 는 별 session 으로 비동기 동작.
+
+    조건:
+      - background != None (FastAPI 가 endpoint 에서 BackgroundTasks 인자 받았을 때)
+      - summary_generated=True (의미 추론 가능)
+      - item_id 있음
+    refreshed (force 흐름) 은 wiki_page_items 가 이미 있을 가능성 — 그래도 새 자료가
+    summary 가 갱신됐다면 re-classify 의미 있음. created/refreshed 모두 hook.
+    """
+    response = UrlIngestResponse(**{k: result.get(k) for k in (
         "item_id", "created", "refreshed", "chunks_indexed",
         "figures_saved", "thumbnail_saved",
         "summary_generated", "tags", "title",
     ) if k in result})
+
+    if (
+        background is not None
+        and result.get("item_id")
+        and result.get("summary_generated")
+    ):
+        background.add_task(_bg_classify_to_wiki, str(result["item_id"]))
+
+    return response
 
 
 def _classify_url(url: str) -> str:
@@ -91,7 +156,10 @@ def _classify_url(url: str) -> str:
 
 
 @router.post("/url", response_model=UrlIngestResponse)
-async def ingest_url_endpoint(payload: UrlIngestRequest) -> UrlIngestResponse:
+async def ingest_url_endpoint(
+    payload: UrlIngestRequest,
+    background: BackgroundTasks,
+) -> UrlIngestResponse:
     """URL 한 줄 ingest — 일반 웹 페이지/논문 abstract. 본격 흐름은 backend.ingest.url."""
     from backend.ingest.url import ingest_url
     try:
@@ -103,11 +171,14 @@ async def ingest_url_endpoint(payload: UrlIngestRequest) -> UrlIngestResponse:
     except Exception as e:  # noqa: BLE001
         logger.exception("URL ingest 실패: %s", payload.url)
         raise HTTPException(status_code=500, detail=f"URL ingest 실패: {e!s}") from e
-    return _wrap_result(result)
+    return _wrap_result(result, background)
 
 
 @router.post("/youtube", response_model=UrlIngestResponse)
-async def ingest_youtube_endpoint(payload: UrlIngestRequest) -> UrlIngestResponse:
+async def ingest_youtube_endpoint(
+    payload: UrlIngestRequest,
+    background: BackgroundTasks,
+) -> UrlIngestResponse:
     from backend.ingest.youtube import ingest_youtube
     try:
         result = await ingest_youtube(
@@ -118,11 +189,14 @@ async def ingest_youtube_endpoint(payload: UrlIngestRequest) -> UrlIngestRespons
     except Exception as e:  # noqa: BLE001
         logger.exception("YouTube ingest 실패: %s", payload.url)
         raise HTTPException(status_code=500, detail=f"YouTube ingest 실패: {e!s}") from e
-    return _wrap_result(result)
+    return _wrap_result(result, background)
 
 
 @router.post("/github", response_model=UrlIngestResponse)
-async def ingest_github_endpoint(payload: UrlIngestRequest) -> UrlIngestResponse:
+async def ingest_github_endpoint(
+    payload: UrlIngestRequest,
+    background: BackgroundTasks,
+) -> UrlIngestResponse:
     from backend.ingest.github import ingest_github
     try:
         result = await ingest_github(
@@ -133,11 +207,14 @@ async def ingest_github_endpoint(payload: UrlIngestRequest) -> UrlIngestResponse
     except Exception as e:  # noqa: BLE001
         logger.exception("GitHub ingest 실패: %s", payload.url)
         raise HTTPException(status_code=500, detail=f"GitHub ingest 실패: {e!s}") from e
-    return _wrap_result(result)
+    return _wrap_result(result, background)
 
 
 @router.post("/pdf", response_model=UrlIngestResponse)
-async def ingest_pdf_endpoint(payload: UrlIngestRequest) -> UrlIngestResponse:
+async def ingest_pdf_endpoint(
+    payload: UrlIngestRequest,
+    background: BackgroundTasks,
+) -> UrlIngestResponse:
     """PDF URL ingest. multipart 파일 업로드는 /ingest/pdf/upload 사용."""
     from backend.ingest.pdf import ingest_pdf
     try:
@@ -149,11 +226,12 @@ async def ingest_pdf_endpoint(payload: UrlIngestRequest) -> UrlIngestResponse:
     except Exception as e:  # noqa: BLE001
         logger.exception("PDF ingest 실패: %s", payload.url)
         raise HTTPException(status_code=500, detail=f"PDF ingest 실패: {e!s}") from e
-    return _wrap_result(result)
+    return _wrap_result(result, background)
 
 
 @router.post("/pdf/upload", response_model=UrlIngestResponse)
 async def ingest_pdf_upload(
+    background: BackgroundTasks,
     file: UploadFile = File(...),
     analyze_now: bool = True,
     force: bool = False,
@@ -177,11 +255,14 @@ async def ingest_pdf_upload(
     except Exception as e:  # noqa: BLE001
         logger.exception("PDF upload ingest 실패: %s", file.filename)
         raise HTTPException(status_code=500, detail=f"PDF ingest 실패: {e!s}") from e
-    return _wrap_result(result)
+    return _wrap_result(result, background)
 
 
 @router.post("/auto", response_model=UrlIngestResponse)
-async def ingest_auto(payload: UrlIngestRequest) -> UrlIngestResponse:
+async def ingest_auto(
+    payload: UrlIngestRequest,
+    background: BackgroundTasks,
+) -> UrlIngestResponse:
     """URL host 로 자동 분류 후 해당 ingester 호출.
 
     분류 결과:
@@ -189,15 +270,17 @@ async def ingest_auto(payload: UrlIngestRequest) -> UrlIngestResponse:
       - github.com                 → github
       - 확장자 *.pdf               → pdf (URL)
       - 그 외                      → url (일반 페이지)
+
+    background 인자는 sub-endpoint 에 그대로 전달 — classifier hook 동작 보존.
     """
     kind = _classify_url(payload.url)
     if kind == "youtube":
-        return await ingest_youtube_endpoint(payload)
+        return await ingest_youtube_endpoint(payload, background)
     if kind == "github":
-        return await ingest_github_endpoint(payload)
+        return await ingest_github_endpoint(payload, background)
     if kind == "pdf":
-        return await ingest_pdf_endpoint(payload)
-    return await ingest_url_endpoint(payload)
+        return await ingest_pdf_endpoint(payload, background)
+    return await ingest_url_endpoint(payload, background)
 
 
 @router.post("", response_model=IngestResponse)
