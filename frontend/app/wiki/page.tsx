@@ -203,18 +203,25 @@ export default function WikiListPage() {
     return (stats as unknown as Record<string, number>)[k] ?? 0;
   };
 
-  // pending 예상 처리 시간 — daemon sequential ~15s/page (LLM body 합성).
-  // CLAUDE.md §13: "page 당 17초 → 3.7초" 은 batch concurrency 4 — daemon 은 1.
-  // 사용자에게 어림 시간 보여줌 (정확한 추정은 vLLM 부하 따라 변동).
-  const formatEta = (pendingCount: number): string => {
-    if (pendingCount <= 0) return "";
-    const sec = pendingCount * 15;
-    if (sec < 60) return `~${sec}초`;
-    if (sec < 3600) return `~${Math.round(sec / 60)}분`;
-    if (sec < 86400) return `~${Math.round(sec / 3600)}시간`;
-    const days = Math.floor(sec / 86400);
-    const hours = Math.round((sec % 86400) / 3600);
-    return hours > 0 ? `~${days}일 ${hours}시간` : `~${days}일`;
+  // pending 예상 처리 시간 (2026-05-27 정확화):
+  //   - daemon (lifespan, sequential): ~15s/page → 자동 처리, 사용자 X
+  //   - batch (`run_wiki_backfill.sh` 또는 [일괄 합성] 버튼, concurrency 4):
+  //     ~4s/page × 4 concurrent → effective ~1s/page (vLLM continuous batching)
+  // 둘 다 표시 — 사용자가 batch 트리거하면 빠르게, 안 하면 daemon 이 천천히.
+  const _fmtSec = (sec: number): string => {
+    if (sec < 60) return `${sec}초`;
+    if (sec < 3600) return `${Math.round(sec / 60)}분`;
+    if (sec < 86400) return `${Math.round(sec / 3600)}시간`;
+    const d = Math.floor(sec / 86400);
+    const h = Math.round((sec % 86400) / 3600);
+    return h > 0 ? `${d}일 ${h}시간` : `${d}일`;
+  };
+  const formatEta = (pendingCount: number): { batch: string; daemon: string } => {
+    if (pendingCount <= 0) return { batch: "", daemon: "" };
+    return {
+      batch: `~${_fmtSec(pendingCount * 1)}`,    // concurrency 4 effective
+      daemon: `~${_fmtSec(pendingCount * 15)}`,  // sequential
+    };
   };
 
   return (
@@ -279,15 +286,23 @@ export default function WikiListPage() {
                     ({count.toLocaleString()})
                   </span>
                 )}
-                {/* pending tab 에 ETA chip — daemon ~15s/page sequential */}
-                {tab.key === "pending" && count !== null && count > 0 && (
-                  <span
-                    className="ml-1.5 text-[10px] text-blue-600 dark:text-blue-400"
-                    title="daemon 의 자동 합성 예상 시간 (~15초/page). batch 일괄 합성 시 4배 빠름"
-                  >
-                    {formatEta(count)}
-                  </span>
-                )}
+                {/* pending tab 에 ETA chip — batch (concurrency 4) / daemon (sequential)
+                    두 모드 표시. 사용자가 [일괄 합성] 또는 batch CLI 트리거 시 batch
+                    속도, 자동 daemon 만 두면 daemon 속도. */}
+                {tab.key === "pending" && count !== null && count > 0 && (() => {
+                  const eta = formatEta(count);
+                  return (
+                    <span
+                      className="ml-1.5 text-[10px] text-blue-600 dark:text-blue-400"
+                      title={
+                        `batch (일괄 합성, concurrency 4, ~1초/page effective): ${eta.batch}\n` +
+                        `daemon (자동, sequential, ~15초/page): ${eta.daemon}`
+                      }
+                    >
+                      batch {eta.batch} / 자동 {eta.daemon}
+                    </span>
+                  );
+                })()}
               </button>
             );
           })}
