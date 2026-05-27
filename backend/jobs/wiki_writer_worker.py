@@ -61,7 +61,9 @@ _recent_failures: dict[str, float] = {}
 _FETCH_NEXT_SQL = text("""
     SELECT id, slug, title
     FROM wiki_pages wp
-    WHERE body_status = 'pending'
+    WHERE body_status IN ('ready', 'pending')
+      -- 2026-05-27: 'ready' (신규 ingest 의 self_wiki default) 도 자동 처리.
+      -- 사용자 mental: ready → pending → completed.
       AND EXISTS (
           SELECT 1 FROM wiki_page_items wpi
           WHERE wpi.wiki_page_id = wp.id

@@ -65,10 +65,13 @@ _UPSERT_WIKI_LINK_SQL = text("""
 
 _CREATE_WIKI_PAGE_SQL = text("""
     INSERT INTO wiki_pages (slug, title, description, body_status)
-    VALUES (:slug, :title, :description, 'pending')
-    -- 'pending' 마킹 (2026-05-26): wiki_writer_worker daemon 가 즉시 자동 합성.
-    -- 신규 ingest 흐름의 자동 wiki body 완성. 옛 wave-1g backfill 의 'ready'
-    -- 와 구분 — daemon 은 stale 만 처리해 옛 23k 안 건드림.
+    VALUES (:slug, :title, :description, 'ready')
+    -- 2026-05-27 사용자 명시: 신규 자료 ingest 직후 'ready' 단계 거치고 → daemon
+    -- 이 fetch 시 'pending' 으로 변경 (writer 의 _MARK_GENERATING_SQL) → writer
+    -- 완료 시 'completed'. 즉 사용자 mental: ready(들어옴) → pending(처리중) →
+    -- completed(완료).
+    -- daemon 의 fetch SQL 이 ANY(['ready','pending']) 매칭하므로 default 'ready'
+    -- 라도 즉시 자동 처리 (~30초 안). 그 잠시 동안 ready 탭에서 새 자료 확인 가능.
     ON CONFLICT (slug) DO UPDATE SET slug = EXCLUDED.slug
     RETURNING id, slug
 """)
