@@ -203,11 +203,9 @@ export default function WikiListPage() {
     return (stats as unknown as Record<string, number>)[k] ?? 0;
   };
 
-  // pending 예상 처리 시간 (2026-05-27 정확화):
-  //   - daemon (lifespan, sequential): ~15s/page → 자동 처리, 사용자 X
-  //   - batch (`run_wiki_backfill.sh` 또는 [일괄 합성] 버튼, concurrency 4):
-  //     ~4s/page × 4 concurrent → effective ~1s/page (vLLM continuous batching)
-  // 둘 다 표시 — 사용자가 batch 트리거하면 빠르게, 안 하면 daemon 이 천천히.
+  // pending 예상 처리 시간 (2026-05-27 통일):
+  //   daemon 과 batch 모두 concurrency 4 (~1s/page effective, vLLM continuous
+  //   batching). 사용자 요청 — 둘 분리 의미 X, 같은 로직으로 통일.
   const _fmtSec = (sec: number): string => {
     if (sec < 60) return `${sec}초`;
     if (sec < 3600) return `${Math.round(sec / 60)}분`;
@@ -216,12 +214,9 @@ export default function WikiListPage() {
     const h = Math.round((sec % 86400) / 3600);
     return h > 0 ? `${d}일 ${h}시간` : `${d}일`;
   };
-  const formatEta = (pendingCount: number): { batch: string; daemon: string } => {
-    if (pendingCount <= 0) return { batch: "", daemon: "" };
-    return {
-      batch: `~${_fmtSec(pendingCount * 1)}`,    // concurrency 4 effective
-      daemon: `~${_fmtSec(pendingCount * 15)}`,  // sequential
-    };
+  const formatEta = (pendingCount: number): string => {
+    if (pendingCount <= 0) return "";
+    return `~${_fmtSec(pendingCount)}`;  // concurrency 4 effective ~1s/page
   };
 
   return (
@@ -286,23 +281,15 @@ export default function WikiListPage() {
                     ({count.toLocaleString()})
                   </span>
                 )}
-                {/* pending tab 에 ETA chip — batch (concurrency 4) / daemon (sequential)
-                    두 모드 표시. 사용자가 [일괄 합성] 또는 batch CLI 트리거 시 batch
-                    속도, 자동 daemon 만 두면 daemon 속도. */}
-                {tab.key === "pending" && count !== null && count > 0 && (() => {
-                  const eta = formatEta(count);
-                  return (
-                    <span
-                      className="ml-1.5 text-[10px] text-blue-600 dark:text-blue-400"
-                      title={
-                        `batch (일괄 합성, concurrency 4, ~1초/page effective): ${eta.batch}\n` +
-                        `daemon (자동, sequential, ~15초/page): ${eta.daemon}`
-                      }
-                    >
-                      batch {eta.batch} / 자동 {eta.daemon}
-                    </span>
-                  );
-                })()}
+                {/* pending tab ETA — daemon = batch 통일 (concurrency 4 effective ~1s/page) */}
+                {tab.key === "pending" && count !== null && count > 0 && (
+                  <span
+                    className="ml-1.5 text-[10px] text-blue-600 dark:text-blue-400"
+                    title="자동 처리 예상 시간 (concurrency 4, ~1초/page effective — vLLM continuous batching)"
+                  >
+                    {formatEta(count)}
+                  </span>
+                )}
               </button>
             );
           })}

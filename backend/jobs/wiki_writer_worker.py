@@ -40,8 +40,11 @@ logger = logging.getLogger("linkmind.wiki_writer_worker")
 
 
 # 처리 간격
-_INTER_PAGE_SLEEP_S = 1.0      # 매 page 처리 후 짧은 sleep (다른 vLLM 호출 양보)
-_IDLE_SLEEP_S = 60.0           # 처리할 page 없을 때 polling 간격
+_CONCURRENCY = 4               # 2026-05-27: daemon = batch (concurrency 4). 사용자
+                               # 통일 요청 — daemon sequential vs batch concurrency
+                               # 분리 의미 X. vLLM continuous batching 활용 ~4배 빠름.
+_INTER_BATCH_SLEEP_S = 0.5     # 4 page batch 처리 후 짧은 sleep
+_IDLE_SLEEP_S = 30.0           # 처리할 page 없을 때 polling 간격
 _FAIL_BACKOFF_S = 300.0        # 실패한 page 의 재시도 backoff (5분)
 
 # 실패한 page id 집합 — 같은 iteration 안 영구 loop 방지.
@@ -51,8 +54,10 @@ _recent_failures: dict[str, float] = {}
 
 # 처리 대상 fetch — **stale 만** (사용자 명시 2026-05-26).
 # 옛 23k empty (wave-1g backfill 의 1:1 옮김) 는 batch CLI (사용자 직접) 가 처리.
-# daemon 은 신규 ingest → classifier 가 자동 마킹한 stale 만 처리 — 즉 "신규 자료
-# 흐름의 자동화" 만 책임. 사용자가 batch backfill 의 통제권 보존.
+# daemon 은 신규 ingest → classifier 가 자동 마킹한 stale 만 처리.
+#
+# 2026-05-27: SELECT FOR UPDATE SKIP LOCKED 추가 — batch CLI 와 동시 실행 시 같은
+# row 경쟁 회피 (batch 가 처리 중인 row 는 daemon 이 skip, 거꾸로도 동일).
 _FETCH_NEXT_SQL = text("""
     SELECT id, slug, title
     FROM wiki_pages wp
@@ -63,23 +68,24 @@ _FETCH_NEXT_SQL = text("""
             AND (wpi.user_action IS NULL OR wpi.user_action != 'removed')
       )
     ORDER BY is_pinned DESC, updated_at ASC
-    LIMIT 20
+    LIMIT :limit
+    FOR UPDATE SKIP LOCKED
 """)
 
 
-async def _fetch_next_page(session) -> dict | None:
-    """다음 처리할 page. 최근 실패한 page 는 backoff 시간 안엔 skip."""
-    rows = (await session.execute(_FETCH_NEXT_SQL)).mappings().all()
+async def _fetch_next_pages(session, limit: int) -> list[dict]:
+    """최대 N개 처리 대상 fetch. 최근 실패한 page 는 backoff 안엔 skip."""
+    rows = (await session.execute(_FETCH_NEXT_SQL, {"limit": limit})).mappings().all()
     now = time.monotonic()
+    out: list[dict] = []
     for r in rows:
         pid = str(r["id"])
         retry_at = _recent_failures.get(pid)
         if retry_at and retry_at > now:
             continue
-        # backoff 끝났으면 재시도 OK — 기록 제거
         _recent_failures.pop(pid, None)
-        return dict(r)
-    return None
+        out.append(dict(r))
+    return out
 
 
 async def _process_one(page: dict) -> bool:
@@ -126,12 +132,16 @@ async def _process_one(page: dict) -> bool:
 
 
 async def run_wiki_writer_worker(stop_event: asyncio.Event | None = None) -> None:
-    """무한 loop — stale/empty wiki_pages 를 자동 body 합성.
+    """무한 loop — stale wiki_pages 를 자동 body 합성 (concurrency 4).
+
+    2026-05-27: batch CLI 와 동일 로직으로 통일 — asyncio.gather concurrency 4
+    (vLLM continuous batching 활용 ~4배 빠름). daemon vs batch 차이 의미 X.
 
     stop_event 가 set 되면 종료 (lifespan cleanup).
     """
     logger.info(
-        "wiki_writer_worker 시작 — stale/empty wiki_pages 자동 합성 daemon"
+        "wiki_writer_worker 시작 — stale wiki_pages 자동 합성 daemon (concurrency=%d)",
+        _CONCURRENCY,
     )
     while True:
         if stop_event is not None and stop_event.is_set():
@@ -140,31 +150,35 @@ async def run_wiki_writer_worker(stop_event: asyncio.Event | None = None) -> Non
 
         engine = get_engine()
         SessionMaker = async_sessionmaker(engine, expire_on_commit=False)
-        page: dict | None = None
+        pages: list[dict] = []
         try:
             async with SessionMaker() as session:
-                page = await _fetch_next_page(session)
+                pages = await _fetch_next_pages(session, limit=_CONCURRENCY)
+                await session.commit()      # SKIP LOCKED 의 row lock 해제
         except Exception as e:  # noqa: BLE001
             logger.warning("wiki_page fetch 실패 (DB 일시 불안?): %s", e)
             await _sleep_or_stop(stop_event, _IDLE_SLEEP_S)
             continue
 
-        if page is None:
+        if not pages:
             # 처리할 page 없음 — idle
             await _sleep_or_stop(stop_event, _IDLE_SLEEP_S)
             continue
 
-        # 처리. 실패해도 다음 page 로 진행.
-        try:
-            await _process_one(page)
-        except Exception as e:  # noqa: BLE001
-            logger.exception(
-                "_process_one 예상 못한 예외 (page=%s): %s",
-                page.get("slug"), e,
+        # concurrency 4 동시 처리 (batch CLI 와 같은 패턴).
+        results = await asyncio.gather(
+            *(_process_one(p) for p in pages),
+            return_exceptions=True,
+        )
+        ok = sum(1 for r in results if r is True)
+        if ok < len(pages):
+            logger.info(
+                "wiki batch — %d/%d 성공 (실패는 backoff 후 재시도)",
+                ok, len(pages),
             )
 
-        # 짧은 sleep — 다른 vLLM 호출 (사용자 클릭) 양보
-        await _sleep_or_stop(stop_event, _INTER_PAGE_SLEEP_S)
+        # 짧은 sleep — 다른 vLLM 호출 양보
+        await _sleep_or_stop(stop_event, _INTER_BATCH_SLEEP_S)
 
 
 async def _sleep_or_stop(stop_event: asyncio.Event | None, sec: float) -> None:
