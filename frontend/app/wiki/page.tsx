@@ -202,9 +202,17 @@ export default function WikiListPage() {
   const _fmtSec = (sec: number): string => {
     if (sec < 60) return `${sec}초`;
     if (sec < 3600) return `${Math.round(sec / 60)}분`;
-    if (sec < 86400) return `${Math.round(sec / 3600)}시간`;
+    // 1시간~24시간: 시간 + 분 (분은 반올림, 0 분이면 생략)
+    if (sec < 86400) {
+      const h = Math.floor(sec / 3600);
+      const m = Math.round((sec % 3600) / 60);
+      // 분 반올림이 60 도달 시 시간 +1 + 분 0
+      if (m === 60) return `${h + 1}시간`;
+      return m > 0 ? `${h}시간 ${m}분` : `${h}시간`;
+    }
     const d = Math.floor(sec / 86400);
     const h = Math.round((sec % 86400) / 3600);
+    if (h === 24) return `${d + 1}일`;
     return h > 0 ? `${d}일 ${h}시간` : `${d}일`;
   };
   const formatEta = (pendingCount: number): string => {
