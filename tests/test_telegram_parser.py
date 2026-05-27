@@ -45,6 +45,35 @@ def test_find_urls_dedup_and_order():
     assert out == ["https://a.com", "https://b.com"]
 
 
+# 2026-05-27: protocol 누락 URL 자동 https:// 보강 (실 사용자 사례 — `www.unite.ai`)
+def test_find_urls_www_without_protocol():
+    """`www.foo.com` → `https://www.foo.com` 자동 보강."""
+    assert _find_urls("www.unite.ai") == ["https://www.unite.ai"]
+
+
+def test_find_urls_mixed_protocol_and_www():
+    """https:// 와 www. 가 섞여 있어도 둘 다 잡고, www. 만 보강."""
+    out = _find_urls("https://a.com 좋아 www.b.com 도 봐")
+    assert out == ["https://a.com", "https://www.b.com"]
+
+
+def test_find_urls_www_path_preserved():
+    """`www.foo.com/path?q=1` 의 path/query 도 손실 없이 보강."""
+    out = _find_urls("www.foo.com/path?q=1&r=2")
+    assert out == ["https://www.foo.com/path?q=1&r=2"]
+
+
+def test_find_urls_www_trailing_punctuation_stripped():
+    """protocol 보강 + trailing 구두점 strip 동시 동작."""
+    assert _find_urls("see www.foo.com.") == ["https://www.foo.com"]
+
+
+def test_find_urls_www_dedup_against_https():
+    """`https://www.a.com` 다음에 `www.a.com` 도 와도 dedup (보강 후 비교)."""
+    out = _find_urls("https://www.a.com 첫번째 www.a.com 두번째")
+    assert out == ["https://www.a.com"]
+
+
 def test_extract_text_string():
     assert _extract_text("hello") == "hello"
 

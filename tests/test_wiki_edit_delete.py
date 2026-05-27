@@ -13,8 +13,11 @@ from fastapi import APIRouter
 
 from backend.api import wiki as wiki_api
 from backend.schemas.models import (
+    WikiBatchRegenerateRequest,
+    WikiBatchRegenerateResponse,
     WikiPageDeleteResponse,
     WikiPageEditRequest,
+    WikiStatsResponse,
 )
 
 
@@ -134,3 +137,75 @@ def test_wiki_page_edit_request_combinations(payload, changed):
             assert getattr(req, field) == payload[field]
         else:
             assert getattr(req, field) is None
+
+
+# ────────────────────────────────────────────────────────────────
+# Wiki stats + batch regenerate (2026-05-27)
+# ────────────────────────────────────────────────────────────────
+
+
+def test_wiki_stats_response_default_zero():
+    """모든 카운트 default 0 — 빈 DB 상태에서 안전."""
+    s = WikiStatsResponse()
+    assert s.ready == 0 and s.stale == 0 and s.empty == 0
+    assert s.generating == 0 and s.total == 0
+
+
+def test_wiki_stats_response_populated():
+    s = WikiStatsResponse(ready=23827, stale=0, empty=17, generating=8, total=23852)
+    assert s.total == 23852
+    assert s.ready + s.empty + s.generating == s.total - s.stale
+
+
+def test_wiki_batch_regenerate_request_default():
+    """status default 'empty' / limit default 10."""
+    req = WikiBatchRegenerateRequest()
+    assert req.status == "empty"
+    assert req.limit == 10
+
+
+def test_wiki_batch_regenerate_request_limit_bounds():
+    """limit 은 1..50 — Pydantic Field validation."""
+    # 정상
+    assert WikiBatchRegenerateRequest(limit=1).limit == 1
+    assert WikiBatchRegenerateRequest(limit=50).limit == 50
+
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        WikiBatchRegenerateRequest(limit=0)
+    with pytest.raises(ValidationError):
+        WikiBatchRegenerateRequest(limit=51)
+
+
+def test_wiki_batch_regenerate_response_required():
+    resp = WikiBatchRegenerateResponse(
+        status="empty", dispatched=10, estimated_seconds=40,
+    )
+    assert resp.dispatched == 10
+    assert resp.estimated_seconds == 40
+
+
+def test_wiki_router_has_meta_endpoints():
+    """GET /_meta/stats + POST /_meta/batch_regenerate 등록 확인.
+
+    회귀 방지 — path 가 1-segment 면 /{slug} 와 매칭 충돌하므로 2-segment 패턴 유지.
+    """
+    paths_methods: set[tuple[str, str]] = set()
+    for route in wiki_api.router.routes:
+        path = getattr(route, "path", None)
+        methods = getattr(route, "methods", None) or set()
+        if path is None:
+            continue
+        for m in methods:
+            paths_methods.add((path, m))
+
+    assert ("/_meta/stats", "GET") in paths_methods, "GET /_meta/stats 누락"
+    assert ("/_meta/batch_regenerate", "POST") in paths_methods, "POST /_meta/batch_regenerate 누락"
+
+    # 1-segment underscore path 가 있으면 /{slug} 와 충돌 위험 — 회귀 방지
+    for path, method in paths_methods:
+        if path.startswith("/_") and path.count("/") == 1:
+            pytest.fail(
+                f"1-segment underscore path 발견 ({method} {path}) — "
+                f"/{{slug}} 와 매칭 충돌 가능. 2-segment 패턴 (예: /_meta/...) 사용 권장."
+            )

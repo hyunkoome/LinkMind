@@ -15,7 +15,13 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
-import { listWikiPages, type WikiPageListItem } from "@/lib/api";
+import {
+  batchRegenerateWiki,
+  getWikiStats,
+  listWikiPages,
+  type WikiPageListItem,
+  type WikiStatsResponse,
+} from "@/lib/api";
 
 const PAGE_SIZE = 50;
 
@@ -50,6 +56,14 @@ export default function WikiListPage() {
   const [response, setResponse] = useState<{ total: number; pages: WikiPageListItem[] } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // 상태별 count — tab UI + 일괄 합성 버튼 라벨 (2026-05-27)
+  const [stats, setStats] = useState<WikiStatsResponse | null>(null);
+
+  // 일괄 합성 confirm + 진행 상태
+  const [confirmBatch, setConfirmBatch] = useState(false);
+  const [batchInProgress, setBatchInProgress] = useState(false);
+  const [batchMessage, setBatchMessage] = useState<string | null>(null);
 
   // URL 갱신 헬퍼 — 부분 변경 (다른 param 은 보존). replace 로 history 안 늘림.
   // page 만은 사용자가 의도해서 이동하므로 push 가 자연스럽지만, 단순화 위해 replace 통일.
@@ -98,7 +112,68 @@ export default function WikiListPage() {
     };
   }, [q, statusFilter, keywordFilter, page]);
 
+  // stats fetch — mount 시 1회 + 일괄 합성 진행 중 5초 polling.
+  const refreshStats = () => {
+    getWikiStats()
+      .then((s) => setStats(s))
+      .catch((e) => setError((e as Error).message));
+  };
+  useEffect(() => {
+    refreshStats();
+  }, []);
+
+  // 일괄 합성 진행 중 polling — stats.generating 이 0 되면 종료.
+  useEffect(() => {
+    if (!batchInProgress) return;
+    const id = setInterval(() => {
+      getWikiStats()
+        .then((s) => {
+          setStats(s);
+          if (s.generating === 0) {
+            setBatchInProgress(false);
+            setBatchMessage(`✓ 일괄 합성 완료. ready ${s.ready}건`);
+            // list 도 같이 refresh
+            setQInput((v) => v);   // useEffect trigger 위한 no-op
+          }
+        })
+        .catch(() => {});
+    }, 5000);
+    return () => clearInterval(id);
+  }, [batchInProgress]);
+
   const totalPages = response ? Math.max(1, Math.ceil(response.total / PAGE_SIZE)) : 1;
+
+  const onBatchRegenerate = async () => {
+    setConfirmBatch(false);
+    setBatchInProgress(true);
+    setBatchMessage(null);
+    setError(null);
+    try {
+      const r = await batchRegenerateWiki({ status: "empty", limit: 10 });
+      setBatchMessage(
+        `일괄 합성 시작 — ${r.dispatched}건 dispatch · 예상 ${r.estimated_seconds}초`,
+      );
+      refreshStats();
+    } catch (e) {
+      setError((e as Error).message);
+      setBatchInProgress(false);
+    }
+  };
+
+  // status 별 count chip — 0 이면 회색.
+  type StatusKey = "" | "ready" | "stale" | "empty" | "generating";
+  const STATUS_TABS: { key: StatusKey; label: string; icon: string }[] = [
+    { key: "", label: "전체", icon: "" },
+    { key: "ready", label: "ready", icon: "✅" },
+    { key: "stale", label: "stale", icon: "🔄" },
+    { key: "empty", label: "empty", icon: "⏳" },
+    { key: "generating", label: "generating", icon: "⏱" },
+  ];
+  const countFor = (k: StatusKey): number | null => {
+    if (!stats) return null;
+    if (k === "") return stats.total;
+    return (stats as unknown as Record<string, number>)[k] ?? 0;
+  };
 
   return (
     <div className="flex-1 overflow-auto p-6 bg-zinc-50 dark:bg-zinc-950">
@@ -129,7 +204,45 @@ export default function WikiListPage() {
           </div>
         )}
 
-        {/* Filters */}
+        {/* Status tabs — 각 status 의 count 시각화 (2026-05-27) */}
+        <div className="flex flex-wrap gap-1.5 mb-3">
+          {STATUS_TABS.map((tab) => {
+            const active = statusFilter === tab.key;
+            const count = countFor(tab.key);
+            return (
+              <button
+                key={tab.key || "all"}
+                type="button"
+                onClick={() =>
+                  updateQuery({ status: tab.key || null, page: null })
+                }
+                className={`px-2.5 py-1 text-xs rounded border transition ${
+                  active
+                    ? "border-orange-400 dark:border-orange-500 bg-orange-50 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300 font-medium"
+                    : "border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-700 dark:text-zinc-300 hover:border-zinc-400"
+                }`}
+              >
+                <span className="mr-1">{tab.icon}</span>
+                {tab.label}
+                {count !== null && (
+                  <span
+                    className={`ml-1.5 text-[10px] ${
+                      count === 0
+                        ? "text-zinc-400"
+                        : active
+                          ? "text-orange-600 dark:text-orange-400"
+                          : "text-zinc-500"
+                    }`}
+                  >
+                    ({count.toLocaleString()})
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Search input + status=empty 일 때 일괄 합성 버튼 */}
         <div className="flex gap-2 mb-4 items-center">
           <input
             type="search"
@@ -138,20 +251,55 @@ export default function WikiListPage() {
             onChange={(e) => setQInput(e.target.value)}
             className="flex-1 px-3 py-1.5 text-sm rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100"
           />
-          <select
-            value={statusFilter}
-            onChange={(e) =>
-              updateQuery({ status: e.target.value || null, page: null })
-            }
-            className="px-3 py-1.5 text-sm rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100"
-          >
-            <option value="">전체 상태</option>
-            <option value="ready">✅ ready</option>
-            <option value="stale">🔄 stale</option>
-            <option value="empty">⏳ empty</option>
-            <option value="generating">⏱ generating</option>
-          </select>
+          {statusFilter === "empty" && stats && stats.empty > 0 && (
+            <button
+              type="button"
+              onClick={() => setConfirmBatch(true)}
+              disabled={batchInProgress}
+              className="px-3 py-1.5 text-xs rounded border border-blue-400 dark:border-blue-600 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-900/40 disabled:opacity-50"
+            >
+              {batchInProgress
+                ? "⏱ 합성 중…"
+                : `⚡ ${stats.empty}건 일괄 합성 (최대 10건)`}
+            </button>
+          )}
         </div>
+
+        {/* 일괄 합성 confirm 박스 */}
+        {confirmBatch && (
+          <div className="mb-3 p-3 rounded bg-blue-50 dark:bg-blue-900/20 border border-blue-300 dark:border-blue-800 text-xs">
+            <div className="font-medium text-blue-800 dark:text-blue-200 mb-1">
+              empty wiki 일괄 합성?
+            </div>
+            <div className="text-zinc-700 dark:text-zinc-300 mb-2">
+              • 최대 10건의 empty wiki 를 자동 합성 (concurrency 4 — vLLM 부하 분산)<br />
+              • 예상 시간: ~40초 (page 당 ~4초)<br />
+              • 진행 상태는 generating 탭의 count 로 polling 됩니다
+            </div>
+            <div className="flex gap-1.5">
+              <button
+                type="button"
+                onClick={() => setConfirmBatch(false)}
+                className="flex-1 px-3 py-1 text-xs bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded hover:bg-zinc-100"
+              >
+                취소
+              </button>
+              <button
+                type="button"
+                onClick={onBatchRegenerate}
+                className="flex-1 px-3 py-1 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded font-medium"
+              >
+                일괄 합성 시작
+              </button>
+            </div>
+          </div>
+        )}
+
+        {batchMessage && (
+          <div className="mb-3 p-2 rounded bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-300 dark:border-emerald-800 text-xs text-emerald-800 dark:text-emerald-200">
+            {batchMessage}
+          </div>
+        )}
 
         {/* List */}
         {error && (

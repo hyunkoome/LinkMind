@@ -413,6 +413,43 @@ export async function updateWikiKeywords(
   );
 }
 
+// ── Wiki stats + batch regenerate (2026-05-27) ─────────────────
+
+export interface WikiStatsResponse {
+  ready: number;
+  stale: number;
+  empty: number;
+  generating: number;
+  total: number;
+}
+
+export async function getWikiStats(): Promise<WikiStatsResponse> {
+  return fetchJSON<WikiStatsResponse>(`/wiki/_meta/stats`);
+}
+
+export interface WikiBatchRegenerateRequest {
+  status: "empty" | "stale";
+  limit?: number;
+}
+
+export interface WikiBatchRegenerateResponse {
+  status: string;
+  dispatched: number;
+  estimated_seconds: number;
+}
+
+// fire-and-forget — request 즉시 응답, 실제 합성은 backend BackgroundTask.
+// 응답의 dispatched 만큼 page 가 'generating' 으로 마킹됨 → frontend 는 stats
+// polling 으로 진행 확인 (몇 초 간격).
+export async function batchRegenerateWiki(
+  body: WikiBatchRegenerateRequest,
+): Promise<WikiBatchRegenerateResponse> {
+  return fetchJSON<WikiBatchRegenerateResponse>(`/wiki/_meta/batch_regenerate`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
 export async function searchWikiKeywords(q: string, limit = 20): Promise<WikiKeywordSearchResponse> {
   const params = new URLSearchParams();
   if (q) params.set("q", q);

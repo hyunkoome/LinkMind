@@ -45,8 +45,11 @@ logger = logging.getLogger(__name__)
 # ──────────────────────────────────────────────────────────────
 
 
+# 2026-05-27: protocol 없는 `www.foo.com` 형태도 매칭 (Slack/Telegram 사용자가
+# 자주 보내는 짧은 형식). 매칭된 URL 에 https:// 없으면 _find_urls 가 자동 추가.
+# 사용자 사례: msg 543 `text='www.unite.ai'` → urls=0 으로 ingest 실패했던 버그.
 _URL_RE = re.compile(
-    r"https?://[^\s<>\"'\)\]]+",
+    r"(?:https?://|www\.)[^\s<>\"'\)\]]+",
     re.IGNORECASE,
 )
 
@@ -114,11 +117,17 @@ def _extract_text(raw_text: Any) -> str:
 
 
 def _find_urls(text: str) -> list[str]:
-    """텍스트에서 http(s) URL 추출. duplicate 제거 + 순서 보존."""
+    """텍스트에서 http(s) URL 추출. duplicate 제거 + 순서 보존.
+
+    protocol 없는 `www.foo.com` 형태도 자동 https:// 보강 (2026-05-27).
+    """
     seen: set[str] = set()
     out: list[str] = []
     for m in _URL_RE.finditer(text or ""):
         u = m.group(0).rstrip(".,;:!?\")]}>")  # trailing 구두점 strip
+        # protocol 누락 시 https:// 보강 (matched starts with 'www.')
+        if not u.lower().startswith(("http://", "https://")):
+            u = "https://" + u
         if u not in seen:
             seen.add(u)
             out.append(u)

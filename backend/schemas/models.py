@@ -332,6 +332,36 @@ class WikiRegenerateResponse(BaseModel):
     error: str | None = None
 
 
+class WikiStatsResponse(BaseModel):
+    """GET /wiki/_stats — body_status 별 wiki_pages 개수 (frontend tab UI 의 count).
+
+    2026-05-27 신규. wiki list 페이지의 status tab 이 mount 시 한 번 + 일괄
+    합성 진행 중일 때 polling.
+    """
+    ready: int = 0
+    stale: int = 0
+    empty: int = 0
+    generating: int = 0
+    total: int = 0
+
+
+class WikiBatchRegenerateRequest(BaseModel):
+    """POST /wiki/_batch/regenerate — body_status 가 'empty' 또는 'stale' 인
+    wiki_pages 를 일괄 합성 (batch CLI 와 동일 효과를 HTTP 로).
+
+    fire-and-forget — request 즉시 응답, BackgroundTask 가 비동기 처리.
+    frontend 가 GET /wiki/_stats polling 으로 진행 확인.
+    """
+    status: str = Field(default="empty", description="empty 또는 stale")
+    limit: int = Field(default=10, ge=1, le=50, description="한 번에 처리할 page 수")
+
+
+class WikiBatchRegenerateResponse(BaseModel):
+    status: str
+    dispatched: int                       # 실제 dispatch 한 page 수 (limit 보다 적을 수 있음 — 매칭 page 부족)
+    estimated_seconds: int                # 대략 — page 당 4초 + concurrency 4 기준
+
+
 class WikiPageEditRequest(BaseModel):
     """PATCH /wiki/{slug} — title / description / body 수동 편집.
 

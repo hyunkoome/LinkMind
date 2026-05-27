@@ -14,15 +14,17 @@
 #   bash scripts/step5_run_dev.sh --telegram-only
 #   bash scripts/step5_run_dev.sh --no-telegram          # backend + frontend 만
 #   bash scripts/step5_run_dev.sh --skip-check           # invite 검증 skip (watcher 바로 시작)
+#   bash scripts/step5_run_dev.sh --clean-cache          # frontend .next 캐시 강제 정리 후 시작
 #   bash scripts/step5_run_dev.sh --stop                 # 셋 다 종료
 #   bash scripts/step5_run_dev.sh --status               # 셋 다 상태 + 최근 로그 tail
 #
 # 인프라 컨테이너 (Postgres/Qdrant/Ollama) 가 떠 있어야 함. 죽었으면
 # `bash scripts/step2_2_setup_infra.sh` 로 재기동.
 #
-# 옛 Streamlit (frontend/) 은 deprecated — Settings/Ingest/Search 가 frontend 의
-# /settings /ingest /search 페이지로 마이그레이션됨. frontend/ 폴더 자체는 회고용으로
-# 남겨두지만 step5 가 시작하지 않음. 직접 띄우려면 `streamlit run frontend/app.py`.
+# turbopack 캐시 자동화 (2026-05-27):
+#   - /tmp/next-panic-*.log 가 있으면 turbopack HMR 캐시가 stale 한 상태 → 자동
+#     정리 + panic log 도 제거. 큰 파일 삭제/이동 후 다음 시작 시 자동 회복.
+#   - 무조건 정리하려면 --clean-cache flag 또는 LINKMIND_CLEAN_FRONTEND_CACHE=1.
 
 set -euo pipefail
 
@@ -103,6 +105,20 @@ _start_backend() {
 # - frontend/ 디렉토리 + npm 둘 다 있어야 가동.
 # - node_modules 없으면 첫 1회 npm install 자동 (1-2분, 매번 X).
 # - setsid 로 새 process group — npm 의 자식 process tree 까지 안전 정리.
+# - turbopack panic 자동 감지 + .next 캐시 자동 정리 (2026-05-27):
+#     · /tmp/next-panic-*.log 가 있으면 HMR 캐시가 stale 한 상태 — 파일 큰 삭제/
+#       이동 후 흔히 발생. 자동으로 .next 캐시 정리 후 panic log 도 제거.
+#     · LINKMIND_CLEAN_FRONTEND_CACHE=1 또는 --clean-cache flag 시 무조건 정리.
+_clean_frontend_cache() {
+    local dir="$ROOT/frontend"
+    if [[ -d "$dir/.next" ]]; then
+        local size_mb
+        size_mb="$(du -sm "$dir/.next" 2>/dev/null | cut -f1)"
+        echo "🧹  frontend .next 캐시 정리 (${size_mb}MB)"
+        rm -rf "$dir/.next"
+    fi
+}
+
 _start_frontend() {
     local dir="$ROOT/frontend"
     if [[ ! -d "$dir" ]]; then
@@ -123,6 +139,20 @@ _start_frontend() {
         pkill -f "next dev -p $FRONTEND_PORT" 2>/dev/null || true
         sleep 1
     fi
+
+    # turbopack panic 자동 감지 — /tmp/next-panic-*.log 있으면 HMR 캐시 stale.
+    # 자동 정리 + 옛 panic log 도 제거 (다음 panic 감지에 영향 X).
+    if compgen -G "/tmp/next-panic-*.log" > /dev/null; then
+        echo "⚠️  /tmp/next-panic-*.log 발견 — turbopack 캐시 손상 흔적. 자동 정리."
+        _clean_frontend_cache
+        rm -f /tmp/next-panic-*.log
+    fi
+    # 명시적 cache 정리 요청 (env var 또는 --clean-cache flag — main 에서 set).
+    if [[ "${LINKMIND_CLEAN_FRONTEND_CACHE:-0}" == "1" ]]; then
+        echo "🧹  --clean-cache 또는 LINKMIND_CLEAN_FRONTEND_CACHE=1 — 강제 캐시 정리"
+        _clean_frontend_cache
+    fi
+
     if [[ ! -d "$dir/node_modules" ]]; then
         echo "📦  frontend: 첫 npm install (1-2분 소요, 한 번만)…"
         if ! (cd "$dir" && npm install --no-fund --no-audit 2>&1 | tail -10); then
@@ -219,14 +249,16 @@ _stop_telegram() {
 # ── arg pre-process — flag (--skip-check) 와 명령 분리 ────────────
 # bash case 가 단일 인자 디스패치라 flag 와 명령을 한 줄에 받기 위해 사전 분리.
 SKIP_INVITE_CHECK=0
+LINKMIND_CLEAN_FRONTEND_CACHE="${LINKMIND_CLEAN_FRONTEND_CACHE:-0}"
 POS_ARGS=()
 for _a in "$@"; do
     case "$_a" in
         --skip-check) SKIP_INVITE_CHECK=1 ;;
+        --clean-cache) LINKMIND_CLEAN_FRONTEND_CACHE=1 ;;
         *) POS_ARGS+=("$_a") ;;
     esac
 done
-export SKIP_INVITE_CHECK
+export SKIP_INVITE_CHECK LINKMIND_CLEAN_FRONTEND_CACHE
 # 위치 인자 (명령) 만 남겨서 기존 case 로 디스패치.
 set -- "${POS_ARGS[@]+"${POS_ARGS[@]}"}"
 
@@ -302,7 +334,7 @@ case "${1:-}" in
         ;;
     *)
         echo "알 수 없는 옵션: $1"
-        echo "사용: $0 [--background|--foreground|--backend-only|--frontend-only|--telegram-only|--no-telegram|--stop|--status] [--skip-check]"
+        echo "사용: $0 [--background|--foreground|--backend-only|--frontend-only|--telegram-only|--no-telegram|--stop|--status] [--skip-check] [--clean-cache]"
         exit 2
         ;;
 esac

@@ -15,10 +15,11 @@ ingest BackgroundTask hook 은 wave-2.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -38,6 +39,8 @@ from backend.embedding.wiki_qdrant import (
 )
 from backend.embedding.wiki_qdrant import search_wiki_pages as qdrant_search_wiki_pages
 from backend.schemas.models import (
+    WikiBatchRegenerateRequest,
+    WikiBatchRegenerateResponse,
     WikiClassifyItemResult,
     WikiClassifyRequest,
     WikiClassifyResponse,
@@ -56,6 +59,7 @@ from backend.schemas.models import (
     WikiSearchRequest,
     WikiSearchResponse,
     WikiSource,
+    WikiStatsResponse,
 )
 
 logger = logging.getLogger("linkmind.api.wiki")
@@ -697,6 +701,148 @@ async def classify_items(
         succeeded=succeeded,
         failed=failed,
         results=results,
+    )
+
+
+# ────────────────────────────────────────────────────────────────
+# GET /wiki/_meta/stats — body_status 별 count (2026-05-27)
+# ────────────────────────────────────────────────────────────────
+#
+# wiki list 의 status tab UI 가 mount 시 한 번 + 일괄 합성 중 polling.
+# 가벼운 GROUP BY query (status 4종 + total).
+#
+# path 가 2-segment (`/_meta/stats`) 인 이유: `/_stats` 는 1-segment 라 `/{slug}` 와
+# FastAPI route 매칭 충돌 (slug='_stats' 로 해석됨). `/_keywords/search` 와 같은
+# 패턴 — internal 자원은 `_` prefix + 2-segment 로 통일.
+
+_WIKI_STATS_SQL = text("""
+    SELECT body_status, COUNT(*) AS n
+    FROM wiki_pages
+    GROUP BY body_status
+""")
+
+
+@router.get("/_meta/stats", response_model=WikiStatsResponse)
+async def wiki_stats(
+    session: AsyncSession = Depends(get_session),
+) -> WikiStatsResponse:
+    """wiki_pages 의 body_status 별 개수 + 합계."""
+    rows = (await session.execute(_WIKI_STATS_SQL)).mappings().all()
+    counts: dict[str, int] = {r["body_status"]: int(r["n"]) for r in rows}
+    return WikiStatsResponse(
+        ready=counts.get("ready", 0),
+        stale=counts.get("stale", 0),
+        empty=counts.get("empty", 0),
+        generating=counts.get("generating", 0),
+        total=sum(counts.values()),
+    )
+
+
+# ────────────────────────────────────────────────────────────────
+# POST /wiki/_meta/batch_regenerate — empty/stale 일괄 합성 (2026-05-27)
+# ────────────────────────────────────────────────────────────────
+#
+# path 가 `/_meta/batch_regenerate` 인 이유: `/_batch/regenerate` 는 2-segment
+# 라도 `/{slug}/regenerate` (POST) 와 매칭 충돌 (slug='_batch'). `_meta` 하위로
+# 묶어서 `/_meta/stats` 와 일관된 internal namespace.
+#
+# wiki_writer_batch CLI 와 동일 효과를 HTTP 로. fire-and-forget — request 즉시
+# 응답, BackgroundTask 가 비동기 처리. frontend 가 GET /wiki/_stats polling 으로
+# 진행 확인.
+#
+# vLLM 부하 — concurrency 4 (batch CLI 와 동일 — vLLM continuous batching 활용).
+# 사용자 wiki 클릭 (eager GET /wiki/{slug}) 도 같은 vLLM queue 라 약간 양보됨.
+
+_FETCH_BATCH_TARGETS_SQL = text("""
+    SELECT id, slug, title
+    FROM wiki_pages wp
+    WHERE body_status = :status
+      AND EXISTS (
+          SELECT 1 FROM wiki_page_items wpi
+          WHERE wpi.wiki_page_id = wp.id
+            AND (wpi.user_action IS NULL OR wpi.user_action != 'removed')
+      )
+    ORDER BY is_pinned DESC, updated_at ASC
+    LIMIT :limit
+    FOR UPDATE SKIP LOCKED
+""")
+
+
+async def _batch_regenerate_worker(pages: list[dict]) -> None:
+    """BackgroundTask 본체 — N 개 page 를 concurrency 4 로 합성.
+
+    _process_one (wiki_writer_worker) 재사용. SKIP LOCKED row fetch 라 race-free.
+    """
+    from backend.jobs.wiki_writer_worker import _process_one
+
+    if not pages:
+        return
+
+    sem = asyncio.Semaphore(4)
+
+    async def _one(page: dict) -> bool:
+        async with sem:
+            return await _process_one(page)
+
+    logger.info(
+        "wiki batch regenerate 시작 — N=%d, concurrency=4", len(pages),
+    )
+    results = await asyncio.gather(*(_one(p) for p in pages), return_exceptions=True)
+    ok = sum(1 for r in results if r is True)
+    logger.info(
+        "wiki batch regenerate 완료 — %d/%d 성공", ok, len(pages),
+    )
+
+
+@router.post("/_meta/batch_regenerate", response_model=WikiBatchRegenerateResponse)
+async def wiki_batch_regenerate(
+    payload: WikiBatchRegenerateRequest,
+    background: BackgroundTasks,
+    session: AsyncSession = Depends(get_session),
+) -> WikiBatchRegenerateResponse:
+    """body_status='empty' (또는 'stale') wiki_pages 일괄 합성.
+
+    fire-and-forget. 처리 대상 fetch + 'generating' 마킹은 즉시 (session.commit),
+    실제 LLM 합성은 BackgroundTask 가 async. frontend 가 stats polling 으로 진행 확인.
+    """
+    if payload.status not in ("empty", "stale"):
+        raise HTTPException(
+            status_code=400,
+            detail="status 는 'empty' 또는 'stale' 만 지원 (현재: {})".format(payload.status),
+        )
+
+    rows = (await session.execute(
+        _FETCH_BATCH_TARGETS_SQL,
+        {"status": payload.status, "limit": payload.limit},
+    )).mappings().all()
+    pages = [dict(r) for r in rows]
+
+    # status='generating' 으로 즉시 마킹 → frontend 의 stats polling 이 바로 변화 감지 +
+    # 동시 합성 방지 (다른 트리거 — daemon 등 — 이 같은 page 안 잡음).
+    if pages:
+        await session.execute(
+            text("""
+                UPDATE wiki_pages SET body_status = 'generating'
+                WHERE id = ANY(:ids)
+            """),
+            {"ids": [p["id"] for p in pages]},
+        )
+        await session.commit()
+
+    # BackgroundTask 로 dispatch (request 응답은 즉시)
+    background.add_task(_batch_regenerate_worker, pages)
+
+    # page 당 ≈ 4초, concurrency 4 → N/4 * 4초
+    estimated_seconds = max(4, (len(pages) + 3) // 4 * 4)
+
+    logger.info(
+        "wiki batch regenerate dispatched — status=%s, N=%d, ETA=%ds",
+        payload.status, len(pages), estimated_seconds,
+    )
+    return WikiBatchRegenerateResponse(
+        status=payload.status,
+        dispatched=len(pages),
+        estimated_seconds=estimated_seconds,
     )
 
 
