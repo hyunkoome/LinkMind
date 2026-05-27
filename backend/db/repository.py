@@ -273,6 +273,46 @@ async def append_item_user_notes(
     return (res.rowcount or 0) > 0
 
 
+async def add_alt_url_to_item(
+    session: AsyncSession, *, item_id: UUID, new_url: str | None,
+) -> bool:
+    """dedup 시 신규 source_url 을 items.source_metadata['alt_urls'] 에 누적.
+
+    배경 (2026-05-27): 같은 raw_content 가 여러 URL 로 ingest 될 수 있음 (예:
+    GeekNews 토픽 = share.google URL = hada.io/topic URL). §2 idempotent 로
+    새 item 안 만들지만, 신규 URL 정보가 어디에도 보존 안 되면 사용자가 그 URL
+    로 검색 시 0건. → source_metadata.alt_urls 배열에 누적 + wiki list 검색이
+    alt_urls 도 매칭.
+
+    동작:
+      - new_url 빈 값 / None / source_url 과 같음 → no-op
+      - 이미 alt_urls 에 같은 URL 있으면 → no-op (idempotent)
+      - 그 외에는 alt_urls 배열에 append
+
+    Returns: True 면 row 변경됨.
+    """
+    if not new_url or not new_url.strip():
+        return False
+    url = new_url.strip()
+    res = await session.execute(
+        text("""
+            UPDATE items
+            SET source_metadata = jsonb_set(
+                COALESCE(source_metadata::jsonb, '{}'::jsonb),
+                '{alt_urls}',
+                (COALESCE(source_metadata::jsonb -> 'alt_urls', '[]'::jsonb)
+                 || to_jsonb(CAST(:url AS TEXT))),
+                true
+            )
+            WHERE id = :id
+              AND COALESCE(source_url, '') != CAST(:url AS TEXT)
+              AND NOT (COALESCE(source_metadata::jsonb -> 'alt_urls', '[]'::jsonb) ? CAST(:url AS TEXT))
+        """),
+        {"id": item_id, "url": url},
+    )
+    return (res.rowcount or 0) > 0
+
+
 async def merge_source_metadata(
     session: AsyncSession, *, item_id: UUID, extra: dict[str, Any],
 ) -> bool:

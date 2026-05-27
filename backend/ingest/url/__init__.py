@@ -481,6 +481,12 @@ async def ingest_url(
                 await append_item_user_notes(
                     session, item_id=existing, new_note=caption.strip(),
                 )
+            # 신규 source_url 이 기존과 다르면 source_metadata.alt_urls 에 누적
+            # (2026-05-27 — 같은 raw_content 가 여러 URL 로 들어올 때 검색 보존)
+            from backend.db.repository import add_alt_url_to_item
+            await add_alt_url_to_item(
+                session, item_id=existing, new_url=url,
+            )
             if not force:
                 await session.commit()
                 return {"item_id": str(existing), "created": False, "chunks_indexed": 0}

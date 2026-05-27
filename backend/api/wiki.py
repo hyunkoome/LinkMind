@@ -74,9 +74,11 @@ router = APIRouter()
 # wiki list 검색 범위 (2026-05-27 확장):
 #   1) wp.title / description / slug — wiki 자체 메타
 #   2) wp.body — LLM 합성 본문 (인용된 source 명/URL 포함될 수 있음)
-#   3) sources (linked items) 의 title / source_url — 사용자 사례:
-#      "unite" 검색했지만 wiki title 은 'AI What is AI', source 의 URL 은
-#      'unite.ai' → 옛 SQL 은 매칭 0건. EXISTS short-circuit 으로 비용 작음.
+#   3) sources (linked items) 의 title / source_url / source_metadata.alt_urls / user_notes
+#      - 사용자 사례 1 (unite.ai): source URL 'unite.ai' 인데 wiki title 다름
+#      - 사용자 사례 2 (hada.io/29686): dedup 으로 옛 item 재사용 → 새 URL 은
+#        user_notes 의 caption 으로 보존됨. 그것도 매칭해야 검색됨.
+#      - alt_urls (source_metadata jsonb 배열): 미래 dedup 신규 URL 누적 위치
 #   4) keywords — 사용자가 명시한 태그
 # 23k wiki 라 seq scan OK (작은 MVP 데이터). GIN trgm 은 Phase 3+.
 _SEARCH_PREDICATE = """
@@ -92,6 +94,9 @@ _SEARCH_PREDICATE = """
           AND (
               i.title ILIKE '%' || CAST(:q AS TEXT) || '%'
               OR i.source_url ILIKE '%' || CAST(:q AS TEXT) || '%'
+              OR i.user_notes ILIKE '%' || CAST(:q AS TEXT) || '%'
+              OR (i.source_metadata::jsonb -> 'alt_urls')::text ILIKE
+                  '%' || CAST(:q AS TEXT) || '%'
           )
     )
     OR EXISTS (
