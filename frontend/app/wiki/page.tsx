@@ -16,6 +16,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import {
+  batchRegenerateWiki,
   getWikiStats,
   listWikiPages,
   type WikiPageListItem,
@@ -71,7 +72,34 @@ export default function WikiListPage() {
   // 상태별 count — tab UI + 일괄 합성 버튼 라벨 (2026-05-27)
   const [stats, setStats] = useState<WikiStatsResponse | null>(null);
 
-  // (일괄 합성 state 제거 — daemon 이 자동 처리)
+  // 일괄 합성 — ready (처리 실패 reset 또는 default INSERT 자료) 강제 재처리용.
+  // 2026-05-27 사용자 명시: pending 은 daemon 이 자동 처리하지만 ready 는 fetch
+  // SQL 도 매칭하므로 보통 자동 처리됨. 다만 daemon 가 idle 일 때 또는 사용자가
+  // 급히 일괄 처리 원할 때 안전망 역할.
+  const [confirmBatch, setConfirmBatch] = useState(false);
+  const [batchInProgress, setBatchInProgress] = useState(false);
+  const [batchMessage, setBatchMessage] = useState<string | null>(null);
+
+  const onBatchRegenerate = async () => {
+    setConfirmBatch(false);
+    setBatchInProgress(true);
+    setBatchMessage(null);
+    setError(null);
+    try {
+      const r = await batchRegenerateWiki({ status: "ready", limit: 10 });
+      setBatchMessage(
+        `일괄 합성 dispatched — ${r.dispatched}건 · 예상 ~${r.estimated_seconds}초`,
+      );
+      // stats refresh 후 곧 dispatched count 가 pending 으로 이동
+      setTimeout(() => {
+        getWikiStats().then(setStats).catch(() => {});
+        setBatchInProgress(false);
+      }, 1500);
+    } catch (e) {
+      setError((e as Error).message);
+      setBatchInProgress(false);
+    }
+  };
 
   // URL 갱신 헬퍼 — 부분 변경 (다른 param 은 보존). replace 로 history 안 늘림.
   // page 만은 사용자가 의도해서 이동하므로 push 가 자연스럽지만, 단순화 위해 replace 통일.
@@ -254,10 +282,56 @@ export default function WikiListPage() {
             onChange={(e) => setQInput(e.target.value)}
             className="flex-1 px-3 py-1.5 text-sm rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100"
           />
-          {/* 일괄 합성 버튼 제거 (2026-05-27, 사용자 명시):
-              daemon 이 concurrency 4 로 자동 처리 — 사용자가 별도 트리거할 필요 X.
-              옛 큰 backfill 은 CLI 'bash scripts/run_wiki_backfill.sh' 사용. */}
+          {/* 일괄 합성 버튼 — ready tab 일 때만 노출 (재시도 트리거 안전망) */}
+          {statusFilter === "ready" && stats && stats.ready > 0 && (
+            <button
+              type="button"
+              onClick={() => setConfirmBatch(true)}
+              disabled={batchInProgress}
+              className="px-3 py-1.5 text-xs rounded border border-blue-400 dark:border-blue-600 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-900/40 disabled:opacity-50"
+            >
+              {batchInProgress
+                ? "⏱ 합성 중…"
+                : `⚡ 일괄 합성 (동시 최대 10건)`}
+            </button>
+          )}
         </div>
+
+        {/* 일괄 합성 confirm */}
+        {confirmBatch && (
+          <div className="mb-3 p-3 rounded bg-blue-50 dark:bg-blue-900/20 border border-blue-300 dark:border-blue-800 text-xs">
+            <div className="font-medium text-blue-800 dark:text-blue-200 mb-1">
+              ready wiki 일괄 합성?
+            </div>
+            <div className="text-zinc-700 dark:text-zinc-300 mb-2">
+              • 최대 10건 dispatch (concurrency 4) — ~10초 안에 시작<br />
+              • 처리는 daemon 과 동시 — 빠른 progress<br />
+              • dispatched 자료는 pending 으로 즉시 이동
+            </div>
+            <div className="flex gap-1.5">
+              <button
+                type="button"
+                onClick={() => setConfirmBatch(false)}
+                className="flex-1 px-3 py-1 text-xs bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded hover:bg-zinc-100"
+              >
+                취소
+              </button>
+              <button
+                type="button"
+                onClick={onBatchRegenerate}
+                className="flex-1 px-3 py-1 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded font-medium"
+              >
+                시작
+              </button>
+            </div>
+          </div>
+        )}
+
+        {batchMessage && (
+          <div className="mb-3 p-2 rounded bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-300 dark:border-emerald-800 text-xs text-emerald-800 dark:text-emerald-200">
+            {batchMessage}
+          </div>
+        )}
 
         {/* List */}
         {error && (
