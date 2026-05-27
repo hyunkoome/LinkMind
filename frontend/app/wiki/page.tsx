@@ -319,7 +319,39 @@ export default function WikiListPage() {
 
         {loading && !response ? (
           <div className="text-center py-10 text-zinc-500">로딩 중…</div>
-        ) : (
+        ) : (() => {
+          // pagination 버튼 — list 위/아래 양쪽에 동일 표시 (2026-05-27, 사용자 요청).
+          const pagerBar = (response?.total ?? 0) > 0 ? (
+            <div className="flex items-center justify-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  const next = Math.max(1, page - 1);
+                  updateQuery({ page: next > 1 ? String(next) : null });
+                }}
+                disabled={page <= 1}
+                className="px-3 py-1 text-xs rounded border border-zinc-300 dark:border-zinc-700 disabled:opacity-40"
+              >
+                ← 이전
+              </button>
+              <span className="text-xs text-zinc-500">
+                {page} / {totalPages}
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  const next = Math.min(totalPages, page + 1);
+                  updateQuery({ page: String(next) });
+                }}
+                disabled={page >= totalPages}
+                className="px-3 py-1 text-xs rounded border border-zinc-300 dark:border-zinc-700 disabled:opacity-40"
+              >
+                다음 →
+              </button>
+            </div>
+          ) : null;
+
+          return (
           <>
             {/* 결과 카운트 + 페이지당 개수 라디오 */}
             <div className="flex items-center justify-between mb-2 text-xs text-zinc-500 dark:text-zinc-400">
@@ -360,6 +392,9 @@ export default function WikiListPage() {
               </div>
             </div>
 
+            {/* Pagination 상단 (list 위) */}
+            {pagerBar && <div className="mb-3">{pagerBar}</div>}
+
             <ul className="space-y-2">
               {response?.pages.map((p) => (
                 <li key={p.id}>
@@ -394,39 +429,11 @@ export default function WikiListPage() {
               ))}
             </ul>
 
-            {/* Pagination — 결과가 1건 이상이면 항상 표시 (1/1 도 보임, 일관성).
-                각 status tab 에서 disabled 라도 표시되어 사용자가 어떤 상태인지 인지. */}
-            {(response?.total ?? 0) > 0 && (
-              <div className="flex items-center justify-center gap-2 mt-6">
-                <button
-                  type="button"
-                  onClick={() => {
-                    const next = Math.max(1, page - 1);
-                    updateQuery({ page: next > 1 ? String(next) : null });
-                  }}
-                  disabled={page <= 1}
-                  className="px-3 py-1 text-xs rounded border border-zinc-300 dark:border-zinc-700 disabled:opacity-40"
-                >
-                  ← 이전
-                </button>
-                <span className="text-xs text-zinc-500">
-                  {page} / {totalPages}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const next = Math.min(totalPages, page + 1);
-                    updateQuery({ page: String(next) });
-                  }}
-                  disabled={page >= totalPages}
-                  className="px-3 py-1 text-xs rounded border border-zinc-300 dark:border-zinc-700 disabled:opacity-40"
-                >
-                  다음 →
-                </button>
-              </div>
-            )}
+            {/* Pagination 하단 (list 아래) — 위와 동일 */}
+            {pagerBar && <div className="mt-6">{pagerBar}</div>}
           </>
-        )}
+          );
+        })()}
       </div>
     </div>
   );
