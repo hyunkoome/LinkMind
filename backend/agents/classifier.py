@@ -77,9 +77,14 @@ _CREATE_WIKI_PAGE_SQL = text("""
 """)
 
 
+# 2026-05-27: 'completed' 만 매칭 — 이미 합성된 wiki 가 새 item link 후 재합성
+# 필요할 때만 'pending' 으로. 'ready' (방금 만든 self_wiki / new_page) 는 이미
+# 처리 대기 상태라 그대로 둠. 옛 'ready' 매칭은 self_wiki 의 default 'ready' 를
+# 즉시 'pending' 으로 덮어쓰는 버그 — 사용자가 ready tab 에서 새 자료 못 봤던
+# 원인.
 _MARK_STALE_SQL = text("""
     UPDATE wiki_pages SET body_status = 'pending'
-    WHERE id = ANY(:page_ids) AND body_status IN ('completed', 'ready')
+    WHERE id = ANY(:page_ids) AND body_status = 'completed'
 """)
 
 
