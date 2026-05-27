@@ -39,7 +39,8 @@ const STATUS_COLORS: Record<string, string> = {
     "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 animate-pulse",
   queuing:
     "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
-  ready: "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400",
+  // 'issues' (옛 'ready') — 처리 못 끝낸 잔여 자료 (실패 reset / stuck)
+  issues: "bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400",
 };
 
 const PROCESSING_TIMEOUT_MS = 5 * 60 * 1000;   // 5분 후엔 stuck 으로 간주
@@ -101,7 +102,7 @@ export default function WikiListPage() {
     setBatchMessage(null);
     setError(null);
     try {
-      const r = await batchRegenerateWiki({ status: "ready", limit: 10 });
+      const r = await batchRegenerateWiki({ status: "issues", limit: 10 });
       setBatchMessage(
         `일괄 합성 dispatched — ${r.dispatched}건 · 예상 ~${r.estimated_seconds}초`,
       );
@@ -183,11 +184,11 @@ export default function WikiListPage() {
   const totalPages = response ? Math.max(1, Math.ceil(response.total / pageSize)) : 1;
 
   // 2026-05-27 통일: tab key = backend body_status value (헷갈림 X).
-  type StatusKey = "" | "ready" | "pending" | "completed";
+  type StatusKey = "" | "issues" | "pending" | "completed";
   const STATUS_TABS: { key: StatusKey; label: string; icon: string }[] = [
     { key: "", label: "전체", icon: "" },
     { key: "completed", label: "completed", icon: "✅" },
-    { key: "ready", label: "ready", icon: "⏳" },
+    { key: "issues", label: "issues", icon: "⏳" },
     { key: "pending", label: "pending", icon: "⏱" },
   ];
   const countFor = (k: StatusKey): number | null => {
@@ -306,7 +307,7 @@ export default function WikiListPage() {
             className="flex-1 px-3 py-1.5 text-sm rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100"
           />
           {/* 일괄 합성 버튼 — ready tab 일 때만 노출 (재시도 트리거 안전망) */}
-          {statusFilter === "ready" && stats && stats.ready > 0 && (
+          {statusFilter === "issues" && stats && stats.issues > 0 && (
             <button
               type="button"
               onClick={() => setConfirmBatch(true)}
@@ -442,29 +443,24 @@ export default function WikiListPage() {
             {pagerBar && <div className="mb-3">{pagerBar}</div>}
 
             <ul className="space-y-2">
-              {response?.pages.map((p) => (
-                <li key={p.id}>
-                  <Link
-                    href={`/wiki/${encodeURIComponent(p.slug)}`}
-                    className="block p-3 rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:border-orange-400 dark:hover:border-orange-500 transition"
-                  >
+              {response?.pages.map((p) => {
+                const ek = effectiveStatusKey(p);
+                // 2026-05-27: completed 만 클릭 가능. pending / issues 는 disabled
+                // — 사용자 명시: 처리 중 중복 처리 방지. lazy 합성도 제거.
+                const isClickable = p.body_status === "completed";
+
+                const inner = (
+                  <>
                     <div className="flex items-center gap-2">
                       {p.is_pinned && <span className="text-xs">📌</span>}
                       <h3 className="font-medium text-zinc-900 dark:text-zinc-100 truncate flex-1">
                         {p.title}
                       </h3>
-                      {/* pending 의 sub-state — 'generating' (LLM 합성 중, animate-pulse
-                          blue) / 'queuing' (대기열, amber). list ORDER BY 가 generating 먼저 */}
-                      {(() => {
-                        const ek = effectiveStatusKey(p);
-                        return (
-                          <span
-                            className={`text-[10px] px-1.5 py-0.5 rounded ${STATUS_COLORS[ek] || STATUS_COLORS.ready}`}
-                          >
-                            {ek}
-                          </span>
-                        );
-                      })()}
+                      <span
+                        className={`text-[10px] px-1.5 py-0.5 rounded ${STATUS_COLORS[ek] || STATUS_COLORS.issues}`}
+                      >
+                        {ek}
+                      </span>
                       <span className="text-[10px] text-zinc-500 dark:text-zinc-400">
                         {p.source_count} sources
                       </span>
@@ -477,9 +473,29 @@ export default function WikiListPage() {
                     <p className="mt-1 text-[10px] text-zinc-400 dark:text-zinc-500 font-mono truncate">
                       {p.slug}
                     </p>
-                  </Link>
-                </li>
-              ))}
+                  </>
+                );
+
+                return (
+                  <li key={p.id}>
+                    {isClickable ? (
+                      <Link
+                        href={`/wiki/${encodeURIComponent(p.slug)}`}
+                        className="block p-3 rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:border-orange-400 dark:hover:border-orange-500 transition"
+                      >
+                        {inner}
+                      </Link>
+                    ) : (
+                      <div
+                        className="block p-3 rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 opacity-60 cursor-not-allowed"
+                        title={`${ek} 상태 — 처리 완료 후 클릭 가능`}
+                      >
+                        {inner}
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
 
             {/* Pagination 하단 (list 아래) — 위와 동일 */}

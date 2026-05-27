@@ -255,7 +255,7 @@ class WikiPageDetail(BaseModel):
     description: str | None = None
     variant: str = "default"
     body: str | None = None
-    body_status: str        # 'ready' | 'pending' | 'completed' | 'pending'
+    body_status: str        # 'issues' | 'pending' | 'completed' | 'pending'
     body_model: str | None = None
     body_prompt_version: str | None = None
     body_generated_at: datetime | None = None
@@ -348,25 +348,24 @@ class WikiRegenerateResponse(BaseModel):
 
 
 class WikiStatsResponse(BaseModel):
-    """GET /wiki/_stats — body_status 별 wiki_pages 개수 (frontend tab UI 의 count).
+    """GET /wiki/_stats — body_status 별 wiki_pages 개수.
 
-    2026-05-27 통일: 3 status (ready/pending/completed). 옛 4종 (empty/stale/
-    generating/ready) 의 통합 — schema migration 동반.
+    2026-05-27 rename: 'ready' → 'issues' (사용자 mental: 처리 못 끝낸 잔여).
     """
-    ready: int = 0           # body 없음, lazy 처리 대기 (옛 'empty')
-    pending: int = 0         # 처리 대기/진행 중 (옛 'stale' + 'generating' 통합)
-    completed: int = 0       # 처리 완료 (옛 'ready')
+    issues: int = 0          # 처리 실패 / stuck / 잔여 — 사용자 일괄 합성 트리거 대상
+    pending: int = 0         # 처리 대기/진행 (옛 'stale' + 'generating' 통합)
+    completed: int = 0       # 처리 완료 (body 있음)
     total: int = 0
 
 
 class WikiBatchRegenerateRequest(BaseModel):
-    """POST /wiki/_batch/regenerate — body_status 가 'ready' 또는 'pending' 인
+    """POST /wiki/_batch/regenerate — body_status 가 'issues' 또는 'pending' 인
     wiki_pages 를 일괄 합성 (batch CLI 와 동일 효과를 HTTP 로).
 
     fire-and-forget — request 즉시 응답, BackgroundTask 가 비동기 처리.
     frontend 가 GET /wiki/_stats polling 으로 진행 확인.
     """
-    status: str = Field(default="ready", description="ready 또는 pending")
+    status: str = Field(default="issues", description="issues 또는 pending")
     limit: int = Field(default=10, ge=1, le=50, description="한 번에 처리할 page 수")
 
 

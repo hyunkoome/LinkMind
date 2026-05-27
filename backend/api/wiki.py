@@ -134,7 +134,7 @@ _LIST_PAGES_SQL = text(f"""
                 CASE wp.body_status
                     WHEN 'completed' THEN 0
                     WHEN 'pending'   THEN 1
-                    WHEN 'ready'     THEN 2
+                    WHEN 'issues'     THEN 2
                     ELSE 3
                 END
             ELSE 0
@@ -247,37 +247,23 @@ async def _wiki_context_to_response(wiki_context: dict) -> WikiPageDetail:
 @router.get("/{slug}", response_model=WikiPageDetail)
 async def get_wiki_page(
     slug: str,
-    regenerate: bool = Query(default=False, description="강제 재합성 (status 무시)"),
+    regenerate: bool = Query(default=False, description="명시 재합성 (body 덮어쓰기)"),
     session: AsyncSession = Depends(get_session),
 ) -> WikiPageDetail:
-    """wiki page 조회. body 가 'ready' 또는 'pending' 면 자동 eager 합성 (writer 호출).
-
-    regenerate=true 면 body_status 무관 무조건 재합성.
+    """wiki page 조회. 2026-05-27 사용자 명시: lazy 합성 제거.
+    - 'pending' / 'issues' 자료는 daemon 또는 batch 가 처리. 사용자 GET 으로
+      LLM 호출 X (중복 처리 방지). frontend 가 'completed' 만 클릭 가능.
+    - 명시적 재합성은 regenerate=true (또는 detail page 의 [재합성] 버튼).
     """
     page_id = (await session.execute(_FETCH_PAGE_BY_SLUG_SQL, {"slug": slug})).scalar()
     if not page_id:
         raise HTTPException(status_code=404, detail=f"wiki page not found: slug={slug}")
 
-    # 현재 상태 확인 (body_status 만 가볍게)
-    status_row = (await session.execute(
-        text("SELECT body_status FROM wiki_pages WHERE id = :pid"), {"pid": str(page_id)},
-    )).first()
-    current_status = status_row[0] if status_row else "ready"
-
-    # 합성 필요한지 판단 — ready (lazy 대기) / pending (대기 중) → 합성
-    needs_gen = regenerate or current_status in ("ready", "pending")
-
-    if needs_gen:
-        # writer agent 호출 (eager — 사용자가 기다림)
-        # 사용자 명시 (2026-05-26): "그때그때 위키화" — UX 일관
+    if regenerate:
         ctx = AgentContext(
             session=session,
             related_wiki_page_id=page_id,
-            extra={
-                "trigger_reason": "user_request" if regenerate else (
-                    "pending_regenerate" if current_status == "pending" else "first_gen"
-                ),
-            },
+            extra={"trigger_reason": "user_request"},
         )
         writer = WriterAgent()
         wr_result = await writer.run(ctx)
@@ -787,7 +773,7 @@ async def wiki_stats(
     rows = (await session.execute(_WIKI_STATS_SQL)).mappings().all()
     counts: dict[str, int] = {r["body_status"]: int(r["n"]) for r in rows}
     return WikiStatsResponse(
-        ready=counts.get("ready", 0),
+        issues=counts.get("issues", 0),
         pending=counts.get("pending", 0),
         completed=counts.get("completed", 0),
         total=sum(counts.values()),
@@ -856,17 +842,17 @@ async def wiki_batch_regenerate(
     background: BackgroundTasks,
     session: AsyncSession = Depends(get_session),
 ) -> WikiBatchRegenerateResponse:
-    """body_status='ready' (또는 'pending') wiki_pages 일괄 합성.
+    """body_status='issues' (또는 'pending') wiki_pages 일괄 합성.
 
     fire-and-forget. 처리 대상 fetch + 'pending' 마킹은 즉시 (session.commit),
     실제 LLM 합성은 BackgroundTask 가 async. frontend 가 stats polling 으로 진행 확인.
     """
     # 2026-05-27 통일: 3 status (ready/pending/completed) — batch 는 ready/pending
     # 만 처리 (completed 는 이미 끝).
-    if payload.status not in ("ready", "pending"):
+    if payload.status not in ("issues", "pending"):
         raise HTTPException(
             status_code=400,
-            detail="status 는 'ready' 또는 'pending' 만 지원 (현재: {})".format(payload.status),
+            detail="status 는 'issues' 또는 'pending' 만 지원 (현재: {})".format(payload.status),
         )
 
     rows = (await session.execute(

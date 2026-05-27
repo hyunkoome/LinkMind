@@ -36,11 +36,11 @@ interface ChatMessage {
   llm_model?: string;
 }
 
-// 2026-05-27 통일: backend body_status = frontend label.
+// 2026-05-27 rename: 'issues' / 'pending' / 'completed' (wiki list 와 일관).
 const STATUS_COLORS: Record<string, string> = {
   completed: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400",
   pending: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 animate-pulse",
-  ready: "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400",
+  issues: "bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400",
 };
 
 export default function AskPage() {
@@ -208,7 +208,7 @@ export default function AskPage() {
                             ({w.overlap})
                           </span>
                           <span
-                            className={`ml-1 inline-block text-[9px] px-1 rounded ${STATUS_COLORS[w.body_status] || STATUS_COLORS.ready}`}
+                            className={`ml-1 inline-block text-[9px] px-1 rounded ${STATUS_COLORS[w.body_status] || STATUS_COLORS.issues}`}
                           >
                             {w.body_status}
                           </span>

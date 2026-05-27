@@ -28,14 +28,14 @@ import {
   type WikiSource,
 } from "@/lib/api";
 
-// 2026-05-27 통일: backend body_status = frontend label.
-//   'ready' (lazy 대기) / 'pending' (처리 중) / 'completed' (완료)
+// 2026-05-27 rename: backend body_status = frontend label.
+//   'issues' (잔여 / 실패) / 'pending' (처리 중) / 'completed' (완료)
 const STATUS_COLORS: Record<string, string> = {
   completed:
     "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400",
   pending:
     "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 animate-pulse",
-  ready: "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400",
+  issues: "bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400",
 };
 
 interface PageProps {
@@ -181,7 +181,7 @@ export default function WikiDetailPage({ params }: PageProps) {
           </Link>
           <div className="flex items-center gap-2">
             <span
-              className={`text-[10px] px-2 py-0.5 rounded ${STATUS_COLORS[page.body_status] || STATUS_COLORS.ready}`}
+              className={`text-[10px] px-2 py-0.5 rounded ${STATUS_COLORS[page.body_status] || STATUS_COLORS.issues}`}
             >
               {page.body_status}
             </span>

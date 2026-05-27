@@ -65,21 +65,18 @@ _UPSERT_WIKI_LINK_SQL = text("""
 
 _CREATE_WIKI_PAGE_SQL = text("""
     INSERT INTO wiki_pages (slug, title, description, body_status)
-    VALUES (:slug, :title, :description, 'ready')
-    -- 2026-05-27 사용자 명시: 신규 자료 ingest 직후 'ready' 단계 거치고 → daemon
-    -- 이 fetch 시 'pending' 으로 변경 (writer 의 _MARK_GENERATING_SQL) → writer
-    -- 완료 시 'completed'. 즉 사용자 mental: ready(들어옴) → pending(처리중) →
-    -- completed(완료).
-    -- daemon 의 fetch SQL 이 ANY(['ready','pending']) 매칭하므로 default 'ready'
-    -- 라도 즉시 자동 처리 (~30초 안). 그 잠시 동안 ready 탭에서 새 자료 확인 가능.
+    VALUES (:slug, :title, :description, 'pending')
+    -- 2026-05-27 사용자 mental 명확화: 신규 ingest 자료는 'pending' 으로 바로
+    -- 처리 큐 (daemon 자동 fetch). 'issues' (옛 'issues') 는 batch/writer fail
+    -- reset / stuck 자료 만 누적 — 사용자가 issues 탭에서 일괄 재합성 가능.
     ON CONFLICT (slug) DO UPDATE SET slug = EXCLUDED.slug
     RETURNING id, slug
 """)
 
 
 # 2026-05-27: 'completed' 만 매칭 — 이미 합성된 wiki 가 새 item link 후 재합성
-# 필요할 때만 'pending' 으로. 'ready' (방금 만든 self_wiki / new_page) 는 이미
-# 처리 대기 상태라 그대로 둠. 옛 'ready' 매칭은 self_wiki 의 default 'ready' 를
+# 필요할 때만 'pending' 으로. 'issues' (방금 만든 self_wiki / new_page) 는 이미
+# 처리 대기 상태라 그대로 둠. 옛 'issues' 매칭은 self_wiki 의 default 'issues' 를
 # 즉시 'pending' 으로 덮어쓰는 버그 — 사용자가 ready tab 에서 새 자료 못 봤던
 # 원인.
 _MARK_STALE_SQL = text("""

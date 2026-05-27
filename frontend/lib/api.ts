@@ -265,7 +265,7 @@ export interface WikiPageListItem {
   slug: string;
   title: string;
   description: string | null;
-  body_status: "ready" | "pending" | "completed";   // 2026-05-27 통일
+  body_status: "issues" | "pending" | "completed";  // 2026-05-27 rename: ready→issues
   body_generated_at: string | null;
   body_processing_started_at: string | null;        // NOT NULL ⇒ writer 진행 중
   source_count: number;
@@ -456,11 +456,11 @@ export async function updateWikiKeywords(
 
 // ── Wiki stats + batch regenerate (2026-05-27) ─────────────────
 
-// 2026-05-27 통일: 3 status (backend body_status 와 동일)
+// 2026-05-27 rename: ready→issues (처리 못 끝낸 잔여 자료)
 export interface WikiStatsResponse {
-  ready: number;       // body 없음, lazy 처리 대기
-  pending: number;     // 처리 대기/진행 중 (옛 stale + generating 통합)
-  completed: number;   // body 있음 (옛 'ready')
+  issues: number;      // 처리 실패 / stuck / 잔여 — 사용자 일괄 합성 트리거 대상
+  pending: number;     // 처리 대기/진행
+  completed: number;   // body 합성 완료
   total: number;
 }
 
@@ -469,7 +469,7 @@ export async function getWikiStats(): Promise<WikiStatsResponse> {
 }
 
 export interface WikiBatchRegenerateRequest {
-  status: "ready" | "pending";   // ready (옛 empty) or pending (옛 stale)
+  status: "issues" | "pending";  // issues (실패 잔여) or pending
   limit?: number;
 }
 

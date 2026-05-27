@@ -373,10 +373,10 @@ CREATE TABLE IF NOT EXISTS wiki_pages (
     body_model            TEXT,                    -- e.g. 'vllm/Qwen/Qwen2.5-7B-Instruct'
     body_prompt_version   TEXT,                    -- e.g. 'wiki_writer_v1'
     body_generated_at     TIMESTAMPTZ,
-    body_status           TEXT NOT NULL DEFAULT 'ready',
+    body_status           TEXT NOT NULL DEFAULT 'issues',
                                                     -- 'empty'      — 한 번도 합성 안 됨
                                                     -- 'generating' — agent 처리 중 (lock)
-                                                    -- 'ready'      — 최신 상태
+                                                    -- 'issues'      — 최신 상태
                                                     -- 'stale'      — 새 자료 link 후 재합성 대기
 
     -- ── 검색용 body embedding (§6.1.5 wiki 단위 검색) ──

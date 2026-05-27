@@ -7,7 +7,7 @@ D10 wave-2a (2026-05-26) — wiki body 일괄 backfill.
   - 백그라운드 일괄 처리 + 진행률 + ETA 표시 필요
 
 설계:
-  - body_status='ready' 또는 'pending' 인 wiki_pages 다 처리
+  - body_status='issues' 또는 'pending' 인 wiki_pages 다 처리
   - tqdm 진행률 + 페이지당 소요 + ETA + 누적 통계
   - vLLM GPU 한 모델 sequential — concurrency=1 자연
   - 실패한 page 도 skip + log (다음 실행 때 재시도)
@@ -109,9 +109,9 @@ logger = logging.getLogger("linkmind.jobs.wiki_writer_batch")
 # tqdm desc/postfix 용 통계 query — fast
 _COUNT_PENDING_SQL = text("""
     SELECT
-      COUNT(*) FILTER (WHERE body_status = 'ready')      AS empty_count,
+      COUNT(*) FILTER (WHERE body_status = 'issues')      AS empty_count,
       COUNT(*) FILTER (WHERE body_status = 'pending')      AS stale_count,
-      COUNT(*) FILTER (WHERE body_status = 'completed')      AS ready_count,
+      COUNT(*) FILTER (WHERE body_status = 'completed')      AS issues_count,
       COUNT(*) FILTER (WHERE body_status = 'pending') AS gen_count,
       COUNT(*)                                            AS total_count
     FROM wiki_pages
@@ -209,7 +209,7 @@ async def _worker_loop(
             async with session_factory() as session:
                 async with session.begin():
                     await session.execute(text(
-                        "UPDATE wiki_pages SET body_status = 'ready', body_processing_started_at = NULL WHERE id = :pid"
+                        "UPDATE wiki_pages SET body_status = 'issues', body_processing_started_at = NULL WHERE id = :pid"
                     ), {"pid": str(page_id)})
             stats["skip"] += 1
             stats["processed"] += 1
@@ -245,7 +245,7 @@ async def _worker_loop(
                 async with session_factory() as session:
                     async with session.begin():
                         await session.execute(text(
-                            "UPDATE wiki_pages SET body_status = 'ready', body_processing_started_at = NULL WHERE id = :pid"
+                            "UPDATE wiki_pages SET body_status = 'issues', body_processing_started_at = NULL WHERE id = :pid"
                         ), {"pid": str(page_id)})
         except Exception as exc:  # noqa: BLE001
             err_msg = f"{type(exc).__name__}: {exc}"
@@ -253,7 +253,7 @@ async def _worker_loop(
             async with session_factory() as session:
                 async with session.begin():
                     await session.execute(text(
-                        "UPDATE wiki_pages SET body_status = 'ready', body_processing_started_at = NULL WHERE id = :pid"
+                        "UPDATE wiki_pages SET body_status = 'issues', body_processing_started_at = NULL WHERE id = :pid"
                     ), {"pid": str(page_id)})
 
         page_dur = time.monotonic() - page_start
@@ -299,7 +299,7 @@ async def main(
     target = min(pending, limit)
     print(f"\n📊 wiki_pages 현재 — total={stats['total_count']}, "
           f"empty={stats['empty_count']}, stale={stats['stale_count']}, "
-          f"ready={stats['ready_count']}, generating={stats['gen_count']}")
+          f"ready={stats['issues_count']}, generating={stats['gen_count']}")
     print(f"📝 처리 대상 — status IN ({','.join(statuses)})"
           f"{f' AND slug LIKE {slug_pattern!r}' if slug_pattern else ''}"
           f" → {pending} pages 중 limit={limit} → 실제 {target} 처리\n")

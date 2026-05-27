@@ -11,7 +11,7 @@ D10 wave-1g-0 (2026-05-26) — 기존 topics 23,940 → wiki_pages 1:1 옮김.
 설계:
   1. topics → wiki_pages (1:1)
      - slug, title, description 그대로
-     - body_status='ready' (다음 사용자 GET 시 lazy 합성)
+     - body_status='issues' (다음 사용자 GET 시 lazy 합성)
      - 이미 wiki_page 있으면 skip (idempotent)
   2. item_topics → wiki_page_items
      - role, confidence 그대로
@@ -68,7 +68,7 @@ _COUNT_PENDING_SQL = text("""
 
 _INSERT_WIKI_PAGE_SQL = text("""
     INSERT INTO wiki_pages (topic_id, slug, title, description, body_status)
-    VALUES (:topic_id, :slug, :title, :description, 'ready')
+    VALUES (:topic_id, :slug, :title, :description, 'issues')
     ON CONFLICT (slug) DO UPDATE
         SET topic_id = COALESCE(wiki_pages.topic_id, EXCLUDED.topic_id)
     RETURNING id

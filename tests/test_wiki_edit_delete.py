@@ -147,21 +147,21 @@ def test_wiki_page_edit_request_combinations(payload, changed):
 def test_wiki_stats_response_default_zero():
     """모든 카운트 default 0 — 빈 DB 상태에서 안전."""
     s = WikiStatsResponse()
-    assert s.ready == 0 and s.pending == 0 and s.completed == 0
+    assert s.issues == 0 and s.pending == 0 and s.completed == 0
     assert s.total == 0
 
 
 def test_wiki_stats_response_populated():
-    # 2026-05-27 통일: 3 status (ready/pending/completed)
-    s = WikiStatsResponse(ready=17, pending=8, completed=23827, total=23852)
+    # 2026-05-27 rename: ready → issues (잔여 자료)
+    s = WikiStatsResponse(issues=17, pending=8, completed=23827, total=23852)
     assert s.total == 23852
-    assert s.ready + s.pending + s.completed == s.total
+    assert s.issues + s.pending + s.completed == s.total
 
 
 def test_wiki_batch_regenerate_request_default():
-    """status default 'ready' (2026-05-27 통일) / limit default 10."""
+    """status default 'issues' (2026-05-27 rename) / limit default 10."""
     req = WikiBatchRegenerateRequest()
-    assert req.status == "ready"
+    assert req.status == "issues"
     assert req.limit == 10
 
 
