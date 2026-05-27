@@ -34,6 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.agents.base import AgentBase, AgentContext, load_prompt
 from backend.llm.base import ChatMessage
 from backend.llm.factory import get_llm_provider
+from backend.utils.wiki_slug import sanitize_wiki_slug
 
 logger = logging.getLogger("linkmind.agents.classifier")
 
@@ -287,31 +288,63 @@ class ClassifierAgent(AgentBase):
             linked_page_ids.append(new_pid)
             created_pages.append({"id": new_pid, "slug": new_slug, "title": title})
 
-        # 3) 자기 1:1 fallback wiki — 매칭과 무관하게 항상 생성 (2026-05-27).
-        #    사용자 명시: "내가 입력한 자료의 wiki 가 생성 안 되고 부수적인 wiki 만
-        #    생성되는 게 무슨 의미가 있어?"
-        #    → 모든 ingest 자료가 자기 wiki 페이지를 가짐 (검색 시 1순위로 그 자료
-        #    찾을 수 있게). 매칭된 다른 wiki 는 부수적 cross-link.
-        #    옛 wave-1g backfill 의 1:1 패턴 (`url__item__<uuid>`) 과 일관.
-        self_slug = f"url__item__{item_id}"
-        self_title = item.get("title") or self_slug
-        self_desc = (item.get("summary") or "")[:500] or None
-        self_row = (await session.execute(_CREATE_WIKI_PAGE_SQL, {
-            "slug": self_slug,
-            "title": self_title,
-            "description": self_desc,
-        })).first()
+        # 3) item 의 topics → wiki_pages 보장 (2026-05-27 D11, 사용자 mental model).
+        #    YouTube/GitHub/arxiv 등 external_id 가 있는 URL 은 그 external_id 가
+        #    곧 자기 wiki — `yt__byo7yew9-oq` 같은 slug. self_wiki (`url__item__<uuid>`)
+        #    는 external_id 없는 일반 URL (블로그/뉴스 등) fallback.
+        #    옛 ca431aa 의 self_wiki 무조건 INSERT 는 외부 ID wiki + self_wiki 가
+        #    동시 생성되는 중복 (6,625건) 의 원인 — 제거.
+        #
+        #    backfill (`wiki_backfill_from_topics`) 와 sanitize_wiki_slug 공유 →
+        #    같은 slug 패턴이라 신규 ingest 자료와 backfill 23k wiki 가 wiki_pages
+        #    에서 자연 매칭 (ON CONFLICT find_or_create).
+        topics_rows = (await session.execute(
+            text("""
+                SELECT t.id, t.slug, t.title
+                FROM item_topics it
+                JOIN topics t ON t.id = it.topic_id
+                WHERE it.item_id = :item_id
+            """),
+            {"item_id": str(item_id)},
+        )).mappings().all()
+
+        # external_id topic (`yt:`, `github:`, `arxiv:` 등) 과 fallback topic
+        # (`url:item:<uuid>`, external_id 없을 때 auto_link_topics 가 만든 거)
+        # 분류. fallback topic 은 self_wiki 자리.
+        ext_topics = [t for t in topics_rows if not t["slug"].startswith("url:item:")]
+        fallback_topics = [t for t in topics_rows if t["slug"].startswith("url:item:")]
+
+        # external_id 있으면 그것들만 → self_wiki skip (사용자 mental model).
+        # 없으면 fallback topic (= self_wiki) 처리.
+        topics_to_wiki = ext_topics if ext_topics else fallback_topics
+
         self_wiki_created = False
-        if self_row:
-            self_pid = str(self_row[0])
-            await session.execute(_UPSERT_WIKI_LINK_SQL, {
-                "page_id": self_pid,
-                "item_id": str(item_id),
-                "confidence": 1.0,
-                "role": "self",   # role='self' — 1:1 fallback wiki 표식
-            })
-            linked_page_ids.append(self_pid)
-            self_wiki_created = True
+        for t in topics_to_wiki:
+            wiki_slug = sanitize_wiki_slug(t["slug"])
+            wiki_title = t["title"] or item.get("title") or wiki_slug
+            wiki_desc = (item.get("summary") or "")[:500] or None
+            row = (await session.execute(_CREATE_WIKI_PAGE_SQL, {
+                "slug": wiki_slug,
+                "title": wiki_title,
+                "description": wiki_desc,
+            })).first()
+            if not row:
+                continue
+            pid = str(row[0])
+            is_self_fallback = t["slug"].startswith("url:item:")
+            # role: external_id wiki = 'primary' (그 자료의 주 wiki),
+            #       fallback (self_wiki) = 'self' (외부 ID 없는 자료의 1:1 wiki)
+            role = "self" if is_self_fallback else "primary"
+            if pid not in linked_page_ids:
+                await session.execute(_UPSERT_WIKI_LINK_SQL, {
+                    "page_id": pid,
+                    "item_id": str(item_id),
+                    "confidence": 1.0,
+                    "role": role,
+                })
+                linked_page_ids.append(pid)
+            if is_self_fallback:
+                self_wiki_created = True
 
         # 4) 매칭된 모든 wiki_pages.body_status = 'pending' (eager 합성 trigger)
         if linked_page_ids:

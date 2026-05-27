@@ -36,6 +36,7 @@ from typing import Any
 from sqlalchemy import text
 
 from backend.db.connection import close_engine, get_session_factory
+from backend.utils.wiki_slug import sanitize_wiki_slug
 
 logging.basicConfig(
     level=logging.INFO,
@@ -96,22 +97,11 @@ _STATS_SQL = text("""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# slug sanitize
+# slug sanitize — backend/utils/wiki_slug.sanitize_wiki_slug 로 옮김 (D11, 2026-05-27)
+# classifier (신규 ingest 보장) 와 같은 함수 쓰기 위함.
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _sanitize_slug(raw: str) -> str:
-    """topics.slug 가 'arxiv:2106.09685' 같이 콜론 포함 — wiki_pages.slug (URL key) 로
-    안전한 형태로. URL path 에 들어가도 OK 형태."""
-    if not raw:
-        return "untitled"
-    # 콜론 → '__', 공백/슬래시 → '-', 그 외 [a-z0-9._-] 만 허용
-    s = raw.strip().lower()
-    s = s.replace(":", "__").replace("/", "-").replace(" ", "-")
-    # 허용 문자만 (한글은 wiki 페이지 URL 로 쓰기 좋게 보존)
-    import re
-    s = re.sub(r"[^a-z0-9가-힣._\-]+", "-", s)
-    s = re.sub(r"-+", "-", s).strip("-_")
-    return s[:200] if s else "untitled"
+_sanitize_slug = sanitize_wiki_slug
 
 
 # ─────────────────────────────────────────────────────────────────────────────

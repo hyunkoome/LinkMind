@@ -266,6 +266,8 @@ class WikiPageDetail(BaseModel):
     sources: list[WikiSource] = Field(default_factory=list)
     cross_links: list[WikiCrossLink] = Field(default_factory=list)
     user_notes_combined: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 class WikiKeywordsUpdateRequest(BaseModel):
@@ -305,6 +307,7 @@ class WikiPageListItem(BaseModel):
     body_processing_started_at: datetime | None = None
     source_count: int = 0
     is_pinned: bool = False
+    created_at: datetime
     updated_at: datetime
 
 

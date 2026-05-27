@@ -270,6 +270,7 @@ export interface WikiPageListItem {
   body_processing_started_at: string | null;        // NOT NULL ⇒ writer 진행 중
   source_count: number;
   is_pinned: boolean;
+  created_at: string;
   updated_at: string;
 }
 
@@ -318,6 +319,8 @@ export interface WikiPageDetail {
   sources: WikiSource[];
   cross_links: WikiCrossLink[];
   user_notes_combined: string | null;
+  created_at: string | null;
+  updated_at: string | null;
 }
 
 export interface WikiKeywordsUpdateRequest {

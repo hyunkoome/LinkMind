@@ -39,6 +39,7 @@ _FETCH_PAGE_SQL = text("""
         wp.id, wp.topic_id, wp.slug, wp.title, wp.description, wp.variant,
         wp.body, wp.body_status, wp.body_generated_at,
         wp.user_overrides, wp.is_pinned, wp.keywords,
+        wp.created_at, wp.updated_at,
         (SELECT COALESCE(MAX(version_number), 0)
             FROM wiki_page_versions WHERE page_id = wp.id) AS latest_version
     FROM wiki_pages wp
@@ -224,6 +225,14 @@ async def _build_wiki_context(
             "is_pinned": bool(page_row["is_pinned"]),
             "user_overrides": page_row["user_overrides"],
             "keywords": list(page_row["keywords"] or []),
+            "created_at": (
+                page_row["created_at"].isoformat()
+                if page_row["created_at"] else None
+            ),
+            "updated_at": (
+                page_row["updated_at"].isoformat()
+                if page_row["updated_at"] else None
+            ),
         },
         "sources": sources,
         "attachment_count": attachment_count,

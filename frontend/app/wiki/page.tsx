@@ -54,6 +54,19 @@ function effectiveStatusKey(p: WikiPageListItem): string {
   return "generating";
 }
 
+// MM-DD HH:MM (local time) — 어떤 wiki 가 backfill / classifier batch / 신규 ingest
+// 어디에서 왔는지 사용자 시각 구분.
+function fmtDateShort(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mi = String(d.getMinutes()).padStart(2, "0");
+  return `${mm}-${dd} ${hh}:${mi}`;
+}
+
 export default function WikiListPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -475,9 +488,20 @@ export default function WikiListPage() {
                         {p.description}
                       </p>
                     )}
-                    <p className="mt-1 text-[10px] text-zinc-400 dark:text-zinc-500 font-mono truncate">
-                      {p.slug}
-                    </p>
+                    <div className="mt-1 flex items-center gap-2 text-[10px] text-zinc-400 dark:text-zinc-500">
+                      <span className="font-mono truncate flex-1">{p.slug}</span>
+                      <span
+                        className="whitespace-nowrap"
+                        title={`생성: ${p.created_at ?? "—"}\n갱신: ${p.updated_at ?? "—"}`}
+                      >
+                        📅 {fmtDateShort(p.created_at)}
+                        {p.updated_at && p.updated_at !== p.created_at && (
+                          <span className="ml-1 text-zinc-300 dark:text-zinc-600">
+                            · ↻ {fmtDateShort(p.updated_at)}
+                          </span>
+                        )}
+                      </span>
+                    </div>
                   </>
                 );
 

@@ -117,7 +117,7 @@ _LIST_PAGES_SQL = text(f"""
         wp.id, wp.topic_id, wp.slug, wp.title, wp.description,
         wp.body_status, wp.body_generated_at,
         wp.body_processing_started_at,
-        wp.is_pinned, wp.updated_at,
+        wp.is_pinned, wp.created_at, wp.updated_at,
         (SELECT COUNT(*) FROM wiki_page_items wpi
             WHERE wpi.wiki_page_id = wp.id
               AND (wpi.user_action IS NULL OR wpi.user_action != 'removed')
@@ -184,6 +184,7 @@ async def list_wiki_pages(
             body_processing_started_at=r["body_processing_started_at"],
             source_count=int(r["source_count"] or 0),
             is_pinned=bool(r["is_pinned"]),
+            created_at=r["created_at"],
             updated_at=r["updated_at"],
         )
         for r in rows
@@ -241,6 +242,8 @@ async def _wiki_context_to_response(wiki_context: dict) -> WikiPageDetail:
         sources=sources,
         cross_links=cross_links,
         user_notes_combined=wiki_context.get("user_notes_combined"),
+        created_at=page.get("created_at"),
+        updated_at=page.get("updated_at"),
     )
 
 

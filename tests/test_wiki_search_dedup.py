@@ -49,18 +49,27 @@ def test_add_alt_url_repository_helper_signature():
     assert "new_url" in params
 
 
-def test_classifier_invoke_creates_self_wiki():
-    """classifier 의 invoke() 끝에 1:1 fallback wiki 생성 코드가 있는지 회귀 방지.
+def test_classifier_invoke_topic_based_wiki_creation():
+    """classifier invoke() 가 item 의 topics → wiki 자동 보장 (D11 D10.5 fix, 2026-05-27).
 
-    사용자 명시 (2026-05-27): "내가 입력한 자료의 wiki 가 생성 안 되고 부수적인
-    wiki 만 생성되는 게 무슨 의미가 있어?" → 모든 ingest 자료가 자기 wiki 페이지
-    필수.
+    배경: 옛 ca431aa 의 self_wiki 무조건 INSERT 가 외부 ID wiki + self_wiki 중복
+    (6,625건) 의 원인. fix: item 의 topics 를 보고 external_id 있으면 그 wiki 보장 +
+    self_wiki skip. external_id 없으면 fallback topic = self_wiki.
+
+    회귀 방지 — 핵심 패턴 검증.
     """
     import inspect
     from backend.agents.classifier import ClassifierAgent
 
     src = inspect.getsource(ClassifierAgent.invoke)
-    # role='self' 표식 + self_slug 패턴
-    assert "self_slug = f\"url__item__{item_id}\"" in src
-    assert '"role": "self"' in src
-    assert "self_wiki_created" in src
+    # item_topics 조회 — 사용자 mental model 의 진입점
+    assert "FROM item_topics it" in src
+    # external_id vs fallback 분류
+    assert "ext_topics" in src
+    assert "fallback_topics" in src
+    # 'url:item:' 로 fallback (self_wiki) 판단
+    assert "'url:item:'" in src or '"url:item:"' in src
+    # role='self' 는 fallback wiki link 시 사용
+    assert '"role": "self"' in src or '"role": role' in src
+    # sanitize_wiki_slug 사용 — backfill 과 같은 slug 패턴
+    assert "sanitize_wiki_slug" in src

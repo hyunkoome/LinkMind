@@ -378,6 +378,18 @@ export default function WikiDetailPage({ params }: PageProps) {
               <div>
                 <span className="font-medium">version:</span> {page.latest_version}
               </div>
+              {page.created_at && (
+                <div>
+                  <span className="font-medium">created:</span>{" "}
+                  {new Date(page.created_at).toLocaleString()}
+                </div>
+              )}
+              {page.updated_at && (
+                <div>
+                  <span className="font-medium">updated:</span>{" "}
+                  {new Date(page.updated_at).toLocaleString()}
+                </div>
+              )}
               {page.body_generated_at && (
                 <div>
                   <span className="font-medium">generated:</span>{" "}
