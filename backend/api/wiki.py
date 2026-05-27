@@ -71,7 +71,36 @@ router = APIRouter()
 # GET /wiki — list
 # ────────────────────────────────────────────────────────────────
 
-_LIST_PAGES_SQL = text("""
+# wiki list 검색 범위 (2026-05-27 확장):
+#   1) wp.title / description / slug — wiki 자체 메타
+#   2) wp.body — LLM 합성 본문 (인용된 source 명/URL 포함될 수 있음)
+#   3) sources (linked items) 의 title / source_url — 사용자 사례:
+#      "unite" 검색했지만 wiki title 은 'AI What is AI', source 의 URL 은
+#      'unite.ai' → 옛 SQL 은 매칭 0건. EXISTS short-circuit 으로 비용 작음.
+#   4) keywords — 사용자가 명시한 태그
+# 23k wiki 라 seq scan OK (작은 MVP 데이터). GIN trgm 은 Phase 3+.
+_SEARCH_PREDICATE = """
+    wp.title ILIKE '%' || CAST(:q AS TEXT) || '%'
+    OR wp.description ILIKE '%' || CAST(:q AS TEXT) || '%'
+    OR wp.slug ILIKE '%' || CAST(:q AS TEXT) || '%'
+    OR wp.body ILIKE '%' || CAST(:q AS TEXT) || '%'
+    OR EXISTS (
+        SELECT 1 FROM wiki_page_items wpi
+        JOIN items i ON i.id = wpi.item_id
+        WHERE wpi.wiki_page_id = wp.id
+          AND (wpi.user_action IS NULL OR wpi.user_action != 'removed')
+          AND (
+              i.title ILIKE '%' || CAST(:q AS TEXT) || '%'
+              OR i.source_url ILIKE '%' || CAST(:q AS TEXT) || '%'
+          )
+    )
+    OR EXISTS (
+        SELECT 1 FROM UNNEST(wp.keywords) AS kw
+        WHERE kw ILIKE '%' || CAST(:q AS TEXT) || '%'
+    )
+"""
+
+_LIST_PAGES_SQL = text(f"""
     SELECT
         wp.id, wp.topic_id, wp.slug, wp.title, wp.description,
         wp.body_status, wp.body_generated_at, wp.is_pinned, wp.updated_at,
@@ -81,25 +110,17 @@ _LIST_PAGES_SQL = text("""
         ) AS source_count
     FROM wiki_pages wp
     WHERE (CAST(:status AS TEXT) IS NULL OR wp.body_status = CAST(:status AS TEXT))
-      AND (CAST(:q AS TEXT) IS NULL OR (
-           wp.title ILIKE '%' || CAST(:q AS TEXT) || '%'
-           OR wp.description ILIKE '%' || CAST(:q AS TEXT) || '%'
-           OR wp.slug ILIKE '%' || CAST(:q AS TEXT) || '%'
-      ))
+      AND (CAST(:q AS TEXT) IS NULL OR ({_SEARCH_PREDICATE}))
       AND (CAST(:keyword AS TEXT) IS NULL OR CAST(:keyword AS TEXT) = ANY(wp.keywords))
     ORDER BY wp.is_pinned DESC, wp.updated_at DESC
     LIMIT :limit OFFSET :offset
 """)
 
 
-_COUNT_PAGES_SQL = text("""
+_COUNT_PAGES_SQL = text(f"""
     SELECT COUNT(*) FROM wiki_pages wp
     WHERE (CAST(:status AS TEXT) IS NULL OR wp.body_status = CAST(:status AS TEXT))
-      AND (CAST(:q AS TEXT) IS NULL OR (
-           wp.title ILIKE '%' || CAST(:q AS TEXT) || '%'
-           OR wp.description ILIKE '%' || CAST(:q AS TEXT) || '%'
-           OR wp.slug ILIKE '%' || CAST(:q AS TEXT) || '%'
-      ))
+      AND (CAST(:q AS TEXT) IS NULL OR ({_SEARCH_PREDICATE}))
       AND (CAST(:keyword AS TEXT) IS NULL OR CAST(:keyword AS TEXT) = ANY(wp.keywords))
 """)
 
