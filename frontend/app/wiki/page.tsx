@@ -23,7 +23,8 @@ import {
   type WikiStatsResponse,
 } from "@/lib/api";
 
-const PAGE_SIZE = 50;
+const PAGE_SIZE_OPTIONS = [10, 50, 100] as const;
+const DEFAULT_PAGE_SIZE = 50;
 
 const STATUS_COLORS: Record<string, string> = {
   ready:
@@ -45,6 +46,14 @@ export default function WikiListPage() {
   const statusFilter = searchParams.get("status") || "";
   const keywordFilter = searchParams.get("keyword") || "";
   const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10) || 1);
+
+  // page_size — URL ?page_size=10/50/100 (default 50). 사용자 라디오 선택.
+  const rawPageSize = parseInt(
+    searchParams.get("page_size") || String(DEFAULT_PAGE_SIZE), 10,
+  );
+  const pageSize: number = (PAGE_SIZE_OPTIONS as readonly number[]).includes(rawPageSize)
+    ? rawPageSize
+    : DEFAULT_PAGE_SIZE;
 
   // 입력창 local state (debounce 위함) — URL 의 q 와 분리, debounce 후 URL 반영
   const [qInput, setQInput] = useState(q);
@@ -95,8 +104,8 @@ export default function WikiListPage() {
       status: statusFilter || undefined,
       q: q || undefined,
       keyword: keywordFilter || undefined,
-      limit: PAGE_SIZE,
-      offset: (page - 1) * PAGE_SIZE,
+      limit: pageSize,
+      offset: (page - 1) * pageSize,
     })
       .then((r) => {
         if (alive) setResponse(r);
@@ -110,7 +119,7 @@ export default function WikiListPage() {
     return () => {
       alive = false;
     };
-  }, [q, statusFilter, keywordFilter, page]);
+  }, [q, statusFilter, keywordFilter, page, pageSize]);
 
   // stats fetch — mount 시 1회 + 일괄 합성 진행 중 5초 polling.
   const refreshStats = () => {
@@ -141,7 +150,7 @@ export default function WikiListPage() {
     return () => clearInterval(id);
   }, [batchInProgress]);
 
-  const totalPages = response ? Math.max(1, Math.ceil(response.total / PAGE_SIZE)) : 1;
+  const totalPages = response ? Math.max(1, Math.ceil(response.total / pageSize)) : 1;
 
   const onBatchRegenerate = async () => {
     setConfirmBatch(false);
@@ -312,8 +321,43 @@ export default function WikiListPage() {
           <div className="text-center py-10 text-zinc-500">로딩 중…</div>
         ) : (
           <>
-            <div className="text-xs text-zinc-500 dark:text-zinc-400 mb-2">
-              {response?.total ?? 0} 페이지 (페이지 {page} / {totalPages})
+            {/* 결과 카운트 + 페이지당 개수 라디오 */}
+            <div className="flex items-center justify-between mb-2 text-xs text-zinc-500 dark:text-zinc-400">
+              <div>
+                총 <span className="font-medium text-zinc-700 dark:text-zinc-300">
+                  {response?.total ?? 0}
+                </span>건 · 페이지{" "}
+                <span className="font-medium text-zinc-700 dark:text-zinc-300">
+                  {page}
+                </span>{" "}
+                / {totalPages}
+              </div>
+              {/* 페이지당 개수 — 10/50/100 라디오 (2026-05-27) */}
+              <div className="flex items-center gap-1.5">
+                <span>페이지당</span>
+                {PAGE_SIZE_OPTIONS.map((n) => {
+                  const active = pageSize === n;
+                  return (
+                    <button
+                      key={n}
+                      type="button"
+                      onClick={() =>
+                        updateQuery({
+                          page_size: n === DEFAULT_PAGE_SIZE ? null : String(n),
+                          page: null,
+                        })
+                      }
+                      className={`px-2 py-0.5 rounded text-[11px] border ${
+                        active
+                          ? "border-orange-400 dark:border-orange-500 bg-orange-50 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300 font-medium"
+                          : "border-zinc-300 dark:border-zinc-700 hover:border-zinc-400"
+                      }`}
+                    >
+                      {n}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
             <ul className="space-y-2">
@@ -350,8 +394,9 @@ export default function WikiListPage() {
               ))}
             </ul>
 
-            {/* Pagination */}
-            {totalPages > 1 && (
+            {/* Pagination — 결과가 1건 이상이면 항상 표시 (1/1 도 보임, 일관성).
+                각 status tab 에서 disabled 라도 표시되어 사용자가 어떤 상태인지 인지. */}
+            {(response?.total ?? 0) > 0 && (
               <div className="flex items-center justify-center gap-2 mt-6">
                 <button
                   type="button"
