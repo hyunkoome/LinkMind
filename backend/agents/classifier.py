@@ -282,13 +282,40 @@ class ClassifierAgent(AgentBase):
             linked_page_ids.append(new_pid)
             created_pages.append({"id": new_pid, "slug": new_slug, "title": title})
 
-        # 3) 매칭된 모든 wiki_pages.body_status = 'stale' (eager 합성 trigger)
+        # 3) 자기 1:1 fallback wiki — 매칭과 무관하게 항상 생성 (2026-05-27).
+        #    사용자 명시: "내가 입력한 자료의 wiki 가 생성 안 되고 부수적인 wiki 만
+        #    생성되는 게 무슨 의미가 있어?"
+        #    → 모든 ingest 자료가 자기 wiki 페이지를 가짐 (검색 시 1순위로 그 자료
+        #    찾을 수 있게). 매칭된 다른 wiki 는 부수적 cross-link.
+        #    옛 wave-1g backfill 의 1:1 패턴 (`url__item__<uuid>`) 과 일관.
+        self_slug = f"url__item__{item_id}"
+        self_title = item.get("title") or self_slug
+        self_desc = (item.get("summary") or "")[:500] or None
+        self_row = (await session.execute(_CREATE_WIKI_PAGE_SQL, {
+            "slug": self_slug,
+            "title": self_title,
+            "description": self_desc,
+        })).first()
+        self_wiki_created = False
+        if self_row:
+            self_pid = str(self_row[0])
+            await session.execute(_UPSERT_WIKI_LINK_SQL, {
+                "page_id": self_pid,
+                "item_id": str(item_id),
+                "confidence": 1.0,
+                "role": "self",   # role='self' — 1:1 fallback wiki 표식
+            })
+            linked_page_ids.append(self_pid)
+            self_wiki_created = True
+
+        # 4) 매칭된 모든 wiki_pages.body_status = 'stale' (eager 합성 trigger)
         if linked_page_ids:
             await session.execute(_MARK_STALE_SQL, {"page_ids": linked_page_ids})
 
         output_meta = {
             "matched_count": len(matched),
             "new_pages_count": len(created_pages),
+            "self_wiki_created": self_wiki_created,
             "linked_page_ids": linked_page_ids,
             "created_pages": created_pages,
             "skipped_low_conf": skipped_low_conf,
@@ -297,8 +324,8 @@ class ClassifierAgent(AgentBase):
         }
         summary = (
             f"item={item.get('title') or str(item_id)[:8]} → "
-            f"matched={len(matched)} (linked={len(linked_page_ids) - len(created_pages)}), "
-            f"new_pages={len(created_pages)}"
+            f"matched={len(matched)} (linked={len(linked_page_ids) - len(created_pages) - (1 if self_wiki_created else 0)}), "
+            f"new_pages={len(created_pages)}, self_wiki={self_wiki_created}"
         )
         return summary, output_meta
 

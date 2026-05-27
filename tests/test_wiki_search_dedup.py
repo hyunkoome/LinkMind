@@ -47,3 +47,20 @@ def test_add_alt_url_repository_helper_signature():
     assert "session" in params
     assert "item_id" in params
     assert "new_url" in params
+
+
+def test_classifier_invoke_creates_self_wiki():
+    """classifier 의 invoke() 끝에 1:1 fallback wiki 생성 코드가 있는지 회귀 방지.
+
+    사용자 명시 (2026-05-27): "내가 입력한 자료의 wiki 가 생성 안 되고 부수적인
+    wiki 만 생성되는 게 무슨 의미가 있어?" → 모든 ingest 자료가 자기 wiki 페이지
+    필수.
+    """
+    import inspect
+    from backend.agents.classifier import ClassifierAgent
+
+    src = inspect.getsource(ClassifierAgent.invoke)
+    # role='self' 표식 + self_slug 패턴
+    assert "self_slug = f\"url__item__{item_id}\"" in src
+    assert '"role": "self"' in src
+    assert "self_wiki_created" in src
