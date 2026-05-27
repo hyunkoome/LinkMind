@@ -451,10 +451,8 @@ LinkMind 는 backend (`backend/`) + multi-channel gateway (`ai_agents/`) + Strea
 | **D12 placeholder/실패 자료 정리 (2026-05-25)** | §2 raw-first 의 확장 — 본문 fetch 실패해도 raw + URL + provenance 무조건 DB 보존 + 사용자 수동 보강 UI. **Wave-1** (commit 39a82d1): `backend/jobs/mark_fetch_failed.py` 자동 분류 (2594건 마킹: image_no_ocr 1751 / extraction_failed 806 / binary 36 / short 1). `GET /items` list + facets drilldown + POST `/items/{id}/notes` (user_notes append) + `/categories/{slug}` (manual link). `frontend/app/cleanup/` — FilterSidebar + ItemCard (이미지 grid) + ActionPanel (kind별 hint). 32 단위 테스트. **Wave-2** (commit aba9f65): Slack manifest 재처리 — `backend/db/repository.merge_source_metadata` + Slack URL 분기 slack provenance 보강 + `backend/jobs/ingest_slack_manifest.py` (placeholder 633 메타 보강 + exception 320 wave-5/D13 fix 흐름 재시도). 결과: 915 / 953 (96%) DB 등록, unresolved 38건만 진짜 손실 (YouTube 영상 삭제 37 + 깨진 URL 1). 14 테스트. **Slack 정리**: `archive/slack_export/` 628MB 삭제 (DB items 1307 + volumes/archive 4.7GB 보존 검증). **Wave-3** (commit 269b3b5): `DELETE /items/{id}` + ActionPanel 의 2단계 confirm 영구 삭제 UI. 진짜 사라진 자료 (영상 삭제 / 도메인 죽음 / HTTP 429 영구 차단) 정리. Qdrant points + Postgres CASCADE (chunks / attachments / item_topics 자동 삭제). §11 Privacy §4 (삭제 권리) 부합. | ✅ 완료 |
 | **D10 llm_wiki 아키텍처 wave-1+2 (2026-05-26)** | karpathy llm_wiki + multi-agent (physics-intern state-centric) + YAML prompt (ml-intern) 차용. **wave-1**: schema 4 테이블 + 4 agent (classifier/retriever/writer + critic stub) + wiki API 8 endpoints + Qdrant body embedding 검색 + frontend rename (frontend_v2 → frontend, 44 refs) + `/wiki/` list+detail+KeywordsEditor view/edit + backfill 23,852 pages. **wave-2c**: analysis_worker classifier hook (텔레그램 신규 ingest 자동 wiki 분류). **wave-2d**: keywords 진화 (schema TEXT[] + writer prompt 자동 추출 + 3 API + KeywordsEditor view/edit + matching wiki filter + ✨ 신규 등록). **arxiv URL hook** (`backend/ingest/arxiv/`, 신규 arxiv/IEEE/DOI 진짜 제목). **daemon 분리**: `wiki_writer_worker` (lifespan, stale 만, 신규 ingest 자동) + `wiki_writer_batch` CLI (empty+stale, 사용자 직접). **성능 4.6x**: vLLM prefix-caching + max-num-batched-tokens 16384 + max_tokens 1024 + concurrent N=4 → 17초/page → 3.7초/page. ETA 4.7일 → ~1일. | ✅ 완료 |
 | **D11 wiki 중심 UX 통합 (2026-05-27, 26 commits)** | D10 위에 사용자 mental model 정리. **(1) wiki 중심 통합** — `frontend/app/cleanup/` + `frontend/app/search/` 디렉토리 폐기, Header nav 단순화 (graph / ingest / Ask / wiki / settings). **(2) status 모델 통일** — DB `body_status` 3종 (issues / pending / completed) + `body_processing_started_at` sub-state (5분 안 = generating blue animate-pulse, 그 외 = queuing amber). 옛 명명 (empty/stale/ready/generating) 완전 폐기. **(3) wiki list UX 강화** — 4 status tab + pagination 상하 + 페이지당 라디오 (10/50/100) + ETA (시간+분, 1초/page) + URL query sync (?page/?page_size/?status/?q/?keyword) + **completed 만 클릭** (중복 처리 방지) + 정렬 (전체: status 그룹 + 알파벳 / pending: generating 우선) + 일괄 합성 버튼 항상 노출. **(4) classifier 1:1 fallback wiki** — `role='self'` wiki 항상 INSERT (사용자 자료 1순위). **(5) daemon = batch (concurrency 4 통일)** — sequential → asyncio.gather, ON CONFLICT DO NOTHING (race-free). **(6) GET /wiki/{slug} lazy 합성 제거** — `?regenerate=true` 만 LLM. **(7) `/ask` 신규 페이지 (Step 1)** — 2-column 대화형 RAG (좌 chat + citation + related_wikis / 우 wiki detail). **(8) 텔레그램 watcher classifier hook** — `ingest_telegram_message` 끝에 fire-and-forget `asyncio.create_task` (in-process 흐름). **(9) bare domain URL regex** (unite.ai 자동 https://) + **dedup URL 보존** (`source_metadata.alt_urls` 누적). **(10) wiki 검색 7 필드** — title/desc/slug/body + items.title/source_url/user_notes + alt_urls + keywords. **(11) step5 turbopack 캐시 자동화** + `--clean-cache`. 383/383 cpu PASS. | ✅ 완료 |
-| **다음 1순위 (강한 추천)** | **D10.5 — ItemDetails user_notes textarea 통합** (반나절). backend `POST /items/{id}/notes` 이미 동작 → frontend 만. 모든 viewer (graph item / wiki source / 검색) 공통 1급 기능 + 학습 데이터/feedback 시작점. | 🚧 다음 |
-| 다음 2순위 | D10 wave-3 critic agent (1-2 세션) — citation 검증 + contradiction flag + writer 후처리 patch. | future |
-| 다음 3순위 | /ask Step 2 (대화 history) → Step 3 (filing-back: 답변을 wiki 페이지로 적립). | future |
-| 그 외 backlog | categories edit UI / D12-4 wiki 기반 자료 보강 / D8 cross-modality / D10 lint / dataset exporter (Phase 3 후반) | future |
+| **D10.5 재정의 — graph ↔ wiki ↔ 카테고리 데이터 흐름 통합 (3 세션)** | 사용자 통찰 (2026-05-27): 자료 클릭 시 wiki 링크 안 보이고, 카테고리 ↔ wiki keywords 별 시스템. 사용자 결정: (1) wiki keywords 로 통합 (`categories` 테이블 + `auto_link_categories` job + 카테고리 트리 폐기), (2) 그래프 자료 클릭 → 우측 ItemDetails 패널 안에 wiki body inline (별 페이지 X). **세션 A**: `GET /items/{id}` 에 `wiki_page_items` 조인 + ItemDetails 에 user_notes textarea + wiki body inline (WikiBody 재사용) + 여러 wiki 면 탭 + keywords pill. **세션 B**: 66 categories → 대표 keyword 매핑 + `/graph/categories` 재설계 + TopicsTree `keyword ▸ wiki ▸ item` + 옛 categories 시스템 삭제. **세션 C (선택)**: `/wiki` 검색 + graph + `/ask` 페이지 일원화. | 🚧 다음 (세션 A 부터) |
+| 후속 backlog | D10 wave-3 critic agent / /ask Step 2/3 (대화 history + filing-back) / D12-4 wiki 기반 자료 보강 / D8 cross-modality / D10 lint / dataset exporter (Phase 3 후반) | future |
 | D9/D11/D8 | D9 arxiv title 재시드 (이미 신규 ingest hook 으로 자동) → D11 카테고리 UI 편집 (keywords API 패턴 재사용) → D8 cross-modality matching (wiki body 안 자연) | |
 | 2 후반 (AI 카테고리/feedback/dataset exporter) | AI 카테고리 강화, feedback 테이블, dataset exporter (JSONL) | |
 | 3 | 이미지/OCR/멀티모달 RAG, MinIO object storage, `ai_agents/` 채널 확장 (Slack/WhatsApp/Discord), 자가학습 (auto prompt/ingester 개선) | |
@@ -464,25 +462,50 @@ LinkMind 는 backend (`backend/`) + multi-channel gateway (`ai_agents/`) + Strea
 
 자세한 backlog 와 phase 별 완료/미구현 항목 — `docs/features_backlog.md` + `CLAUDE.md §13` 참고.
 
-### 다음 세션 진입 순서 (2026-05-27 갱신)
+### 다음 세션 진입 순서 (2026-05-27 갱신, D10.5 재정의 후)
 
 **완료까지의 흐름**:
 - ✅ D10 wave-1+2 (2026-05-26) — schema + 4 agent + wiki API + backfill 시작
 - ✅ D11 (2026-05-27, 26 commits) — UX 통합 + status 3종 + classifier 1:1 fallback + /ask Step 1
 
-**backfill 잔여는 D11 의 daemon=batch (concurrency 4) 가 자동 처리 중** —
-backend 켠 채로 두면 OK. `curl -s http://localhost:8000/wiki/_meta/stats | jq` 로 확인.
+**backfill 잔여는 D11 daemon=batch (concurrency 4) 가 자동 처리** —
+`curl -s http://localhost:8000/wiki/_meta/stats | jq` 로 확인.
 
-**다음 작업 — 한 줄 우선순위**:
+### D10.5 재정의 (2026-05-27 사용자 결정) — 3 세션 분리
 
-| # | 작업 | 규모 | 한 줄 요약 |
-|---|---|---|---|
-| **1** | **D10.5 — ItemDetails user_notes textarea** ★ 추천 ★ | 반나절 | backend 이미 동작, frontend 만. 모든 viewer 공통. 학습 데이터 시작점. |
-| 2 | D10 wave-3 — critic agent | 1-2 세션 | wave-1 stub 자리. citation 검증 + contradiction flag. |
-| 3 | /ask Step 2/3 | 1-2 세션 | Step 2 대화 history → Step 3 filing-back (답변 → wiki 적립). |
-| 4+ | categories edit / D12-4 / D8 / lint / dataset exporter | — | `CLAUDE.md §13` 표 참고. |
+**사용자 통찰**: "그래프 자료 클릭해도 wiki 페이지 링크 안 보이고, 카테고리 ↔ wiki
+keywords 연동도 안 됨." 진단 결과 — DB 의 `wiki_page_items` 데이터는 있지만 UI 에서
+끊김 + `categories` 와 `wiki_pages.keywords` 가 별 시스템.
 
-**status 모델 (다음 세션 인지 필수)**:
+**사용자 결정**:
+- **결정 1**: wiki keywords 로 통합 — 옛 `categories` 테이블 + `auto_link_categories`
+  job + 그래프 좌측 카테고리 트리 모두 폐기. wiki_pages.keywords 만 남기고 트리도
+  keyword 기반 재구성.
+- **결정 2**: 그래프 자료 클릭 → 우측 ItemDetails 패널 안에 wiki body inline
+  (`/ask` 패턴). 별 페이지 이동 X.
+
+**3 세션 분리**:
+
+| 세션 | 작업 | 단계 |
+|---|---|---|
+| **A (다음)** | **graph 우측 패널에 wiki inline** (1 세션) | A1 `GET /items/{id}` 에 `wiki_page_items` 조인 / A2 ItemDetails 에 user_notes textarea / A3 ItemDetails 에 wiki body inline (WikiBody 재사용) / A4 wiki 여러 개면 탭 / A5 keywords pill 표시 |
+| **B** | **categories → keywords 전환** (1-2 세션) | B1 66 categories → 대표 keyword 매핑 / B2 `/graph/categories` 재설계 / B3 TopicsTree `keyword ▸ wiki ▸ item` / B4 옛 categories 시스템 삭제 |
+| **C** | **페이지 일원화** (1 세션, 선택) | `/wiki` 검색 + graph + `/ask` UX 일관성 |
+
+**왜 A 먼저?** 사용자가 직접 써보고 mental model 검증 후 B/C 의사결정.
+
+### D10.5 후 backlog
+
+| # | 작업 | 규모 |
+|---|---|---|
+| 1 | D10 wave-3 — critic agent (citation 검증 + contradiction flag + writer 후처리) | 1-2 세션 |
+| 2 | /ask Step 2 (대화 history) → Step 3 (filing-back: 답변 → wiki 적립) | 1-2 세션 |
+| 3 | D12-4 wiki 기반 자료 보강 마킹 | 중 |
+| 4 | D8 cross-modality matching | 중 |
+| 5 | D10 lint job (모순/stale/orphan 정기 점검) | 중 |
+| 6 | dataset exporter (Phase 3 후반, JSONL → Phase 4 LoRA 학습 입력) | 큼 |
+
+### status 모델 (인지 필수)
 
 | status | 의미 | UI |
 |---|---|---|
@@ -492,9 +515,10 @@ backend 켠 채로 두면 OK. `curl -s http://localhost:8000/wiki/_meta/stats | 
 
 sub-state: `body_processing_started_at` (TIMESTAMPTZ).
 
-**제어 명령**:
+### 제어 명령
+
 ```bash
-bash scripts/step5_run_dev.sh                       # 전체 가동 (watcher + backend + frontend + daemon)
+bash scripts/step5_run_dev.sh                       # 전체 가동
 bash scripts/step5_run_dev.sh --stop                # 정지
 curl -s http://localhost:8000/wiki/_meta/stats | jq # wiki 상태 확인
 ```
