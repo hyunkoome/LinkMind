@@ -20,6 +20,9 @@ import type { GraphResponse } from "@/types/graph";
 
 const EMPTY: GraphResponse = { nodes: [], edges: [] };
 
+// 중앙(위키) 패널 최소 폭(px) — 좌/우 드래그 시 이만큼은 남김.
+const MIN_CENTER = 80;
+
 // 두 그래프 응답을 union (사용자 요구: 클릭 시 누적, 유니온 스테이션 hub-spoke).
 // dedup 은 node.data.id / edge.data.id 기준 — backend 가 같은 id 일관 발행.
 function mergeGraph(prev: GraphResponse, add: GraphResponse): GraphResponse {
@@ -66,31 +69,34 @@ export default function HomePage() {
     try {
       const l = window.localStorage.getItem("linkmind:graph-leftW");
       const r = window.localStorage.getItem("linkmind:graph-rightW");
-      // 저장된 값 clamp. max 는 넉넉히 — 중앙을 충분히 줄일 수 있게 (좌/우 키우면 중앙 축소)
-      if (l) setLeftW(Math.max(160, Math.min(700, Number(l))));
-      if (r) setRightW(Math.max(180, Math.min(1100, Number(r))));
+      // 저장된 값 clamp. max 는 화면 기준 동적 — 중앙 MIN_CENTER 만 남도록 허용.
+      if (l) setLeftW(Math.max(160, Math.min(window.innerWidth - MIN_CENTER - 180, Number(l))));
+      if (r) setRightW(Math.max(180, Math.min(window.innerWidth - MIN_CENTER - 160, Number(r))));
     } catch {
       /* ignore */
     }
   }, []);
+  // max 는 동적 — 중앙에 최소 MIN_CENTER 만 남기고 양쪽 거의 끝까지 줄일 수 있게.
   const onLeftResize = useCallback((clientX: number) => {
-    const w = Math.max(160, Math.min(700, clientX));
+    const maxL = Math.max(160, window.innerWidth - rightW - MIN_CENTER);
+    const w = Math.max(160, Math.min(maxL, clientX));
     setLeftW(w);
     try {
       window.localStorage.setItem("linkmind:graph-leftW", String(w));
     } catch {
       /* ignore */
     }
-  }, []);
+  }, [rightW]);
   const onRightResize = useCallback((clientX: number) => {
-    const w = Math.max(180, Math.min(1100, window.innerWidth - clientX));
+    const maxR = Math.max(180, window.innerWidth - leftW - MIN_CENTER);
+    const w = Math.max(180, Math.min(maxR, window.innerWidth - clientX));
     setRightW(w);
     try {
       window.localStorage.setItem("linkmind:graph-rightW", String(w));
     } catch {
       /* ignore */
     }
-  }, []);
+  }, [leftW]);
 
   const pushHistory = useCallback(() => {
     setHistory((prev) => [
