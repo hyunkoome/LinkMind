@@ -736,3 +736,91 @@ PDF 의 pypdf garbage) 로 검색 score 가 낮음. summary 는 정상 한국어
 안 됨. 단기 fix (summary chunk 추가 / PDF re-extract) 는 D10 llm_wiki 가 검색
 패턴 재설계 (chunk cosine → wiki 페이지 retriever) 하므로 redundant. memory
 [[project-search-quality-issue]] 보존.
+
+
+---
+
+## D15. 위키/키워드/사진 대정비 ✅ 완료 (2026-05-29) — 한 세션, 다수 commit
+
+D10.6 wiki 중복 fix 로 시작해 키워드 정규화·Settings 연동·사진→위키 figure 연결·
+ingest going-forward fix 까지 확장. 모두 사용자 검증 완료.
+
+### D15.1 D10.6 wiki 중복 fix ✅ (생성측 A/A2 + 정리측 B + rehome)
+- **A** — classifier (`backend/agents/classifier.py`): topics→wiki 승격에 `it.confidence`
+  반영. `_select_identity_topics_for_wiki` — confidence≥0.9 자기 정체성 topic 만 wiki,
+  0.7 cross-modal 단서는 관계로만. (옛 코드는 confidence 무시 → 같은 자료가 여러 wiki.)
+- **A2** — `backend/utils/external_ids.py` `native_identity_external_id(source_type,url,ids)`:
+  정체성을 자료 *자기 타입/URL* 에서만 (youtube→yt, github→github, pdf→arxiv·doi,
+  url/메모→자기 URL). 콘텐츠(설명란/README) 링크는 0.7 관계. 진짜 근본 원인 = 옛
+  `primary_external_id` 가 source_type 무시 + 고정순위라 youtube 설명란 github 가 정체성
+  가로챔. `auto_link_topics` 가 url= 받고 primary=None 일 때도 본문 link 0.7 보존.
+- **B** — `backend/jobs/cleanup_duplicate_wikis.py` (native-identity 기준):
+  T1 self_wiki(url__item__) 가 native 외부 wiki 도 가지면 merge (1,591). T2 외부 prefix
+  인데 아무 item 도 native 소유 안 함(phantom) 삭제 (8,660). item_topics·agent_runs 보존.
+  `--dry-run`/`--t1-only`/`--t2-only`/`--rehome-orphans`. 25,621 → ~15k wiki.
+- **rehome** — cleanup 후 wiki 없어진 item 에 self_wiki 보장 (idempotent §2: DB item 은
+  전부 비중복 → 모두 정체성 wiki 보유). `--rehome-orphans`.
+- 진단 정정: 원래 메모의 confidence 방향/"같은 item primary 공유 grouping" 이 틀림.
+  [[project-wiki-dedup-diagnosis]].
+
+### D15.2 키워드 정규화 + Settings/DB 연동 ✅
+- `backend/utils/keywords.py` — `normalize_keyword` : **영문 only**(CJK/한글/일본어 삭제) +
+  소문자-대시 slug (camelCase·약어 분리: TreeAIBox→tree-ai-box) + **알려진 약어**
+  (LiDAR→lidar, GitHub→github, IoT→iot, CMake→cmake …) + **별칭**
+  (3d-gaussian-splatting/gaussian-splatting→3dgs) + dedup. `set_keyword_config` 런타임.
+- **Settings 페이지 + DB 연동**: app_settings `keyword_acronyms`/`keyword_aliases` (텍스트),
+  `runtime_settings.update_keyword_config`, API `GET/PUT /settings/keywords` +
+  `POST /settings/keywords/reapply`. frontend Settings 에 '🔤 키워드 정규화' 섹션
+  (약어/별칭 textarea + 저장 + 기존 데이터에 적용). **앞으로 약어는 사용자가 직접 추가.**
+- backfill `backend/jobs/normalize_keywords.py` (전체 재정규화, reapply_all 공용).
+- `_SEARCH_KEYWORDS_SQL` garbage 필터('---' 등 제외).
+
+### D15.3 writer max_tokens 1024 → 2048 ✅
+- 한국어 wiki 가 completion 1024 에서 잘려 **마지막 ## Keywords 섹션 누락** → 키워드 0.
+  2048 로 7 섹션+Keywords 완주. 옛 1024 합성 wiki 다수 키워드 잘림 — 재합성 시 복구.
+
+### D15.4 키워드 cloud UI + wiki list 정렬/필터 ✅ (`frontend/app/wiki/page.tsx`)
+- 좌측 사이드바 키워드 cloud — 빈도순, '더 보기'(점진 로드)/'전부'/'접기', 검색창
+  (빈도 무관 전체 접근), 파랑 색상, ☆/⭐ 즐겨찾기 마크.
+- wiki list 정렬 select (날짜순 최신/오래된 · 가나다 오름/내림), 다중 키워드 **AND** 필터
+  (`?keyword=A&keyword=B`, 카드 pill·필터 chip 토글).
+
+### D15.5 사진 → 위키 figure 연결 + ingest going-forward ✅
+- 문제: 텔레그램 '사진+URL캡션' 한 메시지가 사진/URL 2 item 으로 쪼개져 사진이 고아
+  photo 위키(self_wiki) 가 됨 (1,817건).
+- `backend/jobs/link_photo_captions.py` — caption URL 역추적(`first_url`+external_id 정규화)
+  → 그 URL 의 위키에 **figure 소스로 link** (1,645) + 단독 photo(스크린샷 중복) item+wiki
+  삭제 (172, 이미지는 volumes 보존). `--delete-standalone`.
+- 뷰어 fix: wiki Sources 의 `/files/<hash>` 이미지를 절대경로(:8000) inline 표시 (옛 상대경로
+  → :3001 404).
+- **going-forward**: (A) telegram ingest — URL 없는 단독 첨부(사진) skip → 텔레그램 잔류
+  (`is_ingest_successful=False` 라 미삭제). (B) classifier — 사진+URL캡션 → caption 위키에
+  figure link + self_wiki 스킵 (위키 미존재 시 self fallback → 주기 link_photo_captions 보정).
+
+### 검증
+- cpu 테스트 493 passed. frontend tsc OK. 사용자 라이브 검증 (사진+URL → figure, 사진만 → 잔류).
+
+---
+
+## 🎯 다음 세션 — 여기부터 (간단명료)
+
+> 위 D1~D15 + Phase A~C 거의 다 ✅. wiki/키워드/사진 모델 정비 끝. 이제:
+
+**1순위 — D10.5 세션 A: graph ↔ wiki inline (1 세션)**
+- 그래프에서 자료(노드) 클릭 → 우측 ItemDetails 패널에 그 자료의 **wiki 본문을 inline** 표시
+  (별 페이지 이동 X). 현재는 그래프와 wiki 가 분리돼 있음.
+- 할 일: `GET /items/{id}` 에 `wiki_page_items` 조인 (자료가 속한 wiki list 반환) →
+  `frontend/components/ItemDetails.tsx` 에 WikiBody 컴포넌트 재사용해 본문 표시 + keywords pill.
+- 왜 1순위? 사용자가 직접 써보고 graph↔wiki 통합 mental model 검증 → B/C 의사결정.
+
+**2순위 — D10.5 세션 B: categories → keywords 전환 (1-2 세션)**
+- 옛 `categories` 테이블 + `auto_link_categories` + 좌측 카테고리 트리 폐기 → keyword 기반
+  재구성 (이제 키워드 정규화 인프라 갖춰짐). 그래프 좌측 트리 `keyword ▸ wiki ▸ item`.
+
+**그 외 backlog**
+- D10 wave-3 critic agent / `/ask` Step 2·3 (대화 history + filing-back)
+- D8 cross-modality matching, D9 arxiv title 재시드
+- link_photo_captions 자동화 (daemon/주기) — 원하면
+- (장기) dataset exporter → Phase 4 sVLL LoRA 학습
+
+> 운영: `bash scripts/step5_run_dev.sh` 전체 기동. 키워드/약어는 **Settings 페이지**에서 편집.

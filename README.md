@@ -43,12 +43,22 @@ GitHub · Arxiv · YouTube · Image           (Phase 3+: Slack/WhatsApp/Discord)
         - /ask 대화형 RAG (Step 1)
         - wiki list UX (4 tab + pagination + ETA + 7 필드 검색)
 
-        [D10.6 wiki 중복 fix — 2026-05-28 진단 끝, 다음 세션 🔴]
+        [D10.6 wiki 중복 fix — 2026-05-29 완료 ✅]
         - 증상: 같은 자료 1개가 wiki 여러 개로 쪼개짐
           (yt__ / github__ / url__item__ 동시 primary)
-        - 원인 A: classifier 가 cross-modal 단서(conf 0.7)도 primary wiki 승격
-        - 원인 B: merge job title 기준 + min_len 20 → 한국어 짧은 제목 0건
-        - fix: classifier 는 자기 정체성 topic 만 primary, merge 는 item 기준 패스
+        - 근본 원인: primary_external_id 가 source_type 무시 → 영상 설명란
+          github 가 영상 자신 yt 를 이김 (랭킹 버그)
+        - fix A: classifier 가 confidence≥0.9 자기 정체성 topic 만 primary wiki
+        - fix A2: native_identity_external_id (정체성은 자기 타입/URL 에서만)
+        - fix B: cleanup_duplicate_wikis (T1 self→native merge 1,591 + T2 phantom)
+        → "1 링크 = 1 위키" (25,621 → ~15k wikis)
+
+        [키워드/사진 대정비 — 2026-05-29 완료 ✅]
+        - 키워드 정규화: CJK/한글 삭제(영문만) + camelCase 분해 + 약어/별칭
+          (LiDAR→lidar, 3d-gaussian-splatting→3dgs 등) — Settings + DB 편집 가능
+        - 키워드 클라우드 (wiki 좌측 사이드바, 빈도순 progressive + ⭐ 즐겨찾기)
+        - 사진 → 위키 figure 연결: 텔레그램 '사진+URL' = 본문 figure 로 link
+          (standalone 사진 위키 삭제, raw 이미지 보존). 사진만 메시지는 ingest X
                            │
                            ▼
            (Phase 3 후반) dataset exporter
@@ -458,6 +468,7 @@ LinkMind 는 backend (`backend/`) + multi-channel gateway (`ai_agents/`) + Strea
 | **D12 placeholder/실패 자료 정리 (2026-05-25)** | §2 raw-first 의 확장 — 본문 fetch 실패해도 raw + URL + provenance 무조건 DB 보존 + 사용자 수동 보강 UI. **Wave-1** (commit 39a82d1): `backend/jobs/mark_fetch_failed.py` 자동 분류 (2594건 마킹: image_no_ocr 1751 / extraction_failed 806 / binary 36 / short 1). `GET /items` list + facets drilldown + POST `/items/{id}/notes` (user_notes append) + `/categories/{slug}` (manual link). `frontend/app/cleanup/` — FilterSidebar + ItemCard (이미지 grid) + ActionPanel (kind별 hint). 32 단위 테스트. **Wave-2** (commit aba9f65): Slack manifest 재처리 — `backend/db/repository.merge_source_metadata` + Slack URL 분기 slack provenance 보강 + `backend/jobs/ingest_slack_manifest.py` (placeholder 633 메타 보강 + exception 320 wave-5/D13 fix 흐름 재시도). 결과: 915 / 953 (96%) DB 등록, unresolved 38건만 진짜 손실 (YouTube 영상 삭제 37 + 깨진 URL 1). 14 테스트. **Slack 정리**: `archive/slack_export/` 628MB 삭제 (DB items 1307 + volumes/archive 4.7GB 보존 검증). **Wave-3** (commit 269b3b5): `DELETE /items/{id}` + ActionPanel 의 2단계 confirm 영구 삭제 UI. 진짜 사라진 자료 (영상 삭제 / 도메인 죽음 / HTTP 429 영구 차단) 정리. Qdrant points + Postgres CASCADE (chunks / attachments / item_topics 자동 삭제). §11 Privacy §4 (삭제 권리) 부합. | ✅ 완료 |
 | **D10 llm_wiki 아키텍처 wave-1+2 (2026-05-26)** | karpathy llm_wiki + multi-agent (physics-intern state-centric) + YAML prompt (ml-intern) 차용. **wave-1**: schema 4 테이블 + 4 agent (classifier/retriever/writer + critic stub) + wiki API 8 endpoints + Qdrant body embedding 검색 + frontend rename (frontend_v2 → frontend, 44 refs) + `/wiki/` list+detail+KeywordsEditor view/edit + backfill 23,852 pages. **wave-2c**: analysis_worker classifier hook (텔레그램 신규 ingest 자동 wiki 분류). **wave-2d**: keywords 진화 (schema TEXT[] + writer prompt 자동 추출 + 3 API + KeywordsEditor view/edit + matching wiki filter + ✨ 신규 등록). **arxiv URL hook** (`backend/ingest/arxiv/`, 신규 arxiv/IEEE/DOI 진짜 제목). **daemon 분리**: `wiki_writer_worker` (lifespan, stale 만, 신규 ingest 자동) + `wiki_writer_batch` CLI (empty+stale, 사용자 직접). **성능 4.6x**: vLLM prefix-caching + max-num-batched-tokens 16384 + max_tokens 1024 + concurrent N=4 → 17초/page → 3.7초/page. ETA 4.7일 → ~1일. | ✅ 완료 |
 | **D11 wiki 중심 UX 통합 (2026-05-27, 26 commits)** | D10 위에 사용자 mental model 정리. **(1) wiki 중심 통합** — `frontend/app/cleanup/` + `frontend/app/search/` 디렉토리 폐기, Header nav 단순화 (graph / ingest / Ask / wiki / settings). **(2) status 모델 통일** — DB `body_status` 3종 (issues / pending / completed) + `body_processing_started_at` sub-state (5분 안 = generating blue animate-pulse, 그 외 = queuing amber). 옛 명명 (empty/stale/ready/generating) 완전 폐기. **(3) wiki list UX 강화** — 4 status tab + pagination 상하 + 페이지당 라디오 (10/50/100) + ETA (시간+분, 1초/page) + URL query sync (?page/?page_size/?status/?q/?keyword) + **completed 만 클릭** (중복 처리 방지) + 정렬 (전체: status 그룹 + 알파벳 / pending: generating 우선) + 일괄 합성 버튼 항상 노출. **(4) classifier 1:1 fallback wiki** — `role='self'` wiki 항상 INSERT (사용자 자료 1순위). **(5) daemon = batch (concurrency 4 통일)** — sequential → asyncio.gather, ON CONFLICT DO NOTHING (race-free). **(6) GET /wiki/{slug} lazy 합성 제거** — `?regenerate=true` 만 LLM. **(7) `/ask` 신규 페이지 (Step 1)** — 2-column 대화형 RAG (좌 chat + citation + related_wikis / 우 wiki detail). **(8) 텔레그램 watcher classifier hook** — `ingest_telegram_message` 끝에 fire-and-forget `asyncio.create_task` (in-process 흐름). **(9) bare domain URL regex** (unite.ai 자동 https://) + **dedup URL 보존** (`source_metadata.alt_urls` 누적). **(10) wiki 검색 7 필드** — title/desc/slug/body + items.title/source_url/user_notes + alt_urls + keywords. **(11) step5 turbopack 캐시 자동화** + `--clean-cache`. 383/383 cpu PASS. | ✅ 완료 |
+| **D10.6 wiki 중복 fix + 키워드/사진 대정비 (2026-05-29)** | **"1 링크 = 1 위키" 강제** + 키워드 정규화 + 사진 figure 연결. **(A) classifier fix** — `_select_identity_topics_for_wiki` (confidence≥0.9 자기 정체성 topic 만 primary wiki, cross-modal 단서는 0.7 link). **(A2) 상류 근본 fix** — `native_identity_external_id(source_type,url,ids)` 신규 (정체성은 자기 타입/URL 에서만: youtube→yt, github→github, pdf→arxiv·doi). 옛 `primary_external_id` 가 source_type 무시하고 고정 순위(arxiv>doi>github>yt)로 골라 영상 설명란 github 가 영상 자신 yt 를 이기던 버그. **(B) 기존 데이터 정리** — `backend/jobs/cleanup_duplicate_wikis.py` (T1 self_wiki→native merge 1,591 + T2 phantom 삭제 + orphan rehome). 25,621 → ~15k. **(키워드 정규화)** — `backend/utils/keywords.py` + `normalize_keywords.py` job: CJK/한글 삭제(영문만) + camelCase 분해 (`CloudCompare`→`cloud-compare`) + 약어 병합 (LiDAR→lidar, GitHub→github, IoT→iot, CMake→cmake) + 별칭 (3d-gaussian-splatting/gaussian-splatting/3d-gs→3dgs). **약어/별칭 목록 Settings 페이지 + DB 편집 가능** (`/settings/keywords` GET/PUT + reapply). **(키워드 클라우드)** — wiki 좌측 사이드바, 빈도순 progressive load (더보기/전부/접기) + 검색 + 다중 키워드 AND filter + 🔵 파란 chip + ⭐ 즐겨찾기. writer max_tokens 1024→2048 (Keywords 섹션 truncation 해결). **(사진 → figure)** — `backend/jobs/link_photo_captions.py`: 텔레그램 '사진+URL caption' = 본문 figure 로 link (1,645건) + standalone 사진 위키 삭제 (172건, raw 이미지 보존). 신규 ingest: 사진+URL=figure link / 사진만=ingest 안 함(텔레그램에 남김). 493 cpu PASS. | ✅ 완료 |
 | **D10.5 재정의 — graph ↔ wiki ↔ 카테고리 데이터 흐름 통합 (3 세션)** | 사용자 통찰 (2026-05-27): 자료 클릭 시 wiki 링크 안 보이고, 카테고리 ↔ wiki keywords 별 시스템. 사용자 결정: (1) wiki keywords 로 통합 (`categories` 테이블 + `auto_link_categories` job + 카테고리 트리 폐기), (2) 그래프 자료 클릭 → 우측 ItemDetails 패널 안에 wiki body inline (별 페이지 X). **세션 A**: `GET /items/{id}` 에 `wiki_page_items` 조인 + ItemDetails 에 user_notes textarea + wiki body inline (WikiBody 재사용) + 여러 wiki 면 탭 + keywords pill. **세션 B**: 66 categories → 대표 keyword 매핑 + `/graph/categories` 재설계 + TopicsTree `keyword ▸ wiki ▸ item` + 옛 categories 시스템 삭제. **세션 C (선택)**: `/wiki` 검색 + graph + `/ask` 페이지 일원화. | 🚧 다음 (세션 A 부터) |
 | 후속 backlog | D10 wave-3 critic agent / /ask Step 2/3 (대화 history + filing-back) / D12-4 wiki 기반 자료 보강 / D8 cross-modality / D10 lint / dataset exporter (Phase 3 후반) | future |
 | D9/D11/D8 | D9 arxiv title 재시드 (이미 신규 ingest hook 으로 자동) → D11 카테고리 UI 편집 (keywords API 패턴 재사용) → D8 cross-modality matching (wiki body 안 자연) | |
@@ -469,11 +480,19 @@ LinkMind 는 backend (`backend/`) + multi-channel gateway (`ai_agents/`) + Strea
 
 자세한 backlog 와 phase 별 완료/미구현 항목 — `docs/features_backlog.md` + `CLAUDE.md §13` 참고.
 
-### 다음 세션 진입 순서 (2026-05-27 갱신, D10.5 재정의 후)
+### 다음 세션 진입 순서 (2026-05-29 갱신, D10.6 완료 후)
 
 **완료까지의 흐름**:
 - ✅ D10 wave-1+2 (2026-05-26) — schema + 4 agent + wiki API + backfill 시작
 - ✅ D11 (2026-05-27, 26 commits) — UX 통합 + status 3종 + classifier 1:1 fallback + /ask Step 1
+- ✅ D10.6 (2026-05-29) — wiki 중복 fix ("1 링크 = 1 위키") + 키워드 정규화/클라우드 + 사진 figure 연결
+
+**🎯 다음 세션 1순위 — D10.5 세션 A (graph ↔ wiki inline, 1 세션)**:
+1. `GET /items/{id}` 에 `wiki_page_items` 조인 (자료가 속한 wiki list 반환)
+2. `frontend/components/ItemDetails.tsx` 에 user_notes textarea (backend POST 이미 동작)
+3. ItemDetails 에 wiki body inline (`WikiBody` 컴포넌트 재사용, 자료의 1번째 wiki)
+4. 여러 wiki 면 탭 / keywords pill 표시
+→ 사용자가 직접 써보고 세션 B/C 의사결정
 
 **backfill 잔여는 D11 daemon=batch (concurrency 4) 가 자동 처리** —
 `curl -s http://localhost:8000/wiki/_meta/stats | jq` 로 확인.
