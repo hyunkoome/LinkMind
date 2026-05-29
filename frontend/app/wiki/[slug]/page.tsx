@@ -19,6 +19,7 @@ import { use, useEffect, useState } from "react";
 import KeywordsEditor from "@/components/wiki/KeywordsEditor";
 import WikiBody from "@/components/wiki/WikiBody";
 import {
+  API_BASE,
   deleteWikiPage,
   getWikiPage,
   regenerateWikiPage,
@@ -307,18 +308,42 @@ export default function WikiDetailPage({ params }: PageProps) {
                     className="text-xs text-zinc-700 dark:text-zinc-300"
                   >
                     <span className="text-zinc-400 mr-1">[{i + 1}]</span>
-                    {s.source_url ? (
-                      <a
-                        href={s.source_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-blue-600 dark:text-blue-400 hover:underline"
-                      >
-                        {s.title || s.item_id.slice(0, 8)}
-                      </a>
-                    ) : (
-                      <span>{s.title || s.item_id.slice(0, 8)}</span>
-                    )}
+                    {(() => {
+                      // source_url 이 /files/<hash> (backend 첨부) 면 절대경로(:8000)로.
+                      // 상대경로면 frontend(:3001)로 가서 404 (2026-05-29 fix).
+                      const isFile = !!s.source_url && s.source_url.startsWith("/files/");
+                      const href = isFile ? `${API_BASE}${s.source_url}` : s.source_url;
+                      return (
+                        <>
+                          {href ? (
+                            <a
+                              href={href}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-blue-600 dark:text-blue-400 hover:underline"
+                            >
+                              {s.title || s.item_id.slice(0, 8)}
+                            </a>
+                          ) : (
+                            <span>{s.title || s.item_id.slice(0, 8)}</span>
+                          )}
+                          {/* 첨부(이미지 등) inline 미리보기 — 이미지가 아니면 onError 로 숨김 */}
+                          {isFile && (
+                            <a href={href!} target="_blank" rel="noopener noreferrer"
+                               className="block mt-1">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                src={href!}
+                                alt={s.title || "attachment"}
+                                loading="lazy"
+                                onError={(e) => { e.currentTarget.style.display = "none"; }}
+                                className="max-h-48 rounded border border-zinc-200 dark:border-zinc-800"
+                              />
+                            </a>
+                          )}
+                        </>
+                      );
+                    })()}
                     <div className="text-[10px] text-zinc-500 mt-0.5">
                       {s.source_type}
                       {s.confidence !== null &&
