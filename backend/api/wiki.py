@@ -947,7 +947,10 @@ _UPDATE_KEYWORDS_API_SQL = text("""
 _SEARCH_KEYWORDS_SQL = text("""
     SELECT keyword, COUNT(*) AS usage_count
     FROM wiki_pages, UNNEST(keywords) AS keyword
-    WHERE CAST(:q AS TEXT) IS NULL OR keyword ILIKE '%' || CAST(:q AS TEXT) || '%'
+    WHERE (CAST(:q AS TEXT) IS NULL OR keyword ILIKE '%' || CAST(:q AS TEXT) || '%')
+      -- garbage 제외 (2026-05-29): 빈 값 + 순수 대시/구두점/공백 (예: '---').
+      AND TRIM(keyword) <> ''
+      AND keyword !~ '^[-_.[:space:][:punct:]]+$'
     GROUP BY keyword
     ORDER BY usage_count DESC, keyword ASC
     LIMIT :limit

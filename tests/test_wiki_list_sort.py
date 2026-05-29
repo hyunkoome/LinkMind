@@ -67,3 +67,12 @@ def test_group_order_preserved():
     sql = str(_build_list_sql("alpha"))
     assert "wp.is_pinned DESC" in sql
     assert "body_processing_started_at IS NOT NULL" in sql  # pending generating 우선
+
+
+def test_keyword_search_excludes_garbage():
+    """키워드 cloud/autocomplete SQL 이 빈 값·순수 구두점('---') 제외 (2026-05-29)."""
+    from backend.api.wiki import _SEARCH_KEYWORDS_SQL
+
+    sql = str(_SEARCH_KEYWORDS_SQL)
+    assert "TRIM(keyword) <> ''" in sql
+    assert "!~" in sql  # 순수 대시/구두점만인 키워드 제외 regex

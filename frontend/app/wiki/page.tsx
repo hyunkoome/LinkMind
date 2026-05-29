@@ -4,7 +4,8 @@
  * D10 wave-1g — /wiki — wiki page list.
  *
  * 기능:
- *  - filter (status tab / q text / keyword)
+ *  - filter (status tab / q text / 다중 키워드 AND)
+ *  - 상단 키워드 cloud (2026-05-29): 빈도순 상위 키워드 클릭 토글 선택 (접기/펼치기)
  *  - 정렬 select (2026-05-29): 날짜순 최신/오래된 · 가나다 오름/내림 (URL ?sort=)
  *  - pagination (페이지당 10/50/100)
  *  - 각 page card 클릭 → /wiki/[slug] 상세 (completed 만)
@@ -20,6 +21,8 @@ import {
   batchRegenerateWiki,
   getWikiStats,
   listWikiPages,
+  searchWikiKeywords,
+  type WikiKeywordSuggestion,
   type WikiPageListItem,
   type WikiSort,
   type WikiStatsResponse,
@@ -27,6 +30,10 @@ import {
 
 const PAGE_SIZE_OPTIONS = [10, 50, 100] as const;
 const DEFAULT_PAGE_SIZE = 50;
+
+// 상단 키워드 cloud — distinct 키워드 90k+ 라 전부는 불가. 빈도순 상위만.
+const TOP_KEYWORDS_LIMIT = 50;     // fetch 개수
+const COLLAPSED_KEYWORDS = 24;     // 접힌 상태 표시 개수
 
 // 정렬 옵션 (2026-05-29) — 날짜는 합성 시각(body_generated_at) 우선. URL ?sort= 동기화.
 const SORT_OPTIONS: { key: WikiSort; label: string }[] = [
@@ -121,6 +128,15 @@ export default function WikiListPage() {
 
   // 상태별 count — tab UI + 일괄 합성 버튼 라벨 (2026-05-27)
   const [stats, setStats] = useState<WikiStatsResponse | null>(null);
+
+  // 상단 키워드 cloud (2026-05-29) — 빈도순 상위. mount 시 1회 fetch + 접기/펼치기.
+  const [topKeywords, setTopKeywords] = useState<WikiKeywordSuggestion[]>([]);
+  const [keywordsExpanded, setKeywordsExpanded] = useState(false);
+  useEffect(() => {
+    searchWikiKeywords("", TOP_KEYWORDS_LIMIT)
+      .then((r) => setTopKeywords(r.suggestions))
+      .catch(() => {});
+  }, []);
 
   // 일괄 합성 — ready (처리 실패 reset 또는 default INSERT 자료) 강제 재처리용.
   // 2026-05-27 사용자 명시: pending 은 daemon 이 자동 처리하지만 ready 는 fetch
@@ -288,6 +304,67 @@ export default function WikiListPage() {
             한국어 markdown 본문을 합성합니다 (vLLM Qwen2.5-7B).
           </p>
         </header>
+
+        {/* 키워드 cloud (2026-05-29) — 빈도순 상위 키워드. 클릭하면 토글 선택
+            (다중 = AND). distinct 90k+ 라 자주 쓰는 것만 노출 + 접기/펼치기. */}
+        {topKeywords.length > 0 && (
+          <div className="mb-4 p-3 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-medium text-zinc-600 dark:text-zinc-400">
+                🔖 키워드로 찾기{" "}
+                <span className="font-normal text-zinc-400">
+                  (자주 쓰는 순 · 클릭해서 다중 선택)
+                </span>
+              </span>
+              {topKeywords.length > COLLAPSED_KEYWORDS && (
+                <button
+                  type="button"
+                  onClick={() => setKeywordsExpanded((v) => !v)}
+                  className="text-[11px] text-orange-600 dark:text-orange-400 hover:underline whitespace-nowrap ml-2"
+                >
+                  {keywordsExpanded
+                    ? "접기 ▴"
+                    : `더 보기 (+${topKeywords.length - COLLAPSED_KEYWORDS}) ▾`}
+                </button>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {(keywordsExpanded
+                ? topKeywords
+                : topKeywords.slice(0, COLLAPSED_KEYWORDS)
+              ).map((s) => {
+                const selected = keywordFilters.includes(s.keyword);
+                return (
+                  <button
+                    key={s.keyword}
+                    type="button"
+                    onClick={() => toggleKeyword(s.keyword)}
+                    title={
+                      selected
+                        ? `'${s.keyword}' 필터 해제`
+                        : `'${s.keyword}' 추가 (${s.usage_count}개 wiki)`
+                    }
+                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] border transition ${
+                      selected
+                        ? "border-orange-500 bg-orange-500 text-white dark:bg-orange-600 dark:border-orange-500 font-medium"
+                        : "border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/60 text-zinc-700 dark:text-zinc-300 hover:border-orange-400 hover:text-orange-600 dark:hover:text-orange-400"
+                    }`}
+                  >
+                    {selected && <span>✓</span>}
+                    <span>{s.keyword}</span>
+                    <span
+                      className={
+                        selected ? "opacity-80" : "text-zinc-400 dark:text-zinc-500"
+                      }
+                    >
+                      {s.usage_count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* 다중 키워드 필터 chip (AND) — 선택한 키워드 각각 제거 + 전체 해제 */}
         {keywordFilters.length > 0 && (
