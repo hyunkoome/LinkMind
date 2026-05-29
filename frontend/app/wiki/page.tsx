@@ -33,8 +33,10 @@ const DEFAULT_PAGE_SIZE = 50;
 
 // 상단 키워드 cloud — distinct 키워드 90k+ 라 literally 전부는 브라우저 한계상
 // 불가 (버튼 9만 개 = freeze). 빈도순 상위를 넉넉히 (500) fetch + 펼치면 스크롤.
-const TOP_KEYWORDS_LIMIT = 500;    // fetch 개수 (빈도순 상위)
-const COLLAPSED_KEYWORDS = 30;     // 접힌 상태 표시 개수
+// cloud 점진 로드 — 처음엔 상위 일부만, '더 보기' 로 8배씩 늘려 전부(빈도 1 포함)까지.
+// distinct ~50k 라 한 번에 다 렌더하면 무겁지만, 단계적이라 사용자가 원하는 만큼.
+const CLOUD_INITIAL = 60;          // 초기 표시 개수
+const CLOUD_GROW = 8;              // '더 보기' 배수
 
 // 정렬 옵션 (2026-05-29) — 날짜는 합성 시각(body_generated_at) 우선. URL ?sort= 동기화.
 const SORT_OPTIONS: { key: WikiSort; label: string }[] = [
@@ -130,14 +132,19 @@ export default function WikiListPage() {
   // 상태별 count — tab UI + 일괄 합성 버튼 라벨 (2026-05-27)
   const [stats, setStats] = useState<WikiStatsResponse | null>(null);
 
-  // 상단 키워드 cloud (2026-05-29) — 빈도순 상위. mount 시 1회 fetch + 접기/펼치기.
+  // 상단 키워드 cloud (2026-05-29) — 빈도순. cloudLimit 만큼 fetch, '더 보기' 로
+  // 8배씩 늘려 전부(빈도 1 포함)까지 점진 로드. keywordTotal = 전체 distinct 개수.
   const [topKeywords, setTopKeywords] = useState<WikiKeywordSuggestion[]>([]);
-  const [keywordsExpanded, setKeywordsExpanded] = useState(false);
+  const [keywordTotal, setKeywordTotal] = useState(0);
+  const [cloudLimit, setCloudLimit] = useState(CLOUD_INITIAL);
   useEffect(() => {
-    searchWikiKeywords("", TOP_KEYWORDS_LIMIT)
-      .then((r) => setTopKeywords(r.suggestions))
+    searchWikiKeywords("", cloudLimit)
+      .then((r) => {
+        setTopKeywords(r.suggestions);
+        setKeywordTotal(r.total);
+      })
       .catch(() => {});
-  }, []);
+  }, [cloudLimit]);
 
   // 키워드 cloud 내 검색 (2026-05-29) — distinct 50k+ 라 cloud 는 빈도순 상위만.
   // 빈도 낮은 키워드(예: point-cloud-compression)도 검색으로 찾아 선택 가능.
@@ -359,35 +366,58 @@ export default function WikiListPage() {
           </p>
         </header>
 
-        {/* 키워드 cloud (2026-05-29) — 빈도순 상위 + 검색. 클릭하면 토글 선택
-            (다중 = AND). distinct 50k+ 라 cloud 는 상위만 + 검색으로 전부 접근. */}
+        {/* 키워드 cloud (2026-05-29) — 빈도순, '더 보기' 로 전부(빈도 1 포함)까지
+            점진 로드. 클릭하면 토글 선택 (다중 = AND). 검색창으로 바로 찾기도 가능. */}
         {(topKeywords.length > 0 || kwQuery) && (
           <div className="mb-4 p-3 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900">
             <div className="flex items-center justify-between mb-2">
               <span className="text-xs font-medium text-zinc-600 dark:text-zinc-400">
                 ⭐ 키워드로 찾기{" "}
                 <span className="font-normal text-zinc-400">
-                  (클릭해서 다중 선택 · AND)
+                  {kwQuery
+                    ? "(검색)"
+                    : `(${topKeywords.length.toLocaleString()} / ${keywordTotal.toLocaleString()} · 클릭 다중선택 AND)`}
                 </span>
               </span>
-              {!kwQuery && topKeywords.length > COLLAPSED_KEYWORDS && (
-                <button
-                  type="button"
-                  onClick={() => setKeywordsExpanded((v) => !v)}
-                  className="text-[11px] text-blue-600 dark:text-blue-400 hover:underline whitespace-nowrap ml-2"
-                >
-                  {keywordsExpanded
-                    ? "접기 ▴"
-                    : `더 보기 (+${topKeywords.length - COLLAPSED_KEYWORDS}) ▾`}
-                </button>
+              {!kwQuery && (
+                <span className="flex items-center gap-2 whitespace-nowrap ml-2">
+                  {topKeywords.length < keywordTotal && (
+                    <button
+                      type="button"
+                      onClick={() => setCloudLimit((l) => Math.min(keywordTotal, l * CLOUD_GROW))}
+                      className="text-[11px] text-blue-600 dark:text-blue-400 hover:underline"
+                    >
+                      더 보기 ▾
+                    </button>
+                  )}
+                  {topKeywords.length < keywordTotal && (
+                    <button
+                      type="button"
+                      onClick={() => setCloudLimit(keywordTotal)}
+                      className="text-[11px] text-blue-600 dark:text-blue-400 hover:underline"
+                      title={`전체 ${keywordTotal.toLocaleString()}개 로드 (많으면 잠시 느려질 수 있음)`}
+                    >
+                      전부
+                    </button>
+                  )}
+                  {cloudLimit > CLOUD_INITIAL && (
+                    <button
+                      type="button"
+                      onClick={() => setCloudLimit(CLOUD_INITIAL)}
+                      className="text-[11px] text-zinc-500 hover:underline"
+                    >
+                      접기 ▴
+                    </button>
+                  )}
+                </span>
               )}
             </div>
-            {/* 검색 — 빈도 낮은 키워드도 찾기 (cloud 는 상위만 노출하므로) */}
+            {/* 검색 — 특정 키워드 바로 찾기 (빈도 무관) */}
             <input
               type="search"
               value={kwQuery}
               onChange={(e) => setKwQuery(e.target.value)}
-              placeholder="키워드 검색 (빈도 낮은 것도 — 예: point-cloud-compression)…"
+              placeholder="키워드 검색 (예: point-cloud-compression)…"
               className="w-full mb-2 px-2.5 py-1 text-xs rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100"
             />
             {kwQuery.trim() ? (
@@ -403,13 +433,10 @@ export default function WikiListPage() {
             ) : (
               <div
                 className={`flex flex-wrap gap-1.5 ${
-                  keywordsExpanded ? "max-h-[45vh] overflow-y-auto pr-1" : ""
+                  topKeywords.length > CLOUD_INITIAL ? "max-h-[45vh] overflow-y-auto pr-1" : ""
                 }`}
               >
-                {(keywordsExpanded
-                  ? topKeywords
-                  : topKeywords.slice(0, COLLAPSED_KEYWORDS)
-                ).map(renderKwChip)}
+                {topKeywords.map(renderKwChip)}
               </div>
             )}
           </div>

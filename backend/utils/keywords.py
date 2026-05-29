@@ -53,6 +53,7 @@ DEFAULT_ACRONYMS: tuple[str, ...] = (
 # 별칭: 정규화된 slug → canonical. 구문/표기 변형 통합.
 DEFAULT_ALIASES: dict[str, str] = {
     "3d-gaussian-splatting": "3dgs",
+    "gaussian-splatting": "3dgs",
     "3d-gs": "3dgs",
 }
 

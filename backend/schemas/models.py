@@ -291,6 +291,7 @@ class WikiKeywordSuggestion(BaseModel):
 class WikiKeywordSearchResponse(BaseModel):
     query: str
     suggestions: list[WikiKeywordSuggestion]
+    total: int = 0      # 매칭되는 distinct 키워드 총 개수 (limit 무관 — '더 보기' 판단용)
 
 
 class WikiPageListItem(BaseModel):

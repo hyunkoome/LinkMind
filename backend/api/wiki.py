@@ -945,16 +945,30 @@ _UPDATE_KEYWORDS_API_SQL = text("""
 
 # unnest 로 모든 wiki_pages 의 keywords 전체 → DISTINCT + ILIKE + 빈도 정렬
 # (대규모 — 23k pages × N keywords, GIN index 가 ILIKE 가속).
-_SEARCH_KEYWORDS_SQL = text("""
+# garbage 제외 조건 (cloud + autocomplete 공용) — 빈 값 + 순수 대시/구두점/공백.
+_KW_GARBAGE_FILTER = """
+    (CAST(:q AS TEXT) IS NULL OR keyword ILIKE '%' || CAST(:q AS TEXT) || '%')
+    AND TRIM(keyword) <> ''
+    AND keyword !~ '^[-_.[:space:][:punct:]]+$'
+"""
+
+_SEARCH_KEYWORDS_SQL = text(f"""
     SELECT keyword, COUNT(*) AS usage_count
     FROM wiki_pages, UNNEST(keywords) AS keyword
-    WHERE (CAST(:q AS TEXT) IS NULL OR keyword ILIKE '%' || CAST(:q AS TEXT) || '%')
-      -- garbage 제외 (2026-05-29): 빈 값 + 순수 대시/구두점/공백 (예: '---').
-      AND TRIM(keyword) <> ''
-      AND keyword !~ '^[-_.[:space:][:punct:]]+$'
+    WHERE {_KW_GARBAGE_FILTER}
     GROUP BY keyword
     ORDER BY usage_count DESC, keyword ASC
     LIMIT :limit
+""")
+
+# 매칭되는 distinct 키워드 총 개수 (limit 무관) — cloud '더 보기' 판단용.
+_COUNT_KEYWORDS_SQL = text(f"""
+    SELECT COUNT(*) FROM (
+        SELECT keyword
+        FROM wiki_pages, UNNEST(keywords) AS keyword
+        WHERE {_KW_GARBAGE_FILTER}
+        GROUP BY keyword
+    ) z
 """)
 
 
@@ -1014,22 +1028,24 @@ async def update_wiki_keywords(
 @router.get("/_keywords/search", response_model=WikiKeywordSearchResponse)
 async def search_keywords(
     q: str | None = Query(default=None, description="prefix/substring 매칭"),
-    # 상단 키워드 cloud 가 빈도순 상위를 대량 fetch (2026-05-29) — le 100 → 2000.
-    # distinct 90k+ 라 '전부' 는 브라우저 한계상 불가, 빈도순 상위로 cap.
-    limit: int = Query(default=20, ge=1, le=2000),
+    # cloud '더 보기' 가 점진적으로 전부까지 fetch (2026-05-29). distinct ~50k 라
+    # 한 번에 다 렌더하면 무겁지만, 사용자가 단계적으로 로드 가능하게 상한 넉넉히.
+    limit: int = Query(default=20, ge=1, le=100000),
     session: AsyncSession = Depends(get_session),
 ) -> WikiKeywordSearchResponse:
-    """전체 wiki_pages 의 keywords UNNEST + DISTINCT — autocomplete.
+    """전체 wiki_pages 의 keywords UNNEST + DISTINCT — cloud/autocomplete.
 
-    q 비면 가장 많이 쓰인 keyword top-N (전체 빈도).
-    q 있으면 ILIKE '%q%' 매칭만.
+    q 비면 가장 많이 쓰인 keyword top-N (전체 빈도). q 있으면 ILIKE '%q%' 매칭만.
+    total = 매칭 distinct 총 개수 (limit 무관) — frontend '더 보기' 가 끝 판단에 사용.
     """
-    rows = (await session.execute(_SEARCH_KEYWORDS_SQL, {
-        "q": q.strip() if q else None,
-        "limit": limit,
-    })).mappings().all()
+    params = {"q": q.strip() if q else None, "limit": limit}
+    rows = (await session.execute(_SEARCH_KEYWORDS_SQL, params)).mappings().all()
+    total = (await session.execute(
+        _COUNT_KEYWORDS_SQL, {"q": params["q"]},
+    )).scalar() or 0
     return WikiKeywordSearchResponse(
         query=q or "",
+        total=int(total),
         suggestions=[
             WikiKeywordSuggestion(keyword=r["keyword"], usage_count=int(r["usage_count"]))
             for r in rows

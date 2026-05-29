@@ -371,6 +371,7 @@ export interface WikiKeywordSuggestion {
 export interface WikiKeywordSearchResponse {
   query: string;
   suggestions: WikiKeywordSuggestion[];
+  total: number;     // 매칭 distinct 키워드 총 개수 (limit 무관 — '더 보기' 판단용)
 }
 
 export interface WikiSearchHit {
