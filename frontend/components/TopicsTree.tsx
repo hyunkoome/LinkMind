@@ -2,17 +2,20 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { sourceTypeColor, topicKindColor } from "@/lib/colors";
+import { KEYWORD_COLOR, sourceTypeColor, wikiKindColor } from "@/lib/colors";
 import { useT } from "@/lib/i18n/context";
 import type { GraphResponse, GraphNodeData } from "@/types/graph";
 
+// D10.5 세션 B — 좌측 트리를 keyword ▸ wiki ▸ item 으로 (옛 category ▸ topic ▸ item 폐기).
+// 엣지 방향: keyword → wiki (source=keyword), wiki → item (source=wiki).
+
 interface TopicsTreeProps {
   data: GraphResponse;
-  /** selectedNodeFullId: "topic:<uuid>" | "category:<uuid>" | "item:<uuid>" | null */
+  /** selectedNodeFullId: "keyword:<kw>" | "wiki:<slug>" | "item:<uuid>" | null */
   selectedNodeFullId: string | null;
   /** selected + 그와 같은 묶음의 모든 노드 fullId. sidebar 부드러운 highlight 에 사용. */
   relatedIds?: Set<string>;
-  /** 클릭한 노드의 fullId (e.g. "category:<uuid>" / "topic:<uuid>") — page.tsx 가 분기 */
+  /** 클릭한 노드의 fullId (e.g. "keyword:<kw>" / "wiki:<slug>") — page.tsx 가 분기 */
   onNodeSelect: (fullId: string) => void;
   onSearchSubmit: (query: string) => void;
   searchQuery: string;
@@ -24,7 +27,7 @@ interface TopicsTreeProps {
   historyDepth?: number;
 }
 
-const LS_EXPANDED = "linkmind:tree-expanded-cats";
+const LS_EXPANDED = "linkmind:tree-expanded-keywords";
 
 export default function TopicsTree({
   data,
@@ -43,62 +46,61 @@ export default function TopicsTree({
   const containerRef = useRef<HTMLDivElement>(null);
 
   const {
-    categories,
-    topicsByCategoryId,
-    itemsByTopicId,
-    orphanTopics,
-    allTopics,
+    keywords,
+    wikisByKeyword,
+    itemsByWiki,
+    orphanWikis,
+    allWikis,
   } = useMemo(() => {
-    const cats: GraphNodeData[] = [];
-    const topicsMap = new Map<string, GraphNodeData>();
+    const kws: GraphNodeData[] = [];
+    const wikisMap = new Map<string, GraphNodeData>();
     const itemsMap = new Map<string, GraphNodeData>();
     const orphan: GraphNodeData[] = [];
     for (const n of data.nodes) {
-      if (n.data.type === "category") cats.push(n.data);
-      else if (n.data.type === "topic") topicsMap.set(n.data.id, n.data);
+      if (n.data.type === "keyword") kws.push(n.data);
+      else if (n.data.type === "wiki") wikisMap.set(n.data.id, n.data);
       else if (n.data.type === "item") itemsMap.set(n.data.id, n.data);
     }
-    // category→topic 엣지 + item→topic 엣지 분리.
-    const topicsBy: Record<string, GraphNodeData[]> = {};
-    const itemsByTopic: Record<string, GraphNodeData[]> = {};
-    const assignedTopicIds = new Set<string>();
+    // keyword→wiki 엣지 + wiki→item 엣지 분리.
+    const wikisBy: Record<string, GraphNodeData[]> = {};
+    const itemsByWk: Record<string, GraphNodeData[]> = {};
+    const assignedWikiIds = new Set<string>();
     for (const e of data.edges) {
-      if (e.data.source.startsWith("category:")) {
-        const cid = e.data.source;
-        const tidPrefixed = e.data.target;
-        const topic = topicsMap.get(tidPrefixed);
-        if (!topic) continue;
-        (topicsBy[cid] ||= []).push(topic);
-        assignedTopicIds.add(tidPrefixed);
+      if (e.data.source.startsWith("keyword:") && e.data.target.startsWith("wiki:")) {
+        const kid = e.data.source;
+        const wiki = wikisMap.get(e.data.target);
+        if (!wiki) continue;
+        (wikisBy[kid] ||= []).push(wiki);
+        assignedWikiIds.add(e.data.target);
       } else if (
-        e.data.source.startsWith("item:") &&
-        e.data.target.startsWith("topic:")
+        e.data.source.startsWith("wiki:") &&
+        e.data.target.startsWith("item:")
       ) {
-        const item = itemsMap.get(e.data.source);
+        const item = itemsMap.get(e.data.target);
         if (!item) continue;
-        (itemsByTopic[e.data.target] ||= []).push(item);
+        (itemsByWk[e.data.source] ||= []).push(item);
       }
     }
-    for (const t of topicsMap.values()) {
-      if (!assignedTopicIds.has(t.id)) orphan.push(t);
+    for (const w of wikisMap.values()) {
+      if (!assignedWikiIds.has(w.id)) orphan.push(w);
     }
-    cats.sort((a, b) => (b.topic_count || 0) - (a.topic_count || 0));
-    Object.values(topicsBy).forEach((list) =>
+    kws.sort((a, b) => (b.wiki_count || 0) - (a.wiki_count || 0));
+    Object.values(wikisBy).forEach((list) =>
       list.sort((a, b) => (b.item_count || 0) - (a.item_count || 0)),
     );
     orphan.sort((a, b) => (b.item_count || 0) - (a.item_count || 0));
     return {
-      categories: cats,
-      topicsByCategoryId: topicsBy,
-      itemsByTopicId: itemsByTopic,
-      orphanTopics: orphan,
-      allTopics: Array.from(topicsMap.values()).sort(
+      keywords: kws,
+      wikisByKeyword: wikisBy,
+      itemsByWiki: itemsByWk,
+      orphanWikis: orphan,
+      allWikis: Array.from(wikisMap.values()).sort(
         (a, b) => (b.item_count || 0) - (a.item_count || 0),
       ),
     };
   }, [data]);
 
-  // 펼침 상태 — 카테고리 별 (uuid set). localStorage 보존.
+  // 펼침 상태 — keyword 별 (fullId set). localStorage 보존.
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -109,11 +111,11 @@ export default function TopicsTree({
       /* ignore */
     }
   }, []);
-  const toggleExpanded = (cid: string) => {
+  const toggleExpanded = (kid: string) => {
     setExpanded((prev) => {
       const next = new Set(prev);
-      if (next.has(cid)) next.delete(cid);
-      else next.add(cid);
+      if (next.has(kid)) next.delete(kid);
+      else next.add(kid);
       try {
         window.localStorage.setItem(LS_EXPANDED, JSON.stringify([...next]));
       } catch {
@@ -123,32 +125,30 @@ export default function TopicsTree({
     });
   };
 
-  // selectedNodeFullId 가 토픽/아이템이고 그 토픽이 속한 카테고리가 있으면 자동 expand + scroll.
-  // relatedIds 안에 topic 이 들어있으면 (item 선택 시 그 item 의 topic 들 포함) 그 카테고리도 펼침.
+  // selectedNodeFullId 가 wiki/item 이고 그 wiki 가 속한 keyword 가 있으면 자동 expand + scroll.
   useEffect(() => {
     if (!selectedNodeFullId) return;
-    // 선택 + related topic 들 다 후보 — 어느 카테고리든 자식이면 그 카테고리 펼침
-    const candidateTopicIds = new Set<string>();
-    if (selectedNodeFullId.startsWith("topic:")) candidateTopicIds.add(selectedNodeFullId);
+    const candidateWikiIds = new Set<string>();
+    if (selectedNodeFullId.startsWith("wiki:")) candidateWikiIds.add(selectedNodeFullId);
     if (relatedIds) {
       for (const id of relatedIds) {
-        if (id.startsWith("topic:")) candidateTopicIds.add(id);
+        if (id.startsWith("wiki:")) candidateWikiIds.add(id);
       }
     }
-    if (candidateTopicIds.size > 0) {
+    if (candidateWikiIds.size > 0) {
       const toOpen: string[] = [];
-      for (const [cid, list] of Object.entries(topicsByCategoryId)) {
-        if (list.some((tp) => candidateTopicIds.has(tp.id))) {
-          toOpen.push(cid);
+      for (const [kid, list] of Object.entries(wikisByKeyword)) {
+        if (list.some((wk) => candidateWikiIds.has(wk.id))) {
+          toOpen.push(kid);
         }
       }
       if (toOpen.length > 0) {
         setExpanded((prev) => {
           const next = new Set(prev);
           let changed = false;
-          for (const cid of toOpen) {
-            if (!next.has(cid)) {
-              next.add(cid);
+          for (const kid of toOpen) {
+            if (!next.has(kid)) {
+              next.add(kid);
               changed = true;
             }
           }
@@ -156,17 +156,16 @@ export default function TopicsTree({
         });
       }
     }
-    // 선택된 항목으로 자동 scroll
     requestAnimationFrame(() => {
       const el = containerRef.current?.querySelector<HTMLElement>(
         `[data-tree-id="${selectedNodeFullId}"]`,
       );
       el?.scrollIntoView({ behavior: "smooth", block: "nearest" });
     });
-  }, [selectedNodeFullId, topicsByCategoryId, relatedIds]);
+  }, [selectedNodeFullId, wikisByKeyword, relatedIds]);
 
-  // categories view 인지 판별 — 카테고리 노드가 1개 이상이면 트리 모드
-  const showCategoryTree = categories.length > 0;
+  // keyword 노드가 1개 이상이면 트리 모드 (그 외엔 wiki flat list)
+  const showKeywordTree = keywords.length > 0;
 
   return (
     <aside className="w-full h-full overflow-hidden flex flex-col border-r border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900">
@@ -228,21 +227,20 @@ export default function TopicsTree({
       </header>
 
       <div ref={containerRef} className="flex-1 overflow-y-auto p-2">
-        {showCategoryTree && (
+        {showKeywordTree && (
           <>
             <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1 px-1">
-              {locale === "ko" ? "카테고리" : "Categories"} ({categories.length})
+              {locale === "ko" ? "키워드" : "Keywords"} ({keywords.length})
             </div>
             <ul className="space-y-0.5 mb-3">
-              {categories.map((cat) => {
-                // cat.id 는 fullId ("category:<uuid>") — TopicsTree 안에서는 그것 통일.
-                const isOpen = expanded.has(cat.id);
-                const isSelected = selectedNodeFullId === cat.id;
-                const isRelated = !isSelected && (relatedIds?.has(cat.id) ?? false);
-                const dotColor = cat.color || "#facc15";
-                const childTopics = topicsByCategoryId[cat.id] || [];
+              {keywords.map((kw) => {
+                // kw.id 는 fullId ("keyword:<kw>").
+                const isOpen = expanded.has(kw.id);
+                const isSelected = selectedNodeFullId === kw.id;
+                const isRelated = !isSelected && (relatedIds?.has(kw.id) ?? false);
+                const childWikis = wikisByKeyword[kw.id] || [];
                 return (
-                  <li key={cat.id} data-tree-id={cat.id}>
+                  <li key={kw.id} data-tree-id={kw.id}>
                     <div
                       className={`flex items-center rounded ${
                         isSelected
@@ -254,48 +252,50 @@ export default function TopicsTree({
                     >
                       <button
                         type="button"
-                        onClick={() => toggleExpanded(cat.id)}
+                        onClick={() => toggleExpanded(kw.id)}
                         className="px-1 py-1.5 text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
                         aria-label={isOpen ? "collapse" : "expand"}
+                        title={
+                          childWikis.length > 0
+                            ? isOpen ? "접기" : "펼치기"
+                            : "이 키워드를 먼저 클릭하면 위키들이 그래프에 로드됩니다"
+                        }
                       >
                         {isOpen ? "▾" : "▸"}
                       </button>
                       <button
                         type="button"
-                        onClick={() => onNodeSelect(cat.id)}
+                        onClick={() => onNodeSelect(kw.id)}
                         className={`flex-1 text-left px-1 py-1.5 text-xs transition flex items-center gap-2 ${
                           isSelected
                             ? "text-orange-700 dark:text-orange-300 font-medium"
                             : "text-zinc-700 dark:text-zinc-300"
                         }`}
-                        title={cat.slug || ""}
+                        title={kw.slug || ""}
                       >
                         <span
                           className="inline-block w-2.5 h-2.5 rounded-full shrink-0"
-                          style={{ backgroundColor: dotColor }}
+                          style={{ backgroundColor: KEYWORD_COLOR }}
                         />
                         <span className="flex-1 min-w-0">
-                          <span className="block truncate">
-                            {cat.pinned ? "📌 " : ""}
-                            {cat.label}
-                          </span>
+                          <span className="block truncate">🔑 {kw.label}</span>
                           <span className="block text-[10px] text-zinc-500">
-                            {cat.topic_count ?? 0} topics · {cat.item_count ?? 0} items
+                            {kw.wiki_count ?? childWikis.length} wikis
                           </span>
                         </span>
                       </button>
                     </div>
-                    {isOpen && childTopics.length > 0 && (
+                    {isOpen && childWikis.length > 0 && (
                       <ul className="ml-6 mt-0.5 mb-1 space-y-0.5 border-l border-zinc-200 dark:border-zinc-800 pl-2">
-                        {childTopics.map((topic) => (
-                          <TopicNode
-                            key={topic.id}
-                            topic={topic}
-                            items={itemsByTopicId[topic.id] || []}
+                        {childWikis.map((wiki) => (
+                          <WikiNode
+                            key={wiki.id}
+                            wiki={wiki}
+                            items={itemsByWiki[wiki.id] || []}
                             selectedNodeFullId={selectedNodeFullId}
                             relatedIds={relatedIds}
-                            isOpen={expanded.has(topic.id)}
-                            onToggle={() => toggleExpanded(topic.id)}
+                            isOpen={expanded.has(wiki.id)}
+                            onToggle={() => toggleExpanded(wiki.id)}
                             onNodeSelect={onNodeSelect}
                             itemsLabel={t.topicsTree.itemsCount}
                           />
@@ -309,28 +309,28 @@ export default function TopicsTree({
           </>
         )}
 
-        {/* category 가 없는 topic (또는 'topics' view) */}
-        {(showCategoryTree ? orphanTopics : allTopics).length > 0 && (
+        {/* keyword 없는 wiki (또는 keyword 없는 view) */}
+        {(showKeywordTree ? orphanWikis : allWikis).length > 0 && (
           <>
             <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1 px-1">
-              {t.topicsTree.header} (
-              {(showCategoryTree ? orphanTopics : allTopics).length})
-              {showCategoryTree && (
+              {locale === "ko" ? "위키" : "Wikis"} (
+              {(showKeywordTree ? orphanWikis : allWikis).length})
+              {showKeywordTree && (
                 <span className="ml-1 text-zinc-400">
-                  {locale === "ko" ? " · 미분류" : " · uncategorized"}
+                  {locale === "ko" ? " · 키워드 없음" : " · no keyword"}
                 </span>
               )}
             </div>
             <ul className="space-y-0.5">
-              {(showCategoryTree ? orphanTopics : allTopics).map((topic) => (
-                <TopicNode
-                  key={topic.id}
-                  topic={topic}
-                  items={itemsByTopicId[topic.id] || []}
+              {(showKeywordTree ? orphanWikis : allWikis).map((wiki) => (
+                <WikiNode
+                  key={wiki.id}
+                  wiki={wiki}
+                  items={itemsByWiki[wiki.id] || []}
                   selectedNodeFullId={selectedNodeFullId}
                   relatedIds={relatedIds}
-                  isOpen={expanded.has(topic.id)}
-                  onToggle={() => toggleExpanded(topic.id)}
+                  isOpen={expanded.has(wiki.id)}
+                  onToggle={() => toggleExpanded(wiki.id)}
                   onNodeSelect={onNodeSelect}
                   itemsLabel={t.topicsTree.itemsCount}
                   showSlugInline={true}
@@ -339,7 +339,7 @@ export default function TopicsTree({
             </ul>
           </>
         )}
-        {!showCategoryTree && allTopics.length === 0 && (
+        {!showKeywordTree && allWikis.length === 0 && (
           <div className="text-xs text-zinc-500 dark:text-zinc-400 px-2 py-3">
             {t.topicsTree.empty}
           </div>
@@ -354,12 +354,12 @@ export default function TopicsTree({
 }
 
 
-// ─── TopicNode (재사용) ───────────────────────────────────────
-// 토픽 항목 1개 — chevron + 라벨 + (펼침 시) item sub-list.
-// 카테고리 child / orphan 양쪽에서 재사용.
+// ─── WikiNode (재사용) ───────────────────────────────────────
+// wiki 항목 1개 — chevron + 라벨 + (펼침 시) item sub-list.
+// keyword child / orphan 양쪽에서 재사용.
 
-interface TopicNodeProps {
-  topic: GraphNodeData;
+interface WikiNodeProps {
+  wiki: GraphNodeData;
   items: GraphNodeData[];
   selectedNodeFullId: string | null;
   relatedIds?: Set<string>;
@@ -370,8 +370,8 @@ interface TopicNodeProps {
   showSlugInline?: boolean;
 }
 
-function TopicNode({
-  topic,
+function WikiNode({
+  wiki,
   items,
   selectedNodeFullId,
   relatedIds,
@@ -380,15 +380,15 @@ function TopicNode({
   onNodeSelect,
   itemsLabel,
   showSlugInline = false,
-}: TopicNodeProps) {
-  const isSelected = selectedNodeFullId === topic.id;
-  const isRelated = !isSelected && (relatedIds?.has(topic.id) ?? false);
-  const tDot = topicKindColor(topic.primary_external_id);
+}: WikiNodeProps) {
+  const isSelected = selectedNodeFullId === wiki.id;
+  const isRelated = !isSelected && (relatedIds?.has(wiki.id) ?? false);
+  const wDot = wikiKindColor(wiki.primary_external_id);
   const hasItemsInGraph = items.length > 0;
-  const totalItems = topic.item_count ?? items.length ?? 0;
+  const totalItems = wiki.item_count ?? items.length ?? 0;
 
   return (
-    <li data-tree-id={topic.id}>
+    <li data-tree-id={wiki.id}>
       <div
         className={`flex items-center rounded ${
           isSelected
@@ -407,14 +407,14 @@ function TopicNode({
           title={
             hasItemsInGraph
               ? isOpen ? "접기" : "펼치기"
-              : "이 토픽을 먼저 클릭하면 자료들이 그래프에 로드됩니다"
+              : "이 위키를 먼저 클릭하면 자료들이 그래프에 로드됩니다"
           }
         >
           {hasItemsInGraph ? (isOpen ? "▾" : "▸") : "·"}
         </button>
         <button
           type="button"
-          onClick={() => onNodeSelect(topic.id)}
+          onClick={() => onNodeSelect(wiki.id)}
           className={`flex-1 text-left px-1 py-1 text-[11px] transition flex items-start gap-2 ${
             isSelected
               ? "text-orange-700 dark:text-orange-300 font-medium"
@@ -422,17 +422,17 @@ function TopicNode({
                 ? "text-amber-800 dark:text-amber-200"
                 : "text-zinc-700 dark:text-zinc-300"
           }`}
-          title={topic.slug || ""}
+          title={wiki.slug || ""}
         >
           <span
             className="mt-0.5 inline-block w-2 h-2 rounded-full shrink-0"
-            style={{ backgroundColor: tDot }}
+            style={{ backgroundColor: wDot }}
           />
           <span className="flex-1 min-w-0">
-            <span className="block truncate">{topic.label}</span>
+            <span className="block truncate">{wiki.label}</span>
             <span className="block text-[10px] text-zinc-500">
               {totalItems} {itemsLabel}
-              {showSlugInline && topic.slug ? ` · ${topic.slug}` : ""}
+              {showSlugInline && wiki.slug ? ` · ${wiki.slug}` : ""}
             </span>
           </span>
         </button>

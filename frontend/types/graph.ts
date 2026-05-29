@@ -1,21 +1,21 @@
 // backend/schemas/models.py 의 GraphNode/GraphEdge/GraphResponse 와 1:1 대응.
 // 변경 시 두 곳 모두 동기화.
 
+// D10.5 세션 B — 그래프 축을 wiki keyword 로 통일 (옛 category/topic 폐기).
+// 계층: keyword ▸ wiki ▸ item.
 export interface GraphNodeData {
-  id: string;                    // "topic:<uuid>" | "item:<uuid>" | "category:<uuid>"
+  id: string;                    // "keyword:<kw>" | "wiki:<slug>" | "item:<uuid>"
   label: string;
-  type: "topic" | "item" | "category";
-  // topic / category 공통
+  type: "keyword" | "wiki" | "item";
+  // keyword / wiki 공통
   slug?: string;
-  // topic 전용
+  // keyword 전용 (그룹 노드)
+  wiki_count?: number;
+  // wiki 전용
   title?: string | null;
   item_count?: number;
   primary_external_id?: Record<string, string>;
-  // category 전용 (Phase 2.5 wave-3)
-  topic_count?: number;
-  color?: string | null;
-  pinned?: boolean;
-  synonyms?: string[];
+  keywords?: string[];
   // item 전용
   source_type?: string;          // pdf / url / youtube / github / document / telegram / ...
   source_url?: string | null;

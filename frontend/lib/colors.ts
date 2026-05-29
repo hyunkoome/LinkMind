@@ -62,6 +62,16 @@ export function topicKindColor(
   return TOPIC_KIND_COLORS[kind] || DEFAULT_TOPIC_COLOR;
 }
 
+// D10.5 세션 B — keyword 그룹 노드 색 (옛 category 자리). 그룹이라 눈에 띄는 gold.
+// wiki 노드는 topicKindColor (primary_external_id) 재사용, item 은 sourceTypeColor.
+export const KEYWORD_COLOR = "#eab308";
+
+export function wikiKindColor(
+  primaryExternalId: Record<string, string> | null | undefined,
+): string {
+  return topicKindColor(primaryExternalId);
+}
+
 // ─── 그룹 정의 (Legend 가 사용) ────────────────────────────────────
 // "이 색은 어떤 의미 그룹인지" 한눈에 보이도록.
 export interface ColorGroup {

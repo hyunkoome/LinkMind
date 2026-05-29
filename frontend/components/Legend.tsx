@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import {
   COLOR_GROUPS,
   DEFAULT_TOPIC_COLOR,
+  KEYWORD_COLOR,
   SOURCE_TYPE_COLORS,
   SOURCE_TYPE_LABEL,
   TOPIC_KIND_COLORS,
@@ -67,35 +68,24 @@ export default function Legend() {
       </header>
 
       <div className="p-3 space-y-3">
-        {/* 카테고리 (키워드 노드) */}
+        {/* keyword 그룹 노드 */}
         <section>
           <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1">
-            {locale === "ko" ? "카테고리" : "Category"}
+            {locale === "ko" ? "키워드" : "Keyword"}
           </div>
           <ul className="space-y-1">
             <li className="flex items-center gap-2">
               <span
                 className="inline-block w-3 h-3 rounded-full shrink-0"
-                style={{ backgroundColor: "#facc15" }}
+                style={{ backgroundColor: KEYWORD_COLOR }}
               />
               <span className="text-zinc-700 dark:text-zinc-300">
-                {locale === "ko" ? "키워드 카테고리 (auto)" : "keyword category (auto)"}
-              </span>
-            </li>
-            <li className="flex items-center gap-2">
-              <span
-                className="inline-block w-3 h-3 rounded-full shrink-0"
-                style={{ backgroundColor: "#fde047" }}
-              />
-              <span className="text-zinc-700 dark:text-zinc-300">
-                {locale === "ko" ? "📌 즐겨찾기" : "📌 pinned"}
+                {locale === "ko" ? "🔑 키워드 그룹" : "🔑 keyword group"}
               </span>
             </li>
           </ul>
           <div className="mt-1 text-[10px] text-zinc-500">
-            {locale === "ko"
-              ? "크기 = topic 수"
-              : "size = topic count"}
+            {locale === "ko" ? "크기 = wiki 수" : "size = wiki count"}
           </div>
         </section>
 
@@ -152,8 +142,8 @@ export default function Legend() {
               />
               <span className="text-[11px] text-zinc-700 dark:text-zinc-300">
                 {locale === "ko"
-                  ? "외부 ID 없는 토픽 (orange)"
-                  : "topic without external id (orange)"}
+                  ? "외부 ID 없는 위키 (orange)"
+                  : "wiki without external id (orange)"}
               </span>
             </li>
           </ul>

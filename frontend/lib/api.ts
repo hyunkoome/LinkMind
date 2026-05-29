@@ -31,72 +31,20 @@ async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export async function getGraphTopics(limit = 5000): Promise<GraphResponse> {
-  return fetchJSON<GraphResponse>(`/graph/topics?limit=${limit}`);
+// D10.5 세션 B — keyword ▸ wiki ▸ item 그래프 (옛 category/topic 폐기).
+// 상위 keyword 그룹 노드 (빈도순). 시작 화면 — 가벼움.
+export async function getGraphKeywords(limit = 100000): Promise<GraphResponse> {
+  return fetchJSON<GraphResponse>(`/graph/keywords?limit=${limit}`);
 }
 
-// 카테고리 (키워드) 노드 + 그 안의 topic 들. 시작 화면 — 가벼움.
-export async function getGraphCategories(limit = 500): Promise<GraphResponse> {
-  return fetchJSON<GraphResponse>(`/graph/categories?limit=${limit}`);
+// keyword 클릭 시 expand — 그 keyword 의 wiki 들 + 각 wiki 의 item.
+export async function expandGraphKeyword(keyword: string): Promise<GraphResponse> {
+  return fetchJSON<GraphResponse>(`/graph/keyword/${encodeURIComponent(keyword)}`);
 }
 
-// 카테고리 클릭 시 expand — 그 카테고리의 topic + item 전부.
-export async function expandGraphCategory(slug: string): Promise<GraphResponse> {
-  return fetchJSON<GraphResponse>(`/graph/category/${encodeURIComponent(slug)}`);
-}
-
-// 토픽 클릭 시 expand — 그 토픽 1개 + 그 안의 모든 item.
-export async function expandGraphTopic(topicUuid: string): Promise<GraphResponse> {
-  return fetchJSON<GraphResponse>(`/graph/topic/${encodeURIComponent(topicUuid)}`);
-}
-
-// detail panel — topic 정보 + 그 안의 모든 item.
-export interface TopicDetailItem {
-  id: string;
-  source_type: string;
-  source_url: string | null;
-  title: string | null;
-  summary: string | null;
-  tags: string[];
-  role: string;
-  confidence: number;
-  source: string;
-  note: string | null;
-}
-export interface TopicDetailResponse {
-  id: string;
-  slug: string;
-  title: string;
-  description: string | null;
-  primary_external_id: { kind: string; value: string } | null;
-  tags: string[];
-  items: TopicDetailItem[];
-}
-export async function getTopic(idOrSlug: string): Promise<TopicDetailResponse> {
-  return fetchJSON<TopicDetailResponse>(`/topics/${encodeURIComponent(idOrSlug)}`);
-}
-
-// detail panel — category 정보 + 그 안의 topics.
-export interface CategoryDetailTopic {
-  id: string;
-  slug: string;
-  title: string;
-  primary_external_id: { kind: string; value: string } | null;
-  tags: string[];
-  item_count: number;
-}
-export interface CategoryDetailResponse {
-  id: string;
-  slug: string;
-  label: string;
-  description: string | null;
-  synonyms: string[];
-  color: string | null;
-  pinned: boolean;
-  topics: CategoryDetailTopic[];
-}
-export async function getCategory(slug: string): Promise<CategoryDetailResponse> {
-  return fetchJSON<CategoryDetailResponse>(`/categories/${encodeURIComponent(slug)}`);
+// wiki 클릭 시 expand — 그 wiki 1개 + 그 안의 item (sources/figures).
+export async function expandGraphWiki(slug: string): Promise<GraphResponse> {
+  return fetchJSON<GraphResponse>(`/graph/wiki/${encodeURIComponent(slug)}`);
 }
 
 export async function searchGraph(q: string, limit = 50): Promise<GraphResponse> {

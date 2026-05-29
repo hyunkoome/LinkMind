@@ -1130,6 +1130,108 @@ async def ensure_seed_prompt(
 
 
 # ──────────────────────────────────────────────────────────────
+# D10.5 세션 B — keyword ▸ wiki ▸ item 그래프 (categories 대체)
+# 그룹 축을 wiki_pages.keywords (정규화 영문, D10.6) 로 통일.
+# ──────────────────────────────────────────────────────────────
+
+
+# garbage 키워드 제외 (빈 값 / 순수 대시·구두점·공백) — wiki.py 와 동일 정책.
+_KW_GRAPH_GARBAGE = (
+    "TRIM(keyword) <> '' AND keyword !~ '^[-_.[:space:][:punct:]]+$'"
+)
+
+_LIST_KEYWORD_COUNTS_SQL = text(f"""
+    SELECT keyword, COUNT(*) AS usage_count
+    FROM wiki_pages, UNNEST(keywords) AS keyword
+    WHERE (CAST(:q AS TEXT) IS NULL OR keyword ILIKE '%' || CAST(:q AS TEXT) || '%')
+      AND {_KW_GRAPH_GARBAGE}
+    GROUP BY keyword
+    ORDER BY usage_count DESC, keyword ASC
+    LIMIT :limit
+""")
+
+
+async def list_keyword_counts(
+    session: AsyncSession, *, limit: int = 200, q: str | None = None,
+) -> list[dict[str, Any]]:
+    """distinct wiki keyword + 사용 wiki 수 (빈도순). 그래프의 keyword 그룹 노드용."""
+    res = await session.execute(_LIST_KEYWORD_COUNTS_SQL, {"q": q, "limit": limit})
+    return [dict(r) for r in res.mappings().all()]
+
+
+# wiki 노드 공통 SELECT — keyword/slug/title + topic 의 primary_external_id(색) +
+# 살아있는 source(item) 수. WHERE 만 호출처가 결정.
+_WIKI_NODE_SELECT = """
+    SELECT wp.id, wp.slug, wp.title, wp.keywords,
+           t.primary_external_id,
+           (SELECT COUNT(*) FROM wiki_page_items wpi
+              WHERE wpi.wiki_page_id = wp.id
+                AND (wpi.user_action IS NULL OR wpi.user_action != 'removed')
+           ) AS item_count
+      FROM wiki_pages wp
+      LEFT JOIN topics t ON t.id = wp.topic_id
+"""
+
+_WIKIS_FOR_KEYWORD_SQL = text(f"""
+    {_WIKI_NODE_SELECT}
+     WHERE COALESCE(wp.keywords, ARRAY[]::text[]) @> ARRAY[:kw]::text[]
+     ORDER BY wp.is_pinned DESC, item_count DESC, LOWER(wp.title) ASC
+     LIMIT :limit
+""")
+
+
+async def list_wikis_for_keyword(
+    session: AsyncSession, *, keyword: str, limit: int = 300,
+) -> list[dict[str, Any]]:
+    """그 keyword 를 가진 wiki 들 (keyword expand 시)."""
+    res = await session.execute(_WIKIS_FOR_KEYWORD_SQL, {"kw": keyword, "limit": limit})
+    return [dict(r) for r in res.mappings().all()]
+
+
+async def list_wiki_nodes(
+    session: AsyncSession, *, ids: list[UUID] | None = None,
+    slugs: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """wiki 노드 행을 id 또는 slug 로 정확 fetch (LIMIT 없음 — dangling edge 방지)."""
+    if ids:
+        sql = text(f"{_WIKI_NODE_SELECT} WHERE wp.id = ANY(:ids)")
+        res = await session.execute(sql, {"ids": list(ids)})
+    elif slugs:
+        sql = text(f"{_WIKI_NODE_SELECT} WHERE wp.slug = ANY(:slugs)")
+        res = await session.execute(sql, {"slugs": list(slugs)})
+    else:
+        return []
+    return [dict(r) for r in res.mappings().all()]
+
+
+async def list_wiki_item_links(
+    session: AsyncSession, *, wiki_page_ids: list[UUID] | None = None,
+    item_ids: list[UUID] | None = None,
+) -> list[dict[str, Any]]:
+    """wiki_page_items 덤프 (wiki↔item 엣지용). wiki_page_ids 또는 item_ids 로 필터.
+
+    둘 다 None 이면 전체 덤프는 막고 빈 리스트 (안전). 'removed' 는 제외.
+    """
+    if wiki_page_ids is None and item_ids is None:
+        return []
+    clauses = ["(wpi.user_action IS NULL OR wpi.user_action != 'removed')"]
+    params: dict[str, Any] = {}
+    if wiki_page_ids is not None:
+        clauses.append("wpi.wiki_page_id = ANY(:wids)")
+        params["wids"] = list(wiki_page_ids)
+    if item_ids is not None:
+        clauses.append("wpi.item_id = ANY(:iids)")
+        params["iids"] = list(item_ids)
+    sql = text(f"""
+        SELECT wpi.wiki_page_id, wpi.item_id, wpi.role, wpi.confidence, wpi.source
+          FROM wiki_page_items wpi
+         WHERE {" AND ".join(clauses)}
+    """)
+    res = await session.execute(sql, params)
+    return [dict(r) for r in res.mappings().all()]
+
+
+# ──────────────────────────────────────────────────────────────
 # helpers
 # ──────────────────────────────────────────────────────────────
 

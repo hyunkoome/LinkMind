@@ -8,10 +8,9 @@ import Legend from "@/components/Legend";
 import NodeDetails from "@/components/NodeDetails";
 import TopicsTree from "@/components/TopicsTree";
 import {
-  expandGraphCategory,
-  expandGraphTopic,
-  getGraphCategories,
-  getGraphTopics,
+  expandGraphKeyword,
+  expandGraphWiki,
+  getGraphKeywords,
   getItemNeighborhood,
   searchGraph,
 } from "@/lib/api";
@@ -43,7 +42,6 @@ export default function HomePage() {
   const [selectedNodeFullId, setSelectedNodeFullId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [isSubsetView, setIsSubsetView] = useState(false);
-  const [viewMode, setViewMode] = useState<"categories" | "topics">("categories");
   // history stack — push 시점은 graph 가 바뀌기 *직전* 의 상태
   const [history, setHistory] = useState<HistoryFrame[]>([]);
 
@@ -101,10 +99,7 @@ export default function HomePage() {
     setLoading(true);
     setError(null);
     try {
-      const g =
-        viewMode === "categories"
-          ? await getGraphCategories(500)
-          : await getGraphTopics(5000);
+      const g = await getGraphKeywords();
       setGraph(g);
       setViewGraph(null);
       setSelectedNodeFullId(null);
@@ -116,7 +111,7 @@ export default function HomePage() {
     } finally {
       setLoading(false);
     }
-  }, [viewMode]);
+  }, []);
 
   useEffect(() => {
     void loadAll();
@@ -149,7 +144,7 @@ export default function HomePage() {
   // 2026-05-29: 전체가 난잡, 선택 노드가 안 보임). 트리(좌측)는 graph(전체) 그대로
   // 두고 viewGraph 만 그 항목 이웃으로. selectedId → GraphView 가 카메라 zoom + 강조.
   const focusNode = useCallback(
-    async (nodeId: string, type: "topic" | "item" | "category") => {
+    async (nodeId: string, type: "keyword" | "wiki" | "item") => {
       setSelectedNodeFullId(nodeId);
       try {
         let g: GraphResponse | null = null;
@@ -157,16 +152,12 @@ export default function HomePage() {
           const itemUuid = nodeId.replace(/^item:/, "");
           setSelectedItemId(itemUuid);
           g = await getItemNeighborhood(itemUuid);
-        } else if (type === "category") {
+        } else if (type === "keyword") {
           setSelectedItemId(null);
-          const node = graph.nodes.find((n) => n.data.id === nodeId);
-          const slug = node?.data.slug;
-          if (!slug) return;
-          g = await expandGraphCategory(slug);
+          g = await expandGraphKeyword(nodeId.replace(/^keyword:/, ""));
         } else {
           setSelectedItemId(null);
-          const topicUuid = nodeId.replace(/^topic:/, "");
-          g = await expandGraphTopic(topicUuid);
+          g = await expandGraphWiki(nodeId.replace(/^wiki:/, ""));
         }
         if (g && g.nodes.length > 0) {
           pushHistory();
@@ -177,18 +168,18 @@ export default function HomePage() {
         setError((e as Error).message);
       }
     },
-    [graph.nodes, pushHistory],
+    [pushHistory],
   );
 
   // 그래프 노드 클릭 = 트리 선택 = 동일한 focus 동작.
   const handleNodeClick = focusNode;
   const handleSidebarSelect = useCallback(
     (fullId: string) => {
-      const type: "topic" | "item" | "category" = fullId.startsWith("item:")
+      const type: "keyword" | "wiki" | "item" = fullId.startsWith("item:")
         ? "item"
-        : fullId.startsWith("category:")
-          ? "category"
-          : "topic";
+        : fullId.startsWith("keyword:")
+          ? "keyword"
+          : "wiki";
       void focusNode(fullId, type);
     },
     [focusNode],
@@ -206,50 +197,44 @@ export default function HomePage() {
     });
   }, []);
 
-  // category fullId → slug — NodeDetails 의 detail fetch 용
-  const resolveCategorySlug = useCallback(
-    (categoryFullId: string): string | null => {
-      const node = graph.nodes.find((n) => n.data.id === categoryFullId);
-      return node?.data.slug || null;
-    },
-    [graph.nodes],
-  );
-
-  // selected 노드 + 같은 topic 묶음의 모든 친구 노드들 (양방향 highlight).
-  // - selected 가 topic: 그 topic 자체 + topic 의 모든 item
-  // - selected 가 item:  그 item 이 속한 topic(s) + 그 topic 의 다른 모든 item
-  // - selected 가 category: 그 자체 + (graph 안에 있는) 그 카테고리의 topic 들
+  // selected 노드 + 같은 묶음의 친구 노드 (양방향 highlight). 엣지 방향:
+  //   keyword → wiki (source=keyword, target=wiki), wiki → item (source=wiki, target=item).
+  // - selected keyword: 그 keyword 의 wiki 들
+  // - selected wiki:    그 wiki 의 item 들 + 부모 keyword
+  // - selected item:    그 item 이 속한 wiki 들 + 그 wiki 의 다른 item
   const relatedIds = useMemo<Set<string>>(() => {
     const out = new Set<string>();
     if (!selectedNodeFullId) return out;
     out.add(selectedNodeFullId);
 
     const edges = (viewGraph ?? graph).edges.map((e) => e.data);
-    if (selectedNodeFullId.startsWith("topic:")) {
-      // 해당 topic 의 모든 item 추가
+    if (selectedNodeFullId.startsWith("keyword:")) {
       for (const e of edges) {
-        if (e.target === selectedNodeFullId && e.source.startsWith("item:")) {
+        if (e.source === selectedNodeFullId && e.target.startsWith("wiki:")) {
+          out.add(e.target);
+        }
+      }
+    } else if (selectedNodeFullId.startsWith("wiki:")) {
+      for (const e of edges) {
+        if (e.source === selectedNodeFullId && e.target.startsWith("item:")) {
+          out.add(e.target);
+        }
+        if (e.target === selectedNodeFullId && e.source.startsWith("keyword:")) {
           out.add(e.source);
         }
       }
     } else if (selectedNodeFullId.startsWith("item:")) {
-      // 1) 이 item 의 모든 topic 추가
-      const myTopics: string[] = [];
+      // 1) 이 item 이 속한 wiki 들
+      const myWikis: string[] = [];
       for (const e of edges) {
-        if (e.source === selectedNodeFullId && e.target.startsWith("topic:")) {
-          out.add(e.target);
-          myTopics.push(e.target);
-        }
-      }
-      // 2) 그 topic 들의 다른 모든 item 추가
-      for (const e of edges) {
-        if (myTopics.includes(e.target) && e.source.startsWith("item:")) {
+        if (e.target === selectedNodeFullId && e.source.startsWith("wiki:")) {
           out.add(e.source);
+          myWikis.push(e.source);
         }
       }
-    } else if (selectedNodeFullId.startsWith("category:")) {
+      // 2) 그 wiki 들의 다른 item 들
       for (const e of edges) {
-        if (e.source === selectedNodeFullId && e.target.startsWith("topic:")) {
+        if (myWikis.includes(e.source) && e.target.startsWith("item:")) {
           out.add(e.target);
         }
       }
@@ -264,9 +249,9 @@ export default function HomePage() {
     },
     [focusNode],
   );
-  const handleTopicClickFromPanel = useCallback(
-    (topicUuid: string) => {
-      void focusNode(`topic:${topicUuid}`, "topic");
+  const handleWikiClickFromPanel = useCallback(
+    (wikiSlug: string) => {
+      void focusNode(`wiki:${wikiSlug}`, "wiki");
     },
     [focusNode],
   );
@@ -307,9 +292,8 @@ export default function HomePage() {
         ) : selectedNodeFullId ? (
           <NodeDetails
             selectedNodeFullId={selectedNodeFullId}
-            resolveCategorySlug={resolveCategorySlug}
             onItemClick={handleItemClickFromPanel}
-            onTopicClick={handleTopicClickFromPanel}
+            onWikiClick={handleWikiClickFromPanel}
           />
         ) : (
           <div className="flex-1 flex items-center justify-center text-sm text-zinc-400 p-6 text-center">
@@ -332,34 +316,7 @@ export default function HomePage() {
         />
 
         <div className="absolute top-3 left-3 z-10 pointer-events-none flex flex-col gap-1.5">
-          {/* view mode toggle */}
-          <div className="pointer-events-auto inline-flex bg-white/85 dark:bg-zinc-900/85 backdrop-blur rounded shadow-sm overflow-hidden text-[11px]">
-            <button
-              type="button"
-              onClick={() => setViewMode("categories")}
-              className={`px-2.5 py-1 transition-colors ${
-                viewMode === "categories"
-                  ? "bg-orange-500 text-white"
-                  : "text-zinc-700 dark:text-zinc-300 hover:bg-orange-100 dark:hover:bg-orange-900/30"
-              }`}
-              title={locale === "ko" ? "키워드 카테고리 → 토픽 → 자료" : "categories → topics → items"}
-            >
-              {locale === "ko" ? "카테고리" : "Categories"}
-            </button>
-            <button
-              type="button"
-              onClick={() => setViewMode("topics")}
-              className={`px-2.5 py-1 transition-colors ${
-                viewMode === "topics"
-                  ? "bg-orange-500 text-white"
-                  : "text-zinc-700 dark:text-zinc-300 hover:bg-orange-100 dark:hover:bg-orange-900/30"
-              }`}
-              title={locale === "ko" ? "토픽 + 자료 (전체)" : "topics + items (all)"}
-            >
-              {locale === "ko" ? "토픽" : "Topics"}
-            </button>
-          </div>
-          {/* 통계 */}
+          {/* 통계 — keyword ▸ wiki ▸ item */}
           <div className="pointer-events-auto text-xs px-2 py-1 bg-white/80 dark:bg-zinc-900/80 backdrop-blur rounded shadow-sm">
             {loading ? (
               <span className="text-zinc-500">{t.common.loading}</span>
@@ -374,12 +331,12 @@ export default function HomePage() {
                 )}
                 {(() => {
                   const g = viewGraph ?? graph;
-                  const catN = g.nodes.filter((n) => n.data.type === "category").length;
-                  const topN = g.nodes.filter((n) => n.data.type === "topic").length;
+                  const kwN = g.nodes.filter((n) => n.data.type === "keyword").length;
+                  const wikiN = g.nodes.filter((n) => n.data.type === "wiki").length;
                   const itemN = g.nodes.filter((n) => n.data.type === "item").length;
                   const parts: string[] = [];
-                  if (catN > 0) parts.push(`${catN} categories`);
-                  if (topN > 0) parts.push(`${topN} ${t.graph.topics}`);
+                  if (kwN > 0) parts.push(`${kwN} keywords`);
+                  if (wikiN > 0) parts.push(`${wikiN} wikis`);
                   if (itemN > 0) parts.push(`${itemN} ${t.graph.items}`);
                   parts.push(`${g.edges.length} ${t.graph.edges}`);
                   return parts.join(" · ");

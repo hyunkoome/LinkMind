@@ -3,7 +3,7 @@
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef } from "react"; // useMemo used for fgData below
 
-import { sourceTypeColor, topicKindColor } from "@/lib/colors";
+import { KEYWORD_COLOR, sourceTypeColor, wikiKindColor } from "@/lib/colors";
 import type { GraphResponse } from "@/types/graph";
 
 // react-force-graph-3d 는 three.js + window 의존 → SSR 비활성화
@@ -15,9 +15,9 @@ const ForceGraph3D = dynamic(
 
 interface GraphViewProps {
   data: GraphResponse;
-  onNodeClick?: (nodeId: string, type: "topic" | "item" | "category") => void;
+  onNodeClick?: (nodeId: string, type: "keyword" | "wiki" | "item") => void;
   selectedId?: string | null;
-  /** selected 와 같은 묶음 (topic + 그 안 items 등) 의 fullId 들. 함께 white 강조. */
+  /** selected 와 같은 묶음 (wiki + 그 안 items 등) 의 fullId 들. 함께 강조. */
   relatedIds?: Set<string>;
 }
 
@@ -25,16 +25,15 @@ interface GraphViewProps {
 type FGNode = {
   id: string;
   label: string;
-  type: "topic" | "item" | "category";
-  // topic / category 공통
+  type: "keyword" | "wiki" | "item";
+  // keyword / wiki 공통
   slug?: string;
+  // keyword 전용
+  wiki_count?: number;
+  // wiki 전용
   item_count?: number;
-  // topic 전용
   primary_external_id?: Record<string, string>;
-  // category 전용
-  topic_count?: number;
-  color?: string | null;
-  pinned?: boolean;
+  keywords?: string[];
   // item 전용
   source_type?: string;
   source_url?: string | null;
@@ -71,11 +70,10 @@ export default function GraphView({
       label: n.data.label,
       type: n.data.type,
       slug: n.data.slug,
+      wiki_count: n.data.wiki_count,
       item_count: n.data.item_count,
       primary_external_id: n.data.primary_external_id,
-      topic_count: n.data.topic_count,
-      color: n.data.color,
-      pinned: n.data.pinned,
+      keywords: n.data.keywords,
       source_type: n.data.source_type,
       source_url: n.data.source_url,
       summary: n.data.summary,
@@ -140,7 +138,7 @@ export default function GraphView({
     (node: any) => {
       onNodeClick?.(
         node.id as string,
-        node.type as "topic" | "item" | "category",
+        node.type as "keyword" | "wiki" | "item",
       );
     },
     [onNodeClick],
@@ -175,12 +173,12 @@ export default function GraphView({
         nodeVal={(n) => {
           const node = n as FGNode;
           let base: number;
-          if (node.type === "category") {
-            base = Math.max(8, Math.min(50, (node.topic_count || 1) * 4));
-          } else if (node.type === "topic") {
+          if (node.type === "keyword") {
+            base = Math.max(8, Math.min(50, (node.wiki_count || 1) * 4));
+          } else if (node.type === "wiki") {
             base = Math.max(4, Math.min(30, (node.item_count || 1) * 2));
           } else {
-            // item — 토픽보다 명확히 작게 (사용자 요구: 토픽/아이템 시각 구분)
+            // item — wiki 보다 명확히 작게 (wiki/item 시각 구분)
             base = 1.5;
           }
           // 강조 단계 (사용자 피드백): 흰색 일괄로 가리지 말기.
@@ -197,10 +195,10 @@ export default function GraphView({
           const node = n as FGNode;
           // 원래 색상 결정
           const baseColor =
-            node.type === "category"
-              ? (node.color || (node.pinned ? "#fde047" : "#facc15"))
-              : node.type === "topic"
-                ? topicKindColor(node.primary_external_id)
+            node.type === "keyword"
+              ? KEYWORD_COLOR
+              : node.type === "wiki"
+                ? wikiKindColor(node.primary_external_id)
                 : sourceTypeColor(node.source_type);
           // 사용자 요구: selected + related 다 원래 색 유지 (정체성). non-related 만
           // 어둡게 가라앉힘 (시각적 투명 효과). 어디 선택됐는지는 size 1.7x 로 식별.
@@ -211,11 +209,10 @@ export default function GraphView({
         }}
         nodeLabel={(n) => {
           const node = n as FGNode;
-          if (node.type === "category") {
-            const pinIcon = node.pinned ? " 📌" : "";
-            return `<div style="background:#27272a;color:#fff;padding:4px 8px;border-radius:4px;font-size:11px;max-width:260px"><b>${node.label}${pinIcon}</b><br/><span style="color:#facc15">${node.topic_count ?? 0} topics · ${node.item_count ?? 0} items</span> · ${node.slug || ""}</div>`;
+          if (node.type === "keyword") {
+            return `<div style="background:#27272a;color:#fff;padding:4px 8px;border-radius:4px;font-size:11px;max-width:260px"><b>🔑 ${node.label}</b><br/><span style="color:#eab308">${node.wiki_count ?? 0} wikis</span></div>`;
           }
-          if (node.type === "topic") {
+          if (node.type === "wiki") {
             return `<div style="background:#27272a;color:#fff;padding:4px 8px;border-radius:4px;font-size:11px;max-width:260px"><b>${node.label}</b><br/><span style="color:#fbbf24">${node.item_count ?? 0} items</span> · ${node.slug || ""}</div>`;
           }
           const noteIcon = node.has_notes ? " 📝" : "";

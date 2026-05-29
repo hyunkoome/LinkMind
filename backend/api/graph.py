@@ -1,14 +1,15 @@
 """
-GET /graph/topics, GET /graph/search, GET /graph/item/{item_id}
+GET /graph/keywords, /graph/keyword/{kw}, /graph/wiki/{slug}, /graph/item/{id}, /graph/search
 
-cytoscape.js 호환 JSON ({nodes: [...], edges: [...]}) 반환. frontend 의 graph UI
-(Phase 2.5+) 가 이 endpoint 만 호출해서 데이터 받음.
+cytoscape.js 호환 JSON ({nodes, edges}) 반환. frontend graph UI 가 이 endpoint 만 호출.
 
-설계:
-- 노드 종류 2개: topic (cluster 표현) + item (실 자료)
-- 엣지 한 종류: item ↔ topic, role 속성으로 modality (paper/code/video/...) 표시
-- raw_content 같은 큰 필드는 노드 data 에 X — GET /items/{id} 따로 호출
-  (graph 는 가벼움 우선, 노드 클릭 시 details 별 fetch)
+D10.5 세션 B (2026-05-29) — 그룹 축을 **wiki keyword** 로 통일 (옛 category/topic 폐기).
+계층: keyword ▸ wiki ▸ item.
+- keyword: wiki_pages.keywords (정규화 영문, D10.6) 의 distinct 값. 그룹 노드.
+- wiki: wiki_pages. 자료의 합성 페이지 (1링크=1위키).
+- item: items. 실 자료.
+엣지: keyword↔wiki (wiki.keywords @> [kw]), wiki↔item (wiki_page_items).
+raw_content 같은 큰 필드는 노드에 X — 클릭 시 GET /items/{id} / GET /wiki/{slug} 별 fetch.
 """
 
 from __future__ import annotations
@@ -23,15 +24,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.connection import get_session
 from backend.db.repository import (
     get_item_full,
-    list_categories,
-    list_item_topic_links,
-    list_items_for_topic,
     list_items_summary,
-    list_topic_category_links,
-    list_topics,
-    list_topics_by_ids,
-    list_topics_for_item,
-    list_topics_in_category,
+    list_keyword_counts,
+    list_wiki_item_links,
+    list_wiki_nodes,
+    list_wikis_for_keyword,
     search_items_by_text,
 )
 from backend.schemas.models import GraphEdge, GraphNode, GraphResponse
@@ -45,22 +42,43 @@ router = APIRouter()
 # ──────────────────────────────────────────────────────────────
 
 
-def topic_to_node(topic: dict[str, Any]) -> GraphNode:
-    """topic row → cytoscape 노드. id 는 'topic:<uuid>' prefix.
+def _short_summary(summary: str | None, *, max_chars: int = 200) -> str | None:
+    if not summary:
+        return None
+    s = summary.strip()
+    if len(s) <= max_chars:
+        return s
+    return s[:max_chars].rstrip() + "…"
 
-    label: title 우선, 없으면 slug.
-    """
-    primary_ext = topic.get("primary_external_id") or {}
+
+def keyword_to_node(keyword: str, wiki_count: int) -> GraphNode:
+    """keyword 그룹 노드. id 는 'keyword:<kw>'. (옛 category 자리)"""
     return GraphNode(
         data={
-            "id": f"topic:{topic['id']}",
-            "label": topic.get("title") or topic.get("slug") or "(untitled)",
-            "type": "topic",
-            "slug": topic.get("slug"),
-            "title": topic.get("title"),
-            "item_count": int(topic.get("item_count") or 0),
-            "primary_external_id": primary_ext,
-            "tags": list(topic.get("tags") or []),
+            "id": f"keyword:{keyword}",
+            "label": keyword,
+            "type": "keyword",
+            "slug": keyword,
+            "wiki_count": int(wiki_count or 0),
+        }
+    )
+
+
+def wiki_to_node(wiki: dict[str, Any]) -> GraphNode:
+    """wiki 노드. id 는 'wiki:<slug>'. (옛 topic 자리)
+
+    색은 frontend 가 primary_external_id 로 결정 (topicKindColor 재사용).
+    """
+    return GraphNode(
+        data={
+            "id": f"wiki:{wiki['slug']}",
+            "label": wiki.get("title") or wiki.get("slug") or "(untitled)",
+            "type": "wiki",
+            "slug": wiki.get("slug"),
+            "title": wiki.get("title"),
+            "item_count": int(wiki.get("item_count") or 0),
+            "keywords": list(wiki.get("keywords") or []),
+            "primary_external_id": wiki.get("primary_external_id") or {},
         }
     )
 
@@ -95,93 +113,82 @@ def item_to_node(item: dict[str, Any]) -> GraphNode:
     )
 
 
-def category_to_node(category: dict[str, Any]) -> GraphNode:
-    """category row → cytoscape 노드. id 는 'category:<uuid>'.
-
-    label: label 우선, 없으면 slug. size 는 item_count 기반 (frontend 가 처리).
-    """
-    return GraphNode(
+def keyword_wiki_edge(keyword: str, wiki_slug: str) -> GraphEdge:
+    """keyword → wiki 엣지. id 'edge:kw:<kw>:<wiki_slug>'."""
+    return GraphEdge(
         data={
-            "id": f"category:{category['id']}",
-            "label": category.get("label") or category.get("slug") or "(untitled)",
-            "type": "category",
-            "slug": category.get("slug"),
-            "color": category.get("color"),
-            "pinned": bool(category.get("pinned")),
-            "topic_count": int(category.get("topic_count") or 0),
-            "item_count": int(category.get("item_count") or 0),
-            "synonyms": list(category.get("synonyms") or []),
+            "id": f"edge:kw:{keyword}:{wiki_slug}",
+            "source": f"keyword:{keyword}",
+            "target": f"wiki:{wiki_slug}",
+            "role": "keyword",
+            "confidence": 1.0,
+            "link_source": "auto",
         }
     )
 
 
-def topic_category_link_to_edge(link: dict[str, Any]) -> GraphEdge:
-    """topic_categories row → cytoscape 엣지. id 'edge:cat:<cat>:<topic>'."""
-    cat_id = link["category_id"]
-    topic_id = link["topic_id"]
+def wiki_item_edge(wiki_slug: str, item_id: Any, link: dict[str, Any]) -> GraphEdge:
+    """wiki → item 엣지 (wiki_page_items). id 'edge:wiki:<wiki_slug>:<item>'."""
     return GraphEdge(
         data={
-            "id": f"edge:cat:{cat_id}:{topic_id}",
-            "source": f"category:{cat_id}",
-            "target": f"topic:{topic_id}",
-            "role": "category",
+            "id": f"edge:wiki:{wiki_slug}:{item_id}",
+            "source": f"wiki:{wiki_slug}",
+            "target": f"item:{item_id}",
+            "role": link.get("role") or "source",
             "confidence": float(link.get("confidence") or 1.0),
             "link_source": link.get("source") or "auto",
         }
     )
 
 
-def link_to_edge(link: dict[str, Any]) -> GraphEdge:
-    """item_topics row → cytoscape 엣지. id 는 'edge:<item>:<topic>'."""
-    item_id = link["item_id"]
-    topic_id = link["topic_id"]
-    return GraphEdge(
-        data={
-            "id": f"edge:{item_id}:{topic_id}",
-            "source": f"item:{item_id}",
-            "target": f"topic:{topic_id}",
-            "role": link.get("role") or "item",
-            "confidence": float(link.get("confidence") or 1.0),
-            "link_source": link.get("source") or "auto",
-        }
-    )
-
-
-def _short_summary(summary: str | None, *, max_chars: int = 200) -> str | None:
-    if not summary:
-        return None
-    s = summary.strip()
-    if len(s) <= max_chars:
-        return s
-    return s[:max_chars].rstrip() + "…"
-
-
-def build_graph_response(
-    topics: list[dict[str, Any]],
+def _build_kwi(
+    keyword_node: GraphNode | None,
+    wikis: list[dict[str, Any]],
     items: list[dict[str, Any]],
     links: list[dict[str, Any]],
+    wiki_by_id: dict[Any, dict[str, Any]],
 ) -> GraphResponse:
-    """3개 입력 → cytoscape JSON. id 중복 자동 제거 (같은 노드가 여러 path 로 와도 안전)."""
-    seen_ids: set[str] = set()
+    """keyword(옵션) + wiki + item 노드 + (keyword↔wiki, wiki↔item) 엣지 조립.
+
+    id 중복 자동 제거 — 같은 노드가 여러 path 로 와도 안전. dangling edge 방지를 위해
+    wiki_by_id 에 없는 link 는 skip (frontend force-graph 'node not found' 회피).
+    """
     nodes: list[GraphNode] = []
-    for t in topics:
-        n = topic_to_node(t)
-        if n.data["id"] not in seen_ids:
-            seen_ids.add(n.data["id"])
-            nodes.append(n)
-    for it in items:
-        n = item_to_node(it)
-        if n.data["id"] not in seen_ids:
-            seen_ids.add(n.data["id"])
+    seen: set[str] = set()
+
+    def add(n: GraphNode) -> None:
+        if n.data["id"] not in seen:
+            seen.add(n.data["id"])
             nodes.append(n)
 
+    if keyword_node is not None:
+        add(keyword_node)
+    for w in wikis:
+        add(wiki_to_node(w))
+    for it in items:
+        add(item_to_node(it))
+
     edges: list[GraphEdge] = []
-    seen_edges: set[str] = set()
-    for lk in links:
-        e = link_to_edge(lk)
-        if e.data["id"] not in seen_edges:
-            seen_edges.add(e.data["id"])
+    seen_e: set[str] = set()
+
+    def add_e(e: GraphEdge) -> None:
+        if e.data["id"] not in seen_e:
+            seen_e.add(e.data["id"])
             edges.append(e)
+
+    if keyword_node is not None:
+        kw = keyword_node.data["slug"]
+        for w in wikis:
+            add_e(keyword_wiki_edge(kw, w["slug"]))
+    item_node_ids = {n.data["id"] for n in nodes if n.data["type"] == "item"}
+    for lk in links:
+        w = wiki_by_id.get(lk["wiki_page_id"])
+        if not w:
+            continue
+        # item 노드가 실제로 포함된 경우만 엣지 (dangling 방지)
+        if f"item:{lk['item_id']}" not in item_node_ids:
+            continue
+        add_e(wiki_item_edge(w["slug"], lk["item_id"], lk))
 
     return GraphResponse(nodes=nodes, edges=edges)
 
@@ -191,191 +198,94 @@ def build_graph_response(
 # ──────────────────────────────────────────────────────────────
 
 
-@router.get("/categories", response_model=GraphResponse)
-async def graph_all_categories(
-    limit: int = Query(default=500, ge=1, le=5000),
+@router.get("/keywords", response_model=GraphResponse)
+async def graph_keywords(
+    limit: int = Query(default=100000, ge=1, le=100000),
     session: AsyncSession = Depends(get_session),
 ) -> GraphResponse:
-    """카테고리 노드 + 그에 속한 topic 노드 + category↔topic 엣지.
+    """keyword 그룹 노드 (빈도순) — 메인 진입 view. 기본 전부 (사용자 요구).
 
-    UI 의 카테고리-우선 view (Phase 2.5 wave-3) — 사용자가 키워드 카테고리를
-    먼저 본 후 클릭으로 그 안의 topic 들 expand. item 은 포함 X (lazy load).
+    keyword 노드만 가볍게 (wiki/item 은 클릭 시 GET /graph/keyword/{kw} 로 expand).
     """
-    cats = await list_categories(session, limit=limit)
-    if not cats:
-        return GraphResponse(nodes=[], edges=[])
-
-    cat_ids = [c["id"] for c in cats]
-    cat_topic_links = await list_topic_category_links(session, category_ids=cat_ids)
-
-    # topic 들 (UI 가 그 안의 item 들은 별도 expand 요청 — 가벼움).
-    # topic_ids 직접 fetch — 옛 list_topics(limit=20000) 은 topic 23k+ 환경에서 limit
-    # 밖 topic 의 cat_topic_link edge 가 dangling → frontend "node not found". 2026-05-25 fix.
-    topic_ids = list({lk["topic_id"] for lk in cat_topic_links})
-    topics_in_view = await list_topics_by_ids(session, topic_ids=topic_ids)
-
-    # cytoscape 변환
-    nodes: list[GraphNode] = []
-    seen: set[str] = set()
-    for c in cats:
-        n = category_to_node(c)
-        if n.data["id"] not in seen:
-            seen.add(n.data["id"])
-            nodes.append(n)
-    for t in topics_in_view:
-        n = topic_to_node(t)
-        if n.data["id"] not in seen:
-            seen.add(n.data["id"])
-            nodes.append(n)
-
-    edges: list[GraphEdge] = []
-    seen_edges: set[str] = set()
-    for lk in cat_topic_links:
-        e = topic_category_link_to_edge(lk)
-        if e.data["id"] not in seen_edges:
-            seen_edges.add(e.data["id"])
-            edges.append(e)
-    return GraphResponse(nodes=nodes, edges=edges)
+    kws = await list_keyword_counts(session, limit=limit)
+    nodes = [keyword_to_node(k["keyword"], k["usage_count"]) for k in kws]
+    return GraphResponse(nodes=nodes, edges=[])
 
 
-@router.get("/category/{category_slug}", response_model=GraphResponse)
-async def graph_category_expand(
-    category_slug: str,
+@router.get("/keyword/{keyword}", response_model=GraphResponse)
+async def graph_keyword_expand(
+    keyword: str,
     session: AsyncSession = Depends(get_session),
 ) -> GraphResponse:
-    """특정 카테고리 클릭 시 expand — 그 카테고리의 topic + 각 topic 의 item.
+    """keyword 클릭 시 expand — 그 keyword 의 wiki 들 + 각 wiki 의 item 들.
 
-    노드: category 1 + 그 안의 topic N + 각 topic 의 item M.
-    엣지: category→topic, item→topic 두 종류.
+    노드: keyword 1 + wiki N + item M. 엣지: keyword→wiki, wiki→item.
     """
-    from backend.db.repository import find_category_by_slug
-    cat = await find_category_by_slug(session, slug=category_slug)
-    if not cat:
-        return GraphResponse(nodes=[], edges=[])
+    wikis = await list_wikis_for_keyword(session, keyword=keyword)
+    kw_node = keyword_to_node(keyword, len(wikis))
+    if not wikis:
+        return GraphResponse(nodes=[kw_node], edges=[])
 
-    topics = await list_topics_in_category(session, category_id=cat["id"])
-    if not topics:
-        return GraphResponse(
-            nodes=[category_to_node(cat)], edges=[],
-        )
-
-    topic_ids = [t["id"] for t in topics]
-    item_topic_links = await list_item_topic_links(session, topic_ids=topic_ids)
-    item_ids = list({lk["item_id"] for lk in item_topic_links})
-    items = await list_items_summary(session, item_ids=item_ids)
-
-    # cytoscape 변환 — category 1 + topics + items + 두 종류 엣지
-    nodes: list[GraphNode] = [category_to_node(cat)]
-    seen: set[str] = {nodes[0].data["id"]}
-    for t in topics:
-        n = topic_to_node(t)
-        if n.data["id"] not in seen:
-            seen.add(n.data["id"])
-            nodes.append(n)
-    for it in items:
-        n = item_to_node(it)
-        if n.data["id"] not in seen:
-            seen.add(n.data["id"])
-            nodes.append(n)
-
-    edges: list[GraphEdge] = []
-    seen_edges: set[str] = set()
-    # category → topic 엣지 (이 카테고리에 속한 topic 들과 연결)
-    for t in topics:
-        eid = f"edge:cat:{cat['id']}:{t['id']}"
-        if eid in seen_edges:
-            continue
-        seen_edges.add(eid)
-        edges.append(GraphEdge(data={
-            "id": eid,
-            "source": f"category:{cat['id']}",
-            "target": f"topic:{t['id']}",
-            "role": "category",
-            "confidence": 1.0,
-            "link_source": "auto",
-        }))
-    # item → topic 엣지
-    for lk in item_topic_links:
-        e = link_to_edge(lk)
-        if e.data["id"] not in seen_edges:
-            seen_edges.add(e.data["id"])
-            edges.append(e)
-    return GraphResponse(nodes=nodes, edges=edges)
-
-
-@router.get("/topic/{topic_id}", response_model=GraphResponse)
-async def graph_topic_expand(
-    topic_id: UUID,
-    session: AsyncSession = Depends(get_session),
-) -> GraphResponse:
-    """특정 토픽 클릭 시 expand — 그 토픽 1개 + 그 안의 모든 item.
-
-    노드: topic 1 + 모든 item N. 엣지: item→topic.
-    sidebar 토픽 클릭 시 frontend 가 호출 → 그 토픽의 자료들이 그래프에 보임.
-    """
-    item_topic_links = await list_item_topic_links(session, topic_ids=[topic_id])
-    item_ids = list({lk["item_id"] for lk in item_topic_links})
-    items = await list_items_summary(session, item_ids=item_ids)
-
-    # topic 자체 fetch (raw — list_topics 와 같은 모양으로)
-    from sqlalchemy import text as _txt
-    res = await session.execute(
-        _txt("""
-            SELECT t.id, t.slug, t.title, t.primary_external_id, t.tags,
-                   t.created_at, t.updated_at,
-                   COUNT(it.item_id) AS item_count
-              FROM topics t
-              LEFT JOIN item_topics it ON it.topic_id = t.id
-             WHERE t.id = :tid
-             GROUP BY t.id
-        """),
-        {"tid": topic_id},
+    wiki_by_id = {w["id"]: w for w in wikis}
+    links = await list_wiki_item_links(
+        session, wiki_page_ids=[w["id"] for w in wikis]
     )
-    topic_row = res.mappings().first()
-    if not topic_row:
-        return GraphResponse(nodes=[], edges=[])
-
-    topic_node = topic_to_node(dict(topic_row))
-    nodes: list[GraphNode] = [topic_node]
-    seen: set[str] = {topic_node.data["id"]}
-    for it in items:
-        n = item_to_node(it)
-        if n.data["id"] not in seen:
-            seen.add(n.data["id"])
-            nodes.append(n)
-
-    edges: list[GraphEdge] = []
-    seen_edges: set[str] = set()
-    for lk in item_topic_links:
-        e = link_to_edge(lk)
-        if e.data["id"] not in seen_edges:
-            seen_edges.add(e.data["id"])
-            edges.append(e)
-    return GraphResponse(nodes=nodes, edges=edges)
-
-
-@router.get("/topics", response_model=GraphResponse)
-async def graph_all_topics(
-    limit: int = Query(default=5000, ge=1, le=20000),
-    session: AsyncSession = Depends(get_session),
-) -> GraphResponse:
-    """모든 topic + 그 topic 들에 속한 item 노드 + 엣지.
-
-    graph UI 의 메인 view — 시작 화면. default=5000 (topic 기준) — 그 안의
-    item 모두 펼침. 사용자 누적 자료가 많아지면 max 20000 까지 허용.
-    """
-    topics = await list_topics(session, limit=limit)
-    if not topics:
-        return GraphResponse(nodes=[], edges=[])
-
-    topic_ids = [t["id"] for t in topics]
-    links = await list_item_topic_links(session, topic_ids=topic_ids)
-
-    # 엣지의 unique item_id 추출 → 한 번에 노드 정보 fetch (N+1 회피)
     item_ids = list({lk["item_id"] for lk in links})
     items = await list_items_summary(session, item_ids=item_ids)
+    return _build_kwi(kw_node, wikis, items, links, wiki_by_id)
 
-    return build_graph_response(topics, items, links)
+
+@router.get("/wiki/{slug}", response_model=GraphResponse)
+async def graph_wiki_expand(
+    slug: str,
+    session: AsyncSession = Depends(get_session),
+) -> GraphResponse:
+    """wiki 클릭 시 expand — 그 wiki 1개 + 그 안의 item 들 (sources/figures).
+
+    노드: wiki 1 + item N. 엣지: wiki→item.
+    """
+    wikis = await list_wiki_nodes(session, slugs=[slug])
+    if not wikis:
+        return GraphResponse(nodes=[], edges=[])
+
+    wiki_by_id = {w["id"]: w for w in wikis}
+    links = await list_wiki_item_links(session, wiki_page_ids=[wikis[0]["id"]])
+    item_ids = list({lk["item_id"] for lk in links})
+    items = await list_items_summary(session, item_ids=item_ids)
+    return _build_kwi(None, wikis, items, links, wiki_by_id)
+
+
+@router.get("/item/{item_id}", response_model=GraphResponse)
+async def graph_item_neighborhood(
+    item_id: UUID,
+    session: AsyncSession = Depends(get_session),
+) -> GraphResponse:
+    """한 item 의 이웃 — 그 item 이 속한 wiki(들) + 형제 item.
+
+    graph UI 에서 자료 노드 클릭 시 호출 — 그 자료의 wiki 와 같은 wiki 의 다른
+    자료들을 보여줌. wiki 가 없으면 item 단독 노드 (404 대신 빈/단일).
+    """
+    item = await get_item_full(session, item_id)
+    if item is None:
+        return GraphResponse(nodes=[], edges=[])
+
+    wiki_refs = item.get("wikis") or []
+    slugs = [w["slug"] for w in wiki_refs if w.get("slug")]
+    if not slugs:
+        # wiki 미분류 자료 — 단독 노드
+        items = await list_items_summary(session, item_ids=[item_id])
+        return GraphResponse(
+            nodes=[item_to_node(it) for it in items], edges=[]
+        )
+
+    wikis = await list_wiki_nodes(session, slugs=slugs)
+    wiki_by_id = {w["id"]: w for w in wikis}
+    links = await list_wiki_item_links(
+        session, wiki_page_ids=[w["id"] for w in wikis]
+    )
+    item_ids = list({lk["item_id"] for lk in links} | {item_id})
+    items = await list_items_summary(session, item_ids=item_ids)
+    return _build_kwi(None, wikis, items, links, wiki_by_id)
 
 
 @router.get("/search", response_model=GraphResponse)
@@ -386,66 +296,16 @@ async def graph_search(
 ) -> GraphResponse:
     """검색 (Postgres FTS) → graph subset.
 
-    검색된 item + 그 item 들이 속한 topic + 두 종류의 노드 사이 엣지. graph UI
-    의 검색 상자 입력 시 호출 — 결과 화면 전체가 검색 subset 으로 갱신.
-
-    Qdrant 벡터 검색이 아닌 FTS — 빠르고 가볍게 graph subset 만 보여주는 게
-    목적. 정밀 의미 검색은 /search 따로.
+    검색된 item + 그 item 들이 속한 wiki + 두 종류 노드 사이 엣지. 정밀 의미
+    검색은 POST /wiki/search (Qdrant) 따로 — 여기는 가벼운 graph subset 용.
     """
     item_ids_uuid = await search_items_by_text(session, query=q, limit=limit)
     if not item_ids_uuid:
         return GraphResponse(nodes=[], edges=[])
 
     items = await list_items_summary(session, item_ids=item_ids_uuid)
-    links = await list_item_topic_links(session, item_ids=item_ids_uuid)
-
-    # 결과 item 의 모든 topic 도 노드로 표시 → 사용자가 어떤 cluster 인지 한 눈에.
-    # topic_ids 직접 fetch (옛 list_topics(limit=500) 은 limit 밖 topic 누락 → frontend
-    # force-graph 의 "node not found" 유발). 2026-05-25 fix.
-    topic_ids = list({lk["topic_id"] for lk in links})
-    topics = await list_topics_by_ids(session, topic_ids=topic_ids)
-
-    return build_graph_response(topics, items, links)
-
-
-@router.get("/item/{item_id}", response_model=GraphResponse)
-async def graph_item_neighborhood(
-    item_id: UUID,
-    session: AsyncSession = Depends(get_session),
-) -> GraphResponse:
-    """한 item 의 이웃 — 같은 topic 의 다른 modality item + topic 노드들.
-
-    graph UI 에서 노드 클릭 시 호출 — focus item + 인접 노드 확장 표시.
-    빈 응답 (topic 없음, 다른 modality 없음) 도 valid — UI 가 단일 노드만 표시.
-
-    404 가 아니라 빈 GraphResponse 반환 — graph 가 단일 isolated 노드로 표시되어
-    UI consistency 유지 (item 자체가 정말 없으면 별도 GET /items/{id} 가 404).
-    """
-    item = await get_item_full(session, item_id)
-    if item is None:
-        return GraphResponse(nodes=[], edges=[])
-
-    # 1. 이 item 의 모든 topic
-    topic_links_self = await list_topics_for_item(session, item_id=item_id)
-    topic_ids = [t["id"] for t in topic_links_self]
-
-    # 2. 그 topic 들의 다른 item 들
-    neighbor_items_by_id: dict[UUID, dict[str, Any]] = {}
-    all_links: list[dict[str, Any]] = []
-    for tid in topic_ids:
-        for it in await list_items_for_topic(session, topic_id=tid):
-            neighbor_items_by_id[it["id"]] = it
-        # 각 topic 의 모든 link (자기 + 다른 item)
-        topic_links = await list_item_topic_links(session, topic_ids=[tid])
-        all_links.extend(topic_links)
-
-    # 자기 item 도 노드에 포함 (정확한 표시 위해 summary list 형태로 변환)
-    self_summary_list = await list_items_summary(session, item_ids=[item_id])
-    items_combined = list(neighbor_items_by_id.values()) + self_summary_list
-
-    # topic 노드 변환 — topic_ids 직접 fetch (옛 list_topics(limit=500) 방식은
-    # topic 23k+ 환경에서 limit 밖 topic 의 node 가 누락돼 frontend force-graph 의
-    # "node not found" runtime error 유발). 2026-05-25 fix.
-    topics_full = await list_topics_by_ids(session, topic_ids=topic_ids)
-
-    return build_graph_response(topics_full, items_combined, all_links)
+    links = await list_wiki_item_links(session, item_ids=item_ids_uuid)
+    wiki_ids = list({lk["wiki_page_id"] for lk in links})
+    wikis = await list_wiki_nodes(session, ids=wiki_ids)
+    wiki_by_id = {w["id"]: w for w in wikis}
+    return _build_kwi(None, wikis, items, links, wiki_by_id)
