@@ -61,6 +61,7 @@ from backend.schemas.models import (
     WikiSource,
     WikiStatsResponse,
 )
+from backend.utils.keywords import normalize_keyword
 
 logger = logging.getLogger("linkmind.api.wiki")
 
@@ -977,25 +978,21 @@ async def update_wiki_keywords(
 
     current: list[str] = list(row[0] or [])
 
-    # case-insensitive dedup helper
-    def _normalize(kw: str) -> str:
-        return kw.strip()
+    # 2026-05-29: 키워드 정규화 — 영문 only(CJK/한글 삭제) + 소문자-대시 slug.
+    # 삭제 입력도 정규화해 매칭 (저장된 키워드가 모두 정규화 형태라 일관).
+    remove_set = {n for kw in payload.remove if (n := normalize_keyword(kw))}
+    after_remove = [kw for kw in current if kw not in remove_set]
+    actually_removed = [kw for kw in current if kw in remove_set]
 
-    remove_set = {kw.lower() for kw in payload.remove if kw}
-    after_remove = [kw for kw in current if kw.lower() not in remove_set]
-    actually_removed = [kw for kw in current if kw.lower() in remove_set]
-
-    current_lower = {kw.lower() for kw in after_remove}
+    current_set = set(after_remove)
     actually_added: list[str] = []
     final = list(after_remove)
     for raw in payload.add:
-        kw = _normalize(raw)
-        if not kw or len(kw) > 80:
-            continue
-        if kw.lower() in current_lower:
+        kw = normalize_keyword(raw)         # None (CJK/한글/빈값) 이면 skip
+        if not kw or kw in current_set:
             continue
         final.append(kw)
-        current_lower.add(kw.lower())
+        current_set.add(kw)
         actually_added.append(kw)
 
     updated_row = (await session.execute(_UPDATE_KEYWORDS_API_SQL, {

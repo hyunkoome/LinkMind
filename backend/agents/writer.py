@@ -34,6 +34,7 @@ from backend.embedding.factory import get_embedding_provider
 from backend.embedding.wiki_qdrant import ensure_wiki_collection, upsert_wiki_page
 from backend.llm.base import ChatMessage
 from backend.llm.factory import get_llm_provider
+from backend.utils.keywords import normalize_keywords
 
 logger = logging.getLogger("linkmind.agents.writer")
 
@@ -174,7 +175,8 @@ class WriterAgent(AgentBase):
         # 이 3 섹션은 DB (wiki_page_items, keywords, cross-link 자동) 기반으로
         # frontend aside 가 별도 표시 — body 안 중복 X. body 는 narrative 만.
         # LLM 은 prompt 에 따라 7 섹션 다 출력 (키워드 자동 추출 필요), 우리가 cleanup.
-        extracted_keywords = _parse_keywords_section(raw_body)
+        # 키워드 정규화 (2026-05-29) — 영문 only(CJK/한글 삭제) + 소문자-대시 + dedup.
+        extracted_keywords = normalize_keywords(_parse_keywords_section(raw_body))
         body = _strip_metadata_sections(raw_body)
 
         # version+1 결정 (latest_version 은 retriever 가 가져옴)
