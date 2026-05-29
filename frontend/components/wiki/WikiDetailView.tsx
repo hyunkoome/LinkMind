@@ -181,12 +181,7 @@ export default function WikiDetailView({
         {/* 상단 — page: breadcrumb / panel: 라벨 + 닫기. + status/version/편집/재합성 */}
         <div className="flex items-center justify-between mb-4">
           {isPanel ? (
-            <Link
-              href={`/wiki/${encodeURIComponent(slug)}`}
-              className="text-xs text-orange-600 dark:text-orange-400 hover:underline"
-            >
-              전체 페이지 ↗
-            </Link>
+            <span className="text-xs text-zinc-400 dark:text-zinc-500">위키 상세</span>
           ) : (
             <Link href="/wiki" className="text-xs text-orange-600 dark:text-orange-400 hover:underline">
               ← Wiki 목록
