@@ -802,25 +802,35 @@ ingest going-forward fix 까지 확장. 모두 사용자 검증 완료.
 
 ---
 
+## ✅ 2026-05-29 후반 — D10.5 A+B + 그래프 페이지 제거 + /wiki 우측 패널 (완료)
+
+- **D10.5 세션 A** — graph item 클릭 → 우측 wiki body inline. `GET /items/{id}` 에 wikis 조인.
+- **D10.5 세션 B** — 그래프 `keyword ▸ wiki ▸ item` 재구성 (옛 category/topic 폐기, `wiki_pages.keywords`
+  로 그룹 통일) + **실시간 co-occurrence** (`/graph/keyword/{kw}` — 같은 위키 공유 키워드, GIN, 동적).
+  `backend/api/graph.py` 재작성 + repository 5 함수 + frontend 전 컴포넌트 전환.
+- **그래프 페이지 메인 nav 제거** (사용자 결정) — 키워드 49,919 규모에 force-graph 효용 낮음
+  (점구름·클릭지옥). 홈 `/`→`/ask` redirect. 옛 페이지 → `app/graph/page.tsx` 보류 (URL 직접 접근만).
+  컴포넌트 + backend `/graph/*` endpoint 는 남김 (본격화/삭제 추후 결정).
+- **/wiki 리스트 → 우측 패널 inline 상세** — 카드 클릭 시 페이지 이동 X.
+  `components/wiki/WikiDetailView.tsx` 추출 (`variant` page/panel, /wiki/[slug] 공용 — 편집/재합성/
+  Sources/Relationship/Keywords/메타/2단계 삭제 전부). 패널 폭 58rem, 전체 펼침(자체 스크롤 X).
+
 ## 🎯 다음 세션 — 여기부터 (간단명료)
 
-> 위 D1~D15 + Phase A~C 거의 다 ✅. wiki/키워드/사진 모델 정비 끝. 이제:
+> wiki/키워드/그래프 UX 정비 끝. 홈 = `/ask`. 이제:
 
-**1순위 — D10.5 세션 A: graph ↔ wiki inline (1 세션)**
-- 그래프에서 자료(노드) 클릭 → 우측 ItemDetails 패널에 그 자료의 **wiki 본문을 inline** 표시
-  (별 페이지 이동 X). 현재는 그래프와 wiki 가 분리돼 있음.
-- 할 일: `GET /items/{id}` 에 `wiki_page_items` 조인 (자료가 속한 wiki list 반환) →
-  `frontend/components/ItemDetails.tsx` 에 WikiBody 컴포넌트 재사용해 본문 표시 + keywords pill.
-- 왜 1순위? 사용자가 직접 써보고 graph↔wiki 통합 mental model 검증 → B/C 의사결정.
+**1순위 — 대화형 /ask 페이지 (ChatGPT 식 멀티턴)**
+- 현재 `frontend/app/ask/page.tsx` 는 1-shot RAG (Step 1). → **멀티턴 대화 UI** 로 발전.
+- 대화 history 유지 + (가능하면) streaming + citation/related_wikis + 우측 wiki inline
+  (`WikiDetailView` 재사용 가능). backend `/ask` 응답에 `related_wikis[]` 이미 있음.
+- 이게 LinkMind 메인 사용 경로 — 빨리 완성해 학습(Phase 4)으로.
 
-**2순위 — D10.5 세션 B: categories → keywords 전환 (1-2 세션)**
-- 옛 `categories` 테이블 + `auto_link_categories` + 좌측 카테고리 트리 폐기 → keyword 기반
-  재구성 (이제 키워드 정규화 인프라 갖춰짐). 그래프 좌측 트리 `keyword ▸ wiki ▸ item`.
+**2순위 — 학습 파이프라인 (Phase 4 진입)**
+- feedback 인프라 (`/ask` 답변 👍/👎/수정 메모 → feedback 테이블)
+- dataset exporter (raw + summary + user_notes + feedback → JSONL) → sVLL LoRA (LLaMA-Factory + Qwen2-VL)
 
-**그 외 backlog**
-- D10 wave-3 critic agent / `/ask` Step 2·3 (대화 history + filing-back)
-- D8 cross-modality matching, D9 arxiv title 재시드
-- link_photo_captions 자동화 (daemon/주기) — 원하면
-- (장기) dataset exporter → Phase 4 sVLL LoRA 학습
+**그 외 / 보류**
+- `/graph` 페이지 본격화할지 완전 삭제할지 결정 (현재 nav 제거 + 코드 보류)
+- D10 wave-3 critic agent / D8 cross-modality / D10 lint job / link_photo_captions 자동화
 
 > 운영: `bash scripts/step5_run_dev.sh` 전체 기동. 키워드/약어는 **Settings 페이지**에서 편집.

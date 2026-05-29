@@ -22,13 +22,12 @@ GitHub · Arxiv · YouTube · Image           (Phase 3+: Slack/WhatsApp/Discord)
                            │
                            ▼
                   FastAPI + Next.js 16 (frontend/)
-                  + 3D Graph (react-force-graph-3d)
-                  + /wiki UI (D10 wave-1+2 + D11 통합, 2026-05-27)
+                  홈 / → /ask (대화형 RAG, 메인)
                            │
             ┌──────────────┼────────────────┐
             ▼              ▼                ▼
-       /ingest    /ask (대화형 RAG)   /graph (3D force)
-                  /wiki (검색·list·detail·편집·삭제)
+       /ingest    /ask (대화형 RAG)   /wiki (리스트 + 우측 inline 상세)
+       /settings                      /graph (keyword 관계 — 보류, nav 제거)
                            │
                            ▼
         [D10 llm_wiki — 2026-05-26 wave-1+2 완료]
@@ -463,16 +462,23 @@ LinkMind 는 backend (`backend/`) + multi-channel gateway (`ai_agents/`) + Strea
 
 날짜별·wave별·commit 상세 이력은 **git log** + [`docs/features_backlog.md`](docs/features_backlog.md) + [`CLAUDE.md §13`](CLAUDE.md) 참고.
 
-### 다음 할 일
+### 기능 현황 — 개발한 / 개발할(순서) / 보류(이유)
 
-**전략 (2026-05-29)**: 대화형 ask 페이지를 최대한 빨리 완성 → 학습(Phase 4)으로. wiki/graph 는 당분간 최소한만 손댐.
+> 날짜별 히스토리 금지 — 이력은 git log + [`docs/features_backlog.md`](docs/features_backlog.md).
 
-- ✅ **오늘 완료** — nav 순서 `Ask | 위키 | 그래프 | 수집 | 설정` + graph item 노드 클릭 → 우측에 wiki body inline (D10.5 세션 A 흡수)
-- 🎯 **1순위** — 대화형 `/ask` 페이지 (ChatGPT 식 멀티턴 + citation + 우측 wiki inline). LinkMind 의 메인 사용 경로.
-- 🎯 **2순위** — 학습 파이프라인: feedback 인프라 → dataset exporter (JSONL) → sVLL LoRA 파인튜닝 (Phase 4)
-- ⏸ **보류** (ask 구체화하며 바뀔 수 있음) — D10.5 세션 B/C · critic agent · D8 cross-modality
+**개발한 기능** (요약 — 상세는 [`CLAUDE.md §13`](CLAUDE.md)):
+- 멀티 수집 (URL/PDF/GitHub/arxiv/YouTube/이미지 + 텔레그램·Slack) · AI 요약·태깅 · 임베딩(bge-m3)
+- wiki 자동 합성 (4 agent) + 키워드 정규화/클라우드 · `/wiki` 리스트 + **우측 inline 상세**(편집/재합성/Sources/Relationship/Keywords/삭제)
+- `/ask` 1-shot RAG · 자료/위키 삭제 (2단계 confirm) · Settings(키워드 약어·별칭)
+- 인프라: Postgres + Qdrant + vLLM (LLM + embed)
 
-상세는 [`CLAUDE.md §13`](CLAUDE.md).
+**개발할 기능 (순서)**:
+1. **대화형 `/ask` 페이지** (ChatGPT 식 멀티턴 + 대화 history + citation + 우측 wiki inline) ← 다음 세션. 홈(`/`)이 곧 ask, LinkMind 메인 경로.
+2. **학습 파이프라인** — feedback 인프라(👍/👎/수정) → dataset exporter(JSONL) → sVLL LoRA 파인튜닝 (Phase 4)
+
+**보류된 기능 (이유)**:
+- `/graph` 키워드 관계 그래프 — 키워드 49,919 규모에 force-graph 효용 낮음 (점구름·클릭지옥). 메인 nav 제거 + 코드 보류.
+- critic agent / D8 cross-modality / D10 lint — ask·데이터 안정화 후.
 
 ### wiki status 모델 (인지 필수)
 
