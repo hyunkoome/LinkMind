@@ -13,10 +13,10 @@
  *  - keywords pill (2026-05-29) — 클릭 시 ?keyword= 필터. source_count 표시
  */
 
-import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
+import WikiDetailView from "@/components/wiki/WikiDetailView";
 import {
   batchRegenerateWiki,
   getWikiStats,
@@ -128,6 +128,11 @@ export default function WikiListPage() {
   const [response, setResponse] = useState<{ total: number; pages: WikiPageListItem[] } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // 우측 패널 — 리스트에서 선택한 위키 상세를 inline 표시 (페이지 이동 X, 2026-05-29).
+  const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
+  // 삭제 등으로 리스트 갱신 필요 시 증가 → listWikiPages effect 재실행.
+  const [refetchKey, setRefetchKey] = useState(0);
 
   // 상태별 count — tab UI + 일괄 합성 버튼 라벨 (2026-05-27)
   const [stats, setStats] = useState<WikiStatsResponse | null>(null);
@@ -294,7 +299,7 @@ export default function WikiListPage() {
     };
     // keywordKey = JSON.stringify(keywordFilters) — 배열 dep 대신 안정 문자열
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q, statusFilter, keywordKey, sort, page, pageSize]);
+  }, [q, statusFilter, keywordKey, sort, page, pageSize, refetchKey]);
 
   // stats fetch — mount 시 1회 + pending 이 있으면 10초 polling (자동 daemon
   // 진행 상황 시각화). pending=0 이면 polling 종료.
@@ -355,7 +360,7 @@ export default function WikiListPage() {
 
   return (
     <div className="flex-1 overflow-auto p-6 bg-zinc-50 dark:bg-zinc-950">
-      <div className="max-w-7xl mx-auto">
+      <div className="max-w-[100rem] mx-auto">
         <header className="mb-6">
           <h1 className="text-2xl font-bold text-zinc-900 dark:text-zinc-100">
             📖 LinkMind Wiki
@@ -787,12 +792,17 @@ export default function WikiListPage() {
                 return (
                   <li key={p.id}>
                     {isClickable ? (
-                      <Link
-                        href={`/wiki/${encodeURIComponent(p.slug)}`}
-                        className="block p-3 rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:border-orange-400 dark:hover:border-orange-500 transition"
+                      <button
+                        type="button"
+                        onClick={() => setSelectedSlug(p.slug)}
+                        className={`block w-full text-left p-3 rounded border transition ${
+                          selectedSlug === p.slug
+                            ? "border-orange-400 dark:border-orange-500 bg-orange-50 dark:bg-orange-900/20 ring-1 ring-orange-300 dark:ring-orange-700"
+                            : "border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:border-orange-400 dark:hover:border-orange-500"
+                        }`}
                       >
                         {inner}
-                      </Link>
+                      </button>
                     ) : (
                       <div
                         className="block p-3 rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 opacity-60 cursor-not-allowed"
@@ -812,6 +822,22 @@ export default function WikiListPage() {
           );
         })()}
           </div>{/* /오른쪽 메인 */}
+
+          {/* 우측 패널 — 리스트에서 선택한 위키 상세 inline (페이지 이동 X) */}
+          {selectedSlug && (
+            <aside className="w-full lg:w-[40rem] lg:shrink-0 lg:sticky lg:top-0 self-start lg:max-h-screen overflow-y-auto rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900">
+              <WikiDetailView
+                slug={selectedSlug}
+                variant="panel"
+                onClose={() => setSelectedSlug(null)}
+                onDeleted={() => {
+                  setSelectedSlug(null);
+                  setRefetchKey((k) => k + 1);
+                  refreshStats();
+                }}
+              />
+            </aside>
+          )}
         </div>{/* /2-column flex */}
       </div>
     </div>
