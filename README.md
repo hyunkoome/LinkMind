@@ -465,13 +465,14 @@ LinkMind 는 backend (`backend/`) + multi-channel gateway (`ai_agents/`) + Strea
 
 ### 다음 할 일
 
-**🎯 1순위 — D10.5 세션 A: graph ↔ wiki inline (1 세션)**
-1. `GET /items/{id}` 에 `wiki_page_items` 조인 (자료가 속한 wiki list)
-2. `frontend/components/ItemDetails.tsx` 에 user_notes textarea + wiki body inline (`WikiBody` 재사용)
-3. wiki 여러 개면 탭 / keywords pill 표시
-→ 사용자가 직접 써보고 세션 B/C 의사결정
+**전략 (2026-05-29)**: 대화형 ask 페이지를 최대한 빨리 완성 → 학습(Phase 4)으로. wiki/graph 는 당분간 최소한만 손댐.
 
-**후속**: 세션 B (categories → keywords 전환) · 세션 C (페이지 일원화) · critic agent · /ask Step 2/3 · D8 cross-modality · dataset exporter (Phase 3 후반). 상세는 [`CLAUDE.md §13`](CLAUDE.md).
+- ✅ **오늘 완료** — nav 순서 `Ask | 위키 | 그래프 | 수집 | 설정` + graph item 노드 클릭 → 우측에 wiki body inline (D10.5 세션 A 흡수)
+- 🎯 **1순위** — 대화형 `/ask` 페이지 (ChatGPT 식 멀티턴 + citation + 우측 wiki inline). LinkMind 의 메인 사용 경로.
+- 🎯 **2순위** — 학습 파이프라인: feedback 인프라 → dataset exporter (JSONL) → sVLL LoRA 파인튜닝 (Phase 4)
+- ⏸ **보류** (ask 구체화하며 바뀔 수 있음) — D10.5 세션 B/C · critic agent · D8 cross-modality
+
+상세는 [`CLAUDE.md §13`](CLAUDE.md).
 
 ### wiki status 모델 (인지 필수)
 

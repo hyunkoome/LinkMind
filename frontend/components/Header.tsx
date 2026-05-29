@@ -6,11 +6,12 @@ import { usePathname } from "next/navigation";
 import ThemeToggle from "@/components/ThemeToggle";
 import { useT } from "@/lib/i18n/context";
 
+// nav 순서 (2026-05-29): ask 가 LinkMind 메인 사용 경로라 1순위 노출.
 const NAV_HREFS = [
-  { href: "/", icon: "🔮", key: "graph" as const },
-  { href: "/ingest", icon: "📥", key: "ingest" as const },
   { href: "/ask", icon: "🤖", key: "ask" as const },
   { href: "/wiki", icon: "📖", key: "wiki" as const },
+  { href: "/", icon: "🔮", key: "graph" as const },
+  { href: "/ingest", icon: "📥", key: "ingest" as const },
   { href: "/settings", icon: "⚙️", key: "settings" as const },
 ];
 
