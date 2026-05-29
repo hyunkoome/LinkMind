@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import re
 import sys
 import time
 
@@ -47,23 +48,40 @@ _DELETE_WIKI_SQL = text("DELETE FROM wiki_pages WHERE id = :id")
 # 본문은 OCR 없으면 사진 내용 못 쓰므로 1,575 재합성은 낭비. 필요 시 개별 재합성.
 
 
+# caption 어디서든 첫 http(s) URL 추출 (맨 앞 아니어도 — '텍스트\n\nURL' 케이스).
+_URL_RE = re.compile(r"https?://[^\s<>\"']+")
+
+
+def _first_url(caption: str | None) -> str | None:
+    if not caption:
+        return None
+    m = _URL_RE.search(caption)
+    if not m:
+        return None
+    # trailing 구두점 strip
+    return m.group(0).rstrip(").,」』]>)")
+
+
 def _is_url(s: str | None) -> bool:
-    return bool(s) and s.strip().lower().startswith(("http://", "https://"))
+    """caption 에 URL 이 (어디든) 있나 — 통계/필터용."""
+    return _first_url(s) is not None
 
 
 def _target_slug(caption: str, source_url_to_item: dict[str, str]) -> str | None:
-    """caption URL → 연결할 대상 위키 slug. 못 정하면 None.
+    """caption 의 URL → 연결할 대상 위키 slug. 못 정하면 None.
 
     external_id 있으면 sanitize(primary.slug) (yt__/github__/arxiv__ 등).
     없으면(plain url) 그 url 로 ingest 된 item 의 self_wiki (url__item__<uuid>).
     """
-    cap = caption.strip()
-    ext = extract_external_ids(url=cap, text=None)
+    url = _first_url(caption)
+    if not url:
+        return None
+    ext = extract_external_ids(url=url, text=None)
     primary = primary_external_id(ext)
     if primary is not None:
         return sanitize_wiki_slug(primary.slug)
     # plain url — 같은 source_url 로 ingest 된 item 의 self_wiki
-    item_id = source_url_to_item.get(cap)
+    item_id = source_url_to_item.get(url)
     if item_id:
         return sanitize_wiki_slug(f"url:item:{item_id}")
     return None
