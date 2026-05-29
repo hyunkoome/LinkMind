@@ -33,9 +33,25 @@ from sqlalchemy import text
 from tqdm import tqdm
 
 from backend.db.connection import close_engine, get_session_factory
+from backend.embedding.qdrant_store import delete_chunks_for_item
 from backend.embedding.wiki_qdrant import delete_wiki_page
 from backend.utils.external_ids import extract_external_ids, primary_external_id
 from backend.utils.wiki_slug import sanitize_wiki_slug
+
+# 단독 photo (다른 위키에 figure 로 연결 안 된, 자기 self_wiki 만 가진 photo item).
+# 사용자 확인 (2026-05-29): 남은 것들은 github/youtube 스크린샷 중복 → item+wiki 삭제
+# (이미지 파일은 volumes/archive 에 SHA-256 보존, raw-first §2 — 복구 가능).
+_FETCH_STANDALONE_SQL = text("""
+    SELECT i.id FROM items i
+    WHERE i.title LIKE 'photo\\_%'
+      AND NOT EXISTS (
+        SELECT 1 FROM wiki_page_items wpi
+        JOIN wiki_pages wp ON wp.id = wpi.wiki_page_id
+        WHERE wpi.item_id = i.id
+          AND wp.slug <> 'url__item__' || i.id::text   -- 자기 self_wiki 외 연결 있으면 제외
+      )
+""")
+_DELETE_ITEM_SQL = text("DELETE FROM items WHERE id = :id")
 
 _LINK_SQL = text("""
     INSERT INTO wiki_page_items (wiki_page_id, item_id, confidence, source, role)
@@ -195,9 +211,62 @@ async def main(dry_run: bool, limit: int | None) -> None:
           f"({time.monotonic() - start:.0f}s)", flush=True)
 
 
-async def _entry(dry_run: bool, limit: int | None) -> None:
+async def delete_standalone(dry_run: bool) -> None:
+    """다른 위키에 연결 안 된 단독 photo (item + self_wiki) 삭제.
+
+    사용자 확인 (2026-05-29): 남은 단독 photo 는 github/youtube 스크린샷 중복 →
+    item + self_wiki + Qdrant 삭제. 이미지 파일은 volumes/archive 에 보존 (raw-first).
+    """
+    Session = get_session_factory()
+    async with Session() as s:
+        ids = [str(r[0]) for r in (await s.execute(_FETCH_STANDALONE_SQL)).all()]
+        # 각 photo 의 self_wiki id (있으면)
+        slug_to_wiki = {
+            r["slug"]: str(r["id"])
+            for r in (await s.execute(text(
+                "SELECT id, slug FROM wiki_pages WHERE slug = ANY(:slugs)"),
+                {"slugs": [f"url__item__{i}" for i in ids]},
+            )).mappings().all()
+        }
+    print(f"단독 photo (삭제 대상): {len(ids)}", flush=True)
+    if dry_run:
+        print("✅ DRY RUN — 변경 없음 (이미지 파일은 어차피 volumes 보존)", flush=True)
+        return
+
+    deleted = errors = 0
+    for pid in tqdm(ids, desc="🗑 단독 photo 삭제", unit="photo", mininterval=0.5):
+        async with Session() as session:
+            try:
+                self_wiki = slug_to_wiki.get(f"url__item__{pid}")
+                # Qdrant: item chunks + self_wiki point
+                try:
+                    await delete_chunks_for_item(pid)
+                except Exception:  # noqa: BLE001
+                    pass
+                if self_wiki:
+                    try:
+                        await delete_wiki_page(self_wiki)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    await session.execute(_DELETE_WIKI_SQL, {"id": self_wiki})
+                # Postgres: item CASCADE (attachments/item_topics/wiki_page_items/chunks)
+                await session.execute(_DELETE_ITEM_SQL, {"id": pid})
+                await session.commit()
+                deleted += 1
+            except Exception as exc:  # noqa: BLE001
+                await session.rollback()
+                errors += 1
+                tqdm.write(f"⚠ 삭제 실패 (photo={pid}): {exc}")
+    print(f"\n✅ 단독 photo 삭제 {deleted}, errors {errors} (이미지 파일은 volumes 보존)",
+          flush=True)
+
+
+async def _entry(dry_run: bool, limit: int | None, do_delete: bool) -> None:
     try:
-        await main(dry_run, limit)
+        if do_delete:
+            await delete_standalone(dry_run)
+        else:
+            await main(dry_run, limit)
     finally:
         await close_engine()
 
@@ -206,6 +275,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="photo 캡션 역추적 → 위키 figure 연결")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--delete-standalone", action="store_true",
+                        help="연결 안 된 단독 photo item+self_wiki 삭제 (이미지는 volumes 보존)")
     args = parser.parse_args()
-    asyncio.run(_entry(args.dry_run, args.limit))
+    asyncio.run(_entry(args.dry_run, args.limit, args.delete_standalone))
     sys.stdout.flush()
