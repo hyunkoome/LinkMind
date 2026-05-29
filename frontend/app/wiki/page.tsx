@@ -825,7 +825,7 @@ export default function WikiListPage() {
 
           {/* 우측 패널 — 리스트에서 선택한 위키 상세 inline (페이지 이동 X) */}
           {selectedSlug && (
-            <aside className="w-full lg:w-[52rem] lg:shrink-0 self-start rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900">
+            <aside className="w-full lg:w-[58rem] lg:shrink-0 self-start rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900">
               <WikiDetailView
                 slug={selectedSlug}
                 variant="panel"
