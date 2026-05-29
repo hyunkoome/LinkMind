@@ -66,15 +66,15 @@ export default function HomePage() {
     try {
       const l = window.localStorage.getItem("linkmind:graph-leftW");
       const r = window.localStorage.getItem("linkmind:graph-rightW");
-      // 이전에 저장된 과한 값도 현재 범위로 clamp (우측이 너무 컸던 것 교정)
-      if (l) setLeftW(Math.max(160, Math.min(480, Number(l))));
-      if (r) setRightW(Math.max(180, Math.min(600, Number(r))));
+      // 저장된 값 clamp. max 는 넉넉히 — 중앙을 충분히 줄일 수 있게 (좌/우 키우면 중앙 축소)
+      if (l) setLeftW(Math.max(160, Math.min(700, Number(l))));
+      if (r) setRightW(Math.max(180, Math.min(1100, Number(r))));
     } catch {
       /* ignore */
     }
   }, []);
   const onLeftResize = useCallback((clientX: number) => {
-    const w = Math.max(160, Math.min(480, clientX));
+    const w = Math.max(160, Math.min(700, clientX));
     setLeftW(w);
     try {
       window.localStorage.setItem("linkmind:graph-leftW", String(w));
@@ -83,7 +83,7 @@ export default function HomePage() {
     }
   }, []);
   const onRightResize = useCallback((clientX: number) => {
-    const w = Math.max(180, Math.min(600, window.innerWidth - clientX));
+    const w = Math.max(180, Math.min(1100, window.innerWidth - clientX));
     setRightW(w);
     try {
       window.localStorage.setItem("linkmind:graph-rightW", String(w));
