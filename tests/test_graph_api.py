@@ -13,6 +13,7 @@ from backend.api.graph import (
     _build_kwi,
     _short_summary,
     item_to_node,
+    keyword_keyword_edge,
     keyword_to_node,
     keyword_wiki_edge,
     wiki_item_edge,
@@ -139,6 +140,19 @@ def test_keyword_wiki_edge():
     assert e.data["source"] == "keyword:3dgs"
     assert e.data["target"] == "wiki:arxiv__x"
     assert e.data["role"] == "keyword"
+
+
+def test_keyword_keyword_edge_id_sorted():
+    """co-occurrence 엣지 — id 는 정렬(dedup), source/target 은 원래 방향."""
+    e = keyword_keyword_edge("slam", "ai", 5)
+    assert e.data["id"] == "edge:kwkw:ai:slam"  # 정렬
+    assert e.data["source"] == "keyword:slam"
+    assert e.data["target"] == "keyword:ai"
+    assert e.data["role"] == "cooccur"
+    assert e.data["confidence"] == 5.0
+    # 반대 방향 호출도 같은 id (dedup)
+    e2 = keyword_keyword_edge("ai", "slam", 5)
+    assert e2.data["id"] == e.data["id"]
 
 
 def test_wiki_item_edge_basic_and_defaults():

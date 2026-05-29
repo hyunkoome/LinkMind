@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.connection import get_session
 from backend.db.repository import (
     get_item_full,
+    list_cooccurring_keywords,
     list_items_summary,
     list_keyword_counts,
     list_wiki_item_links,
@@ -31,6 +32,9 @@ from backend.db.repository import (
     list_wikis_for_keyword,
     search_items_by_text,
 )
+
+# keyword 클릭 시 그 키워드의 위키 노드 수 상한 (co-occurrence 그래프 가독성).
+COOCCUR_WIKI_LIMIT = 30
 from backend.schemas.models import GraphEdge, GraphNode, GraphResponse
 
 logger = logging.getLogger(__name__)
@@ -127,6 +131,21 @@ def keyword_wiki_edge(keyword: str, wiki_slug: str) -> GraphEdge:
     )
 
 
+def keyword_keyword_edge(kw1: str, kw2: str, shared: int) -> GraphEdge:
+    """keyword ↔ keyword co-occurrence 엣지 (같은 위키 공유). id 정렬로 dedup."""
+    a, b = sorted([kw1, kw2])
+    return GraphEdge(
+        data={
+            "id": f"edge:kwkw:{a}:{b}",
+            "source": f"keyword:{kw1}",
+            "target": f"keyword:{kw2}",
+            "role": "cooccur",
+            "confidence": float(shared),
+            "link_source": "auto",
+        }
+    )
+
+
 def wiki_item_edge(wiki_slug: str, item_id: Any, link: dict[str, Any]) -> GraphEdge:
     """wiki → item 엣지 (wiki_page_items). id 'edge:wiki:<wiki_slug>:<item>'."""
     return GraphEdge(
@@ -217,22 +236,42 @@ async def graph_keyword_expand(
     keyword: str,
     session: AsyncSession = Depends(get_session),
 ) -> GraphResponse:
-    """keyword 클릭 시 expand — 그 keyword 의 wiki 들 + 각 wiki 의 item 들.
+    """keyword 클릭 → 지역 co-occurrence 클러스터 (동적, 실시간).
 
-    노드: keyword 1 + wiki N + item M. 엣지: keyword→wiki, wiki→item.
+    중심 keyword + 같은 위키를 공유하는 다른 키워드(co-occur) + 그 keyword 의
+    위키들. 엣지: keyword↔keyword (cooccur) + keyword→wiki. 새 자료가 들어오면
+    다음 호출에 자동 반영 (전역 배치 그룹화 X — 클릭 중심 동적).
     """
-    wikis = await list_wikis_for_keyword(session, keyword=keyword)
-    kw_node = keyword_to_node(keyword, len(wikis))
-    if not wikis:
-        return GraphResponse(nodes=[kw_node], edges=[])
+    cooccur = await list_cooccurring_keywords(session, keyword=keyword)
+    wikis = await list_wikis_for_keyword(session, keyword=keyword, limit=COOCCUR_WIKI_LIMIT)
 
-    wiki_by_id = {w["id"]: w for w in wikis}
-    links = await list_wiki_item_links(
-        session, wiki_page_ids=[w["id"] for w in wikis]
-    )
-    item_ids = list({lk["item_id"] for lk in links})
-    items = await list_items_summary(session, item_ids=item_ids)
-    return _build_kwi(kw_node, wikis, items, links, wiki_by_id)
+    nodes: list[GraphNode] = []
+    seen: set[str] = set()
+
+    def add(n: GraphNode) -> None:
+        if n.data["id"] not in seen:
+            seen.add(n.data["id"])
+            nodes.append(n)
+
+    add(keyword_to_node(keyword, len(wikis)))
+    for c in cooccur:
+        add(keyword_to_node(c["keyword"], int(c["shared"])))
+    for w in wikis:
+        add(wiki_to_node(w))
+
+    edges: list[GraphEdge] = []
+    seen_e: set[str] = set()
+
+    def add_e(e: GraphEdge) -> None:
+        if e.data["id"] not in seen_e:
+            seen_e.add(e.data["id"])
+            edges.append(e)
+
+    for c in cooccur:
+        add_e(keyword_keyword_edge(keyword, c["keyword"], int(c["shared"])))
+    for w in wikis:
+        add_e(keyword_wiki_edge(keyword, w["slug"]))
+    return GraphResponse(nodes=nodes, edges=edges)
 
 
 @router.get("/wiki/{slug}", response_model=GraphResponse)

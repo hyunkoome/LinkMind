@@ -1188,6 +1188,37 @@ async def list_wikis_for_keyword(
     return [dict(r) for r in res.mappings().all()]
 
 
+# 실시간 co-occurrence — kw 를 가진 wiki 들에서 함께 등장한 다른 키워드 + 공유 횟수.
+# GIN index (keywords @> ARRAY[kw]) 로 빠르고, 새 자료가 들어오면 다음 호출에 자동
+# 반영 (동적). 전역 배치 그룹화 대신 "클릭한 키워드 중심" 지역 클러스터.
+_COOCCUR_KEYWORDS_SQL = text(f"""
+    SELECT other_kw AS keyword, COUNT(*) AS shared
+    FROM wiki_pages wp, UNNEST(wp.keywords) AS other_kw
+    WHERE wp.keywords @> ARRAY[:kw]::text[]
+      AND other_kw <> :kw
+      AND TRIM(other_kw) <> '' AND other_kw !~ '^[-_.[:space:][:punct:]]+$'
+    GROUP BY other_kw
+    HAVING COUNT(*) >= :threshold
+    ORDER BY shared DESC, other_kw ASC
+    LIMIT :limit
+""")
+
+
+async def list_cooccurring_keywords(
+    session: AsyncSession, *, keyword: str, threshold: int = 2, limit: int = 30,
+) -> list[dict[str, Any]]:
+    """keyword 와 같은 wiki 를 threshold 개 이상 공유한 다른 키워드 (공유순).
+
+    실시간 — 새 wiki 가 들어와도 다음 호출에 반영 (동적). 흔한 키워드의 거대
+    연결을 threshold 로 완화.
+    """
+    res = await session.execute(
+        _COOCCUR_KEYWORDS_SQL,
+        {"kw": keyword, "threshold": threshold, "limit": limit},
+    )
+    return [dict(r) for r in res.mappings().all()]
+
+
 async def list_wiki_nodes(
     session: AsyncSession, *, ids: list[UUID] | None = None,
     slugs: list[str] | None = None,
