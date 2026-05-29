@@ -139,6 +139,30 @@ export default function WikiListPage() {
       .catch(() => {});
   }, []);
 
+  // 키워드 cloud 내 검색 (2026-05-29) — distinct 50k+ 라 cloud 는 빈도순 상위만.
+  // 빈도 낮은 키워드(예: point-cloud-compression)도 검색으로 찾아 선택 가능.
+  const [kwQuery, setKwQuery] = useState("");
+  const [kwResults, setKwResults] = useState<WikiKeywordSuggestion[]>([]);
+  useEffect(() => {
+    const term = kwQuery.trim();
+    if (!term) {
+      setKwResults([]);
+      return;
+    }
+    let alive = true;
+    const id = setTimeout(() => {
+      searchWikiKeywords(term, 120)
+        .then((r) => {
+          if (alive) setKwResults(r.suggestions);
+        })
+        .catch(() => {});
+    }, 250);
+    return () => {
+      alive = false;
+      clearTimeout(id);
+    };
+  }, [kwQuery]);
+
   // 일괄 합성 — ready (처리 실패 reset 또는 default INSERT 자료) 강제 재처리용.
   // 2026-05-27 사용자 명시: pending 은 daemon 이 자동 처리하지만 ready 는 fetch
   // SQL 도 매칭하므로 보통 자동 처리됨. 다만 daemon 가 idle 일 때 또는 사용자가
@@ -195,6 +219,35 @@ export default function WikiListPage() {
       keywordFilters.includes(kw)
         ? keywordFilters.filter((k) => k !== kw)
         : [...keywordFilters, kw],
+    );
+  };
+
+  // 키워드 cloud/검색 결과 chip 렌더 — 선택 시 파란색 강조 (2026-05-29, 적색 →
+  // 파랑: 키워드는 정보성 태그라 차분하게). 클릭 = 토글 (다중 AND).
+  const renderKwChip = (s: WikiKeywordSuggestion) => {
+    const selected = keywordFilters.includes(s.keyword);
+    return (
+      <button
+        key={s.keyword}
+        type="button"
+        onClick={() => toggleKeyword(s.keyword)}
+        title={
+          selected
+            ? `'${s.keyword}' 필터 해제`
+            : `'${s.keyword}' 추가 (${s.usage_count}개 wiki)`
+        }
+        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] border transition ${
+          selected
+            ? "border-blue-500 bg-blue-500 text-white dark:bg-blue-600 dark:border-blue-500 font-medium"
+            : "border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/60 text-zinc-700 dark:text-zinc-300 hover:border-blue-400 hover:text-blue-600 dark:hover:text-blue-400"
+        }`}
+      >
+        {selected && <span>✓</span>}
+        <span>{s.keyword}</span>
+        <span className={selected ? "opacity-80" : "text-zinc-400 dark:text-zinc-500"}>
+          {s.usage_count}
+        </span>
+      </button>
     );
   };
 
@@ -306,22 +359,22 @@ export default function WikiListPage() {
           </p>
         </header>
 
-        {/* 키워드 cloud (2026-05-29) — 빈도순 상위 키워드. 클릭하면 토글 선택
-            (다중 = AND). distinct 90k+ 라 자주 쓰는 것만 노출 + 접기/펼치기. */}
-        {topKeywords.length > 0 && (
+        {/* 키워드 cloud (2026-05-29) — 빈도순 상위 + 검색. 클릭하면 토글 선택
+            (다중 = AND). distinct 50k+ 라 cloud 는 상위만 + 검색으로 전부 접근. */}
+        {(topKeywords.length > 0 || kwQuery) && (
           <div className="mb-4 p-3 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900">
             <div className="flex items-center justify-between mb-2">
               <span className="text-xs font-medium text-zinc-600 dark:text-zinc-400">
                 🔖 키워드로 찾기{" "}
                 <span className="font-normal text-zinc-400">
-                  (자주 쓰는 순 · 클릭해서 다중 선택)
+                  (클릭해서 다중 선택 · AND)
                 </span>
               </span>
-              {topKeywords.length > COLLAPSED_KEYWORDS && (
+              {!kwQuery && topKeywords.length > COLLAPSED_KEYWORDS && (
                 <button
                   type="button"
                   onClick={() => setKeywordsExpanded((v) => !v)}
-                  className="text-[11px] text-orange-600 dark:text-orange-400 hover:underline whitespace-nowrap ml-2"
+                  className="text-[11px] text-blue-600 dark:text-blue-400 hover:underline whitespace-nowrap ml-2"
                 >
                   {keywordsExpanded
                     ? "접기 ▴"
@@ -329,45 +382,36 @@ export default function WikiListPage() {
                 </button>
               )}
             </div>
-            <div
-              className={`flex flex-wrap gap-1.5 ${
-                keywordsExpanded ? "max-h-[45vh] overflow-y-auto pr-1" : ""
-              }`}
-            >
-              {(keywordsExpanded
-                ? topKeywords
-                : topKeywords.slice(0, COLLAPSED_KEYWORDS)
-              ).map((s) => {
-                const selected = keywordFilters.includes(s.keyword);
-                return (
-                  <button
-                    key={s.keyword}
-                    type="button"
-                    onClick={() => toggleKeyword(s.keyword)}
-                    title={
-                      selected
-                        ? `'${s.keyword}' 필터 해제`
-                        : `'${s.keyword}' 추가 (${s.usage_count}개 wiki)`
-                    }
-                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] border transition ${
-                      selected
-                        ? "border-orange-500 bg-orange-500 text-white dark:bg-orange-600 dark:border-orange-500 font-medium"
-                        : "border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/60 text-zinc-700 dark:text-zinc-300 hover:border-orange-400 hover:text-orange-600 dark:hover:text-orange-400"
-                    }`}
-                  >
-                    {selected && <span>✓</span>}
-                    <span>{s.keyword}</span>
-                    <span
-                      className={
-                        selected ? "opacity-80" : "text-zinc-400 dark:text-zinc-500"
-                      }
-                    >
-                      {s.usage_count}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
+            {/* 검색 — 빈도 낮은 키워드도 찾기 (cloud 는 상위만 노출하므로) */}
+            <input
+              type="search"
+              value={kwQuery}
+              onChange={(e) => setKwQuery(e.target.value)}
+              placeholder="키워드 검색 (빈도 낮은 것도 — 예: point-cloud-compression)…"
+              className="w-full mb-2 px-2.5 py-1 text-xs rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100"
+            />
+            {kwQuery.trim() ? (
+              <div className="flex flex-wrap gap-1.5 max-h-[45vh] overflow-y-auto pr-1">
+                {kwResults.length > 0 ? (
+                  kwResults.map(renderKwChip)
+                ) : (
+                  <span className="text-xs text-zinc-400 py-1">
+                    '{kwQuery.trim()}' 매칭 키워드 없음
+                  </span>
+                )}
+              </div>
+            ) : (
+              <div
+                className={`flex flex-wrap gap-1.5 ${
+                  keywordsExpanded ? "max-h-[45vh] overflow-y-auto pr-1" : ""
+                }`}
+              >
+                {(keywordsExpanded
+                  ? topKeywords
+                  : topKeywords.slice(0, COLLAPSED_KEYWORDS)
+                ).map(renderKwChip)}
+              </div>
+            )}
           </div>
         )}
 

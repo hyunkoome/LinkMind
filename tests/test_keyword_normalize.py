@@ -52,6 +52,12 @@ def test_normalize_keyword_examples(raw, expected):
         ("li-dar", "lidar"),             # 이미 분리된 옛 데이터도 재정규화 시 합쳐짐
         ("git-hub", "github"),
         ("io-t", "iot"),
+        ("CMake", "cmake"),
+        ("c-make", "cmake"),             # 분리형도 합침
+        ("3DGS", "3dgs"),
+        ("3D-GS", "3dgs"),
+        ("3d-gs", "3dgs"),               # 이미 분리된 것도 합침
+        ("3DGs", "3dgs"),
     ],
 )
 def test_known_acronyms_kept_whole(raw, expected):

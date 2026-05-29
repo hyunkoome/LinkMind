@@ -48,10 +48,10 @@ _MAX_LEN = 80
 # (AI/API/GPU 처럼 전부 대문자인 약어는 내부 경계가 없어 자동으로 안 쪼개짐 — 불필요.)
 # 새 약어는 정식 표기(예: "WebGPU") 그대로 추가하면 됨 — split 패턴은 자동 계산.
 _KNOWN_ACRONYMS: tuple[str, ...] = (
-    "LiDAR", "GitHub", "GitLab", "IoT", "KiCAD", "ChatGPT", "OpenAI",
-    "OpenCV", "GraphQL", "WebGL", "WebGPU", "PyTorch", "TensorFlow",
-    "NumPy", "SciPy", "macOS", "iOS", "iPadOS", "iPhone", "iPad",
-    "NeRF", "PostgreSQL", "MongoDB", "MLOps", "DevOps", "YouTube",
+    "LiDAR", "GitHub", "GitLab", "IoT", "KiCAD", "CMake", "ChatGPT",
+    "OpenAI", "OpenCV", "GraphQL", "WebGL", "WebGPU", "PyTorch",
+    "TensorFlow", "NumPy", "SciPy", "macOS", "iOS", "iPadOS", "iPhone",
+    "iPad", "NeRF", "PostgreSQL", "MongoDB", "MLOps", "DevOps", "YouTube",
     "DeepSeek", "DeepMind", "LangChain", "HuggingFace", "OpenGL",
 )
 
@@ -71,6 +71,14 @@ for _a in _KNOWN_ACRONYMS:
     _toks = tuple(_split_tokens(_a))
     if len(_toks) > 1:        # 안 쪼개지는 약어(전부 대문자 등)는 처리 불필요
         _ACRONYM_MERGE[_toks] = re.sub(r"[^a-z0-9]", "", _a.lower())
+
+# 명시적 토큰 병합 — 전부 대문자/숫자라 _split_tokens 로는 분리형이 안 나오는 약어.
+# 예: "3DGS"(=3d-gaussian-splatting) 는 "3DGS" 자체는 안 쪼개지지만(=3dgs),
+#     "3D-GS"/"3DGs"/"3D GS" 입력은 3d-gs 로 분리됨 → 3dgs 로 병합.
+_EXTRA_TOKEN_MERGES: dict[tuple[str, ...], str] = {
+    ("3d", "gs"): "3dgs",
+}
+_ACRONYM_MERGE.update(_EXTRA_TOKEN_MERGES)
 _MAX_ACRONYM_TOKENS = max((len(k) for k in _ACRONYM_MERGE), default=1)
 
 
