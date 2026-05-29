@@ -169,7 +169,7 @@ export default function TopicsTree({
   const showCategoryTree = categories.length > 0;
 
   return (
-    <aside className="w-64 shrink-0 h-full overflow-hidden flex flex-col border-r border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900">
+    <aside className="w-full h-full overflow-hidden flex flex-col border-r border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900">
       <header className="p-3 border-b border-zinc-200 dark:border-zinc-800">
         <h1 className="text-base font-semibold mb-2 text-orange-600 dark:text-orange-400">
           {t.app.title}

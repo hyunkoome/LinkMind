@@ -46,17 +46,6 @@ export default function ItemDetails({ itemId, onClose }: ItemDetailsProps) {
 
   const localeForDate = locale === "ko" ? "ko-KR" : "en-US";
 
-  // localStorage 의 collapsed 상태 복원
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    try {
-      const saved = window.localStorage.getItem(COLLAPSED_LS_KEY);
-      if (saved === "1") setCollapsedState(true);
-    } catch {
-      /* ignore */
-    }
-  }, []);
-
   // itemId 가 새로 들어오면 자동으로 패널 펼침 (사용자가 노드 클릭한 의도)
   useEffect(() => {
     if (itemId) {
@@ -176,7 +165,7 @@ export default function ItemDetails({ itemId, onClose }: ItemDetailsProps) {
   }
 
   return (
-    <aside className="w-96 shrink-0 h-full overflow-y-auto border-l border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900">
+    <aside className="flex-1 min-w-0 h-full overflow-y-auto bg-white dark:bg-zinc-900">
       <header className="sticky top-0 bg-white dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800 p-3 flex items-center justify-between z-10">
         <div className="text-xs uppercase tracking-wider text-zinc-500">
           {item
@@ -341,7 +330,7 @@ export default function ItemDetails({ itemId, onClose }: ItemDetailsProps) {
                 </div>
               )}
 
-              <div className="bg-zinc-50 dark:bg-zinc-800/50 rounded p-2 max-h-[28rem] overflow-y-auto">
+              <div className="bg-zinc-50 dark:bg-zinc-800/50 rounded p-3">
                 {wikiLoading && (
                   <div className="text-xs text-zinc-500">
                     {locale === "ko" ? "위키 불러오는 중…" : "loading wiki…"}

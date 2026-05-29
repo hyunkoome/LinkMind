@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import GraphView from "@/components/GraphView";
 import ItemDetails from "@/components/ItemDetails";
@@ -57,6 +57,38 @@ export default function HomePage() {
   const [viewMode, setViewMode] = useState<"categories" | "topics">("categories");
   // history stack — push 시점은 graph 가 바뀌기 *직전* 의 상태
   const [history, setHistory] = useState<HistoryFrame[]>([]);
+
+  // 좌/중/우 3분할 패널 폭 (마우스 드래그 리사이즈). 중앙은 flex-1 (나머지 자동).
+  const [leftW, setLeftW] = useState(256);
+  const [rightW, setRightW] = useState(384);
+  useEffect(() => {
+    try {
+      const l = window.localStorage.getItem("linkmind:graph-leftW");
+      const r = window.localStorage.getItem("linkmind:graph-rightW");
+      if (l) setLeftW(Number(l));
+      if (r) setRightW(Number(r));
+    } catch {
+      /* ignore */
+    }
+  }, []);
+  const onLeftResize = useCallback((clientX: number) => {
+    const w = Math.max(160, Math.min(560, clientX));
+    setLeftW(w);
+    try {
+      window.localStorage.setItem("linkmind:graph-leftW", String(w));
+    } catch {
+      /* ignore */
+    }
+  }, []);
+  const onRightResize = useCallback((clientX: number) => {
+    const w = Math.max(240, Math.min(900, window.innerWidth - clientX));
+    setRightW(w);
+    try {
+      window.localStorage.setItem("linkmind:graph-rightW", String(w));
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   const pushHistory = useCallback(() => {
     setHistory((prev) => [
@@ -325,24 +357,57 @@ export default function HomePage() {
 
   return (
     <div className="flex h-full">
-      <TopicsTree
-        data={graph}
-        selectedNodeFullId={selectedNodeFullId}
-        relatedIds={relatedIds}
-        onNodeSelect={handleSidebarSelect}
-        onSearchSubmit={handleSearchSubmit}
-        searchQuery={searchQuery}
-        onSearchChange={setSearchQuery}
-        isSubsetView={isSubsetView}
-        onReturnToAll={() => {
-          setSearchQuery("");
-          void loadAll();
-        }}
-        onReturnToPrevious={handleReturnToPrevious}
-        historyDepth={history.length}
-      />
+      {/* 좌측 — 트리 (리사이즈 가능) */}
+      <div style={{ width: leftW }} className="shrink-0 h-full overflow-hidden">
+        <TopicsTree
+          data={graph}
+          selectedNodeFullId={selectedNodeFullId}
+          relatedIds={relatedIds}
+          onNodeSelect={handleSidebarSelect}
+          onSearchSubmit={handleSearchSubmit}
+          searchQuery={searchQuery}
+          onSearchChange={setSearchQuery}
+          isSubsetView={isSubsetView}
+          onReturnToAll={() => {
+            setSearchQuery("");
+            void loadAll();
+          }}
+          onReturnToPrevious={handleReturnToPrevious}
+          historyDepth={history.length}
+        />
+      </div>
+      <ResizeHandle onResize={onLeftResize} />
 
-      <main className="flex-1 h-full relative">
+      {/* 중앙 — 위키/자료 상세 inline (메인 콘텐츠, 크게) */}
+      <section className="flex-1 min-w-0 h-full flex">
+        {selectedItemId ? (
+          <ItemDetails
+            itemId={selectedItemId}
+            onClose={() => {
+              setSelectedItemId(null);
+              setSelectedNodeFullId(null);
+            }}
+          />
+        ) : selectedNodeFullId ? (
+          <NodeDetails
+            selectedNodeFullId={selectedNodeFullId}
+            resolveCategorySlug={resolveCategorySlug}
+            onItemClick={handleItemClickFromPanel}
+            onTopicClick={handleTopicClickFromPanel}
+          />
+        ) : (
+          <div className="flex-1 flex items-center justify-center text-sm text-zinc-400 p-6 text-center">
+            {locale === "ko"
+              ? "오른쪽 그래프에서 노드를 클릭하면 여기에 위키/자료 내용이 표시됩니다."
+              : "Click a node in the graph (right) to view its wiki/content here."}
+          </div>
+        )}
+      </section>
+
+      <ResizeHandle onResize={onRightResize} />
+
+      {/* 우측 — 그래프 (보조, 리사이즈 가능) */}
+      <aside style={{ width: rightW }} className="shrink-0 h-full relative">
         <GraphView
           data={graph}
           onNodeClick={handleNodeClick}
@@ -408,22 +473,46 @@ export default function HomePage() {
           {/* 범례 — 통계 라벨 아래 inline 배치 (사용자 요구) */}
           <Legend />
         </div>
-      </main>
-
-      <NodeDetails
-        selectedNodeFullId={selectedNodeFullId}
-        resolveCategorySlug={resolveCategorySlug}
-        onItemClick={handleItemClickFromPanel}
-        onTopicClick={handleTopicClickFromPanel}
-      />
-
-      <ItemDetails
-        itemId={selectedItemId}
-        onClose={() => {
-          setSelectedItemId(null);
-          setSelectedNodeFullId(null);
-        }}
-      />
+      </aside>
     </div>
+  );
+}
+
+// 좌/중/우 패널 사이 드래그 핸들 — 마우스로 너비 조절. 의존성 없이 자체 구현.
+// onResize 는 드래그 중 마우스의 clientX 를 받아 page 가 폭을 계산.
+function ResizeHandle({ onResize }: { onResize: (clientX: number) => void }) {
+  const draggingRef = useRef(false);
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      if (!draggingRef.current) return;
+      e.preventDefault();
+      onResize(e.clientX);
+    };
+    const onUp = () => {
+      if (!draggingRef.current) return;
+      draggingRef.current = false;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [onResize]);
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      onMouseDown={(e) => {
+        e.preventDefault();
+        draggingRef.current = true;
+        document.body.style.cursor = "col-resize";
+        document.body.style.userSelect = "none";
+      }}
+      className="w-1 shrink-0 h-full cursor-col-resize bg-zinc-200 dark:bg-zinc-800 hover:bg-orange-400 dark:hover:bg-orange-500 transition-colors"
+      title="드래그하여 너비 조절"
+    />
   );
 }

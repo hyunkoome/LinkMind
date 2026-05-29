@@ -35,15 +35,6 @@ export default function NodeDetails({
   const [error, setError] = useState<string | null>(null);
   const [collapsed, setCollapsedState] = useState(false);
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    try {
-      const saved = window.localStorage.getItem(COLLAPSED_LS_KEY);
-      if (saved === "1") setCollapsedState(true);
-    } catch {
-      /* ignore */
-    }
-  }, []);
   const setCollapsed = (v: boolean) => {
     setCollapsedState(v);
     try {
@@ -117,7 +108,7 @@ export default function NodeDetails({
   const isCategory = selectedNodeFullId.startsWith("category:");
 
   return (
-    <aside className="w-96 shrink-0 h-full overflow-y-auto border-l border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900">
+    <aside className="flex-1 min-w-0 h-full overflow-y-auto bg-white dark:bg-zinc-900">
       <header className="sticky top-0 bg-white dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800 p-3 flex items-center justify-between z-10">
         <div className="text-xs uppercase tracking-wider text-zinc-500">
           {isCategory
