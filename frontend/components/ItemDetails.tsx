@@ -200,6 +200,19 @@ export default function ItemDetails({ itemId, onClose }: ItemDetailsProps) {
 
       {item && (
         <div className="p-4 space-y-4 max-w-3xl mx-auto w-full">
+          {/* 맥락 — 이 자료가 속한 카테고리 (상단에 항상 보이게: 중앙이 자료로 바뀌어도
+              어느 맥락인지 잃지 않도록. 사용자 요구 2026-05-29) */}
+          {item.categories.length > 0 && (
+            <div className="flex flex-wrap items-center gap-x-1 gap-y-0.5 text-[11px] text-zinc-500 dark:text-zinc-400 -mb-2">
+              <span className="text-zinc-400">📁</span>
+              {item.categories.map((c, i) => (
+                <span key={c} className="flex items-center gap-1">
+                  {i > 0 && <span className="text-zinc-300 dark:text-zinc-600">·</span>}
+                  <span>{c}</span>
+                </span>
+              ))}
+            </div>
+          )}
           {/* title + URL */}
           <div>
             <h2 className="text-base font-semibold mb-1 break-words">
