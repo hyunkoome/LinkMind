@@ -31,9 +31,10 @@ import {
 const PAGE_SIZE_OPTIONS = [10, 50, 100] as const;
 const DEFAULT_PAGE_SIZE = 50;
 
-// 상단 키워드 cloud — distinct 키워드 90k+ 라 전부는 불가. 빈도순 상위만.
-const TOP_KEYWORDS_LIMIT = 50;     // fetch 개수
-const COLLAPSED_KEYWORDS = 24;     // 접힌 상태 표시 개수
+// 상단 키워드 cloud — distinct 키워드 90k+ 라 literally 전부는 브라우저 한계상
+// 불가 (버튼 9만 개 = freeze). 빈도순 상위를 넉넉히 (500) fetch + 펼치면 스크롤.
+const TOP_KEYWORDS_LIMIT = 500;    // fetch 개수 (빈도순 상위)
+const COLLAPSED_KEYWORDS = 30;     // 접힌 상태 표시 개수
 
 // 정렬 옵션 (2026-05-29) — 날짜는 합성 시각(body_generated_at) 우선. URL ?sort= 동기화.
 const SORT_OPTIONS: { key: WikiSort; label: string }[] = [
@@ -328,7 +329,11 @@ export default function WikiListPage() {
                 </button>
               )}
             </div>
-            <div className="flex flex-wrap gap-1.5">
+            <div
+              className={`flex flex-wrap gap-1.5 ${
+                keywordsExpanded ? "max-h-[45vh] overflow-y-auto pr-1" : ""
+              }`}
+            >
               {(keywordsExpanded
                 ? topKeywords
                 : topKeywords.slice(0, COLLAPSED_KEYWORDS)

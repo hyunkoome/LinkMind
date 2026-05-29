@@ -1017,7 +1017,9 @@ async def update_wiki_keywords(
 @router.get("/_keywords/search", response_model=WikiKeywordSearchResponse)
 async def search_keywords(
     q: str | None = Query(default=None, description="prefix/substring 매칭"),
-    limit: int = Query(default=20, ge=1, le=100),
+    # 상단 키워드 cloud 가 빈도순 상위를 대량 fetch (2026-05-29) — le 100 → 2000.
+    # distinct 90k+ 라 '전부' 는 브라우저 한계상 불가, 빈도순 상위로 cap.
+    limit: int = Query(default=20, ge=1, le=2000),
     session: AsyncSession = Depends(get_session),
 ) -> WikiKeywordSearchResponse:
     """전체 wiki_pages 의 keywords UNNEST + DISTINCT — autocomplete.
