@@ -48,6 +48,20 @@ def test_keywords_in_list_select():
     assert "wp.keywords" in str(_build_list_sql("recent"))
 
 
+def test_multi_keyword_is_array_contains_and():
+    """다중 키워드 필터는 @> (array contains = 선택 키워드 모두 포함, AND 의미).
+
+    :keywords NULL (선택 없음) 이면 필터 없이 통과. COALESCE 로 keywords NULL 컬럼도
+    빈 배열 취급 (안전).
+    """
+    sql = str(_build_list_sql("recent"))
+    assert "@>" in sql
+    assert "CAST(:keywords AS text[])" in sql
+    # asyncpg 타입 추론 위해 NULL 체크도 CAST (AmbiguousParameterError 방지)
+    assert "CAST(:keywords AS text[]) IS NULL" in sql
+    assert "COALESCE(wp.keywords" in sql
+
+
 def test_group_order_preserved():
     """status 그룹 (completed→pending→issues) + pinned 우선 정렬 유지."""
     sql = str(_build_list_sql("alpha"))

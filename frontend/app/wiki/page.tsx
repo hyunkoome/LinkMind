@@ -88,7 +88,10 @@ export default function WikiListPage() {
   // 의미 검색은 별 페이지 (/ask) — 여기는 단순 title/slug ILIKE 매칭 + filter 만.
   const q = searchParams.get("q") || "";
   const statusFilter = searchParams.get("status") || "";
-  const keywordFilter = searchParams.get("keyword") || "";
+  // 다중 키워드 (AND) — ?keyword=A&keyword=B (getAll). keywordKey 는 effect dep 용
+  // 안정 문자열 (배열은 매 렌더 새 참조라 dep 로 못 씀).
+  const keywordFilters = searchParams.getAll("keyword");
+  const keywordKey = JSON.stringify(keywordFilters);
   const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10) || 1);
 
   // page_size — URL ?page_size=10/50/100 (default 50). 사용자 라디오 선택.
@@ -160,6 +163,24 @@ export default function WikiListPage() {
     router.replace(qs ? `/wiki?${qs}` : "/wiki", { scroll: false });
   };
 
+  // 다중 키워드 — keyword 는 multi-value 라 updateQuery (set) 로 못 다룸. 전체 교체.
+  const setKeywords = (next: string[]) => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("keyword");
+    for (const k of next) params.append("keyword", k);
+    params.delete("page");      // 필터 바뀌면 1페이지로
+    const qs = params.toString();
+    router.replace(qs ? `/wiki?${qs}` : "/wiki", { scroll: false });
+  };
+  // 키워드 toggle — 이미 있으면 제거, 없으면 추가 (AND 누적 검색).
+  const toggleKeyword = (kw: string) => {
+    setKeywords(
+      keywordFilters.includes(kw)
+        ? keywordFilters.filter((k) => k !== kw)
+        : [...keywordFilters, kw],
+    );
+  };
+
   // q 입력 → 250ms debounce 후 URL 반영 (+ page=1 reset)
   useEffect(() => {
     if (qInput === q) return;     // 외부 sync 일 때 loop 방지
@@ -177,7 +198,7 @@ export default function WikiListPage() {
     listWikiPages({
       status: statusFilter || undefined,
       q: q || undefined,
-      keyword: keywordFilter || undefined,
+      keyword: keywordFilters,
       sort,
       limit: pageSize,
       offset: (page - 1) * pageSize,
@@ -194,7 +215,9 @@ export default function WikiListPage() {
     return () => {
       alive = false;
     };
-  }, [q, statusFilter, keywordFilter, sort, page, pageSize]);
+    // keywordKey = JSON.stringify(keywordFilters) — 배열 dep 대신 안정 문자열
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q, statusFilter, keywordKey, sort, page, pageSize]);
 
   // stats fetch — mount 시 1회 + pending 이 있으면 10초 polling (자동 daemon
   // 진행 상황 시각화). pending=0 이면 polling 종료.
@@ -266,19 +289,38 @@ export default function WikiListPage() {
           </p>
         </header>
 
-        {/* Keyword filter chip */}
-        {keywordFilter && (
-          <div className="mb-4 inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300 text-xs">
-            <span>🔖 keyword:</span>
-            <span className="font-medium">{keywordFilter}</span>
-            <button
-              type="button"
-              onClick={() => updateQuery({ keyword: null, page: null })}
-              className="text-orange-500 hover:text-orange-700"
-              title="필터 해제"
-            >
-              ×
-            </button>
+        {/* 다중 키워드 필터 chip (AND) — 선택한 키워드 각각 제거 + 전체 해제 */}
+        {keywordFilters.length > 0 && (
+          <div className="mb-4 flex flex-wrap items-center gap-1.5 text-xs">
+            <span className="text-zinc-500 dark:text-zinc-400">
+              🔖 키워드 {keywordFilters.length > 1 ? `(모두 포함 · AND)` : ""}:
+            </span>
+            {keywordFilters.map((kw) => (
+              <span
+                key={kw}
+                className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300"
+              >
+                <span className="font-medium">{kw}</span>
+                <button
+                  type="button"
+                  onClick={() => toggleKeyword(kw)}
+                  className="text-orange-500 hover:text-orange-700"
+                  title={`'${kw}' 제거`}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+            {keywordFilters.length > 1 && (
+              <button
+                type="button"
+                onClick={() => setKeywords([])}
+                className="px-2 py-1 rounded-full border border-zinc-300 dark:border-zinc-700 text-zinc-500 hover:text-zinc-700 hover:border-zinc-400"
+                title="키워드 필터 전체 해제"
+              >
+                전체 해제
+              </button>
+            )}
           </div>
         )}
 
@@ -542,30 +584,38 @@ export default function WikiListPage() {
                         )}
                       </span>
                     </div>
-                    {/* keywords pills (2026-05-29) — 클릭 시 ?keyword= 필터.
-                        카드가 Link 라 preventDefault/stopPropagation 으로 네비 막음. */}
+                    {/* keywords pills (2026-05-29) — 전체 표시 + 클릭 토글 (AND 누적).
+                        선택된 키워드는 강조. 카드가 Link 라 prevent/stopPropagation 으로
+                        네비 막고 필터만. */}
                     {p.keywords && p.keywords.length > 0 && (
                       <div className="mt-1.5 flex flex-wrap gap-1">
-                        {p.keywords.slice(0, 8).map((kw) => (
-                          <button
-                            key={kw}
-                            type="button"
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              updateQuery({ keyword: kw, page: null });
-                            }}
-                            title={`keyword '${kw}' 로 필터`}
-                            className="px-1.5 py-0.5 rounded text-[10px] border border-orange-200 dark:border-orange-800 bg-orange-50 dark:bg-orange-900/20 text-orange-600 dark:text-orange-300 hover:bg-orange-100 dark:hover:bg-orange-900/40"
-                          >
-                            🔖 {kw}
-                          </button>
-                        ))}
-                        {p.keywords.length > 8 && (
-                          <span className="px-1 py-0.5 text-[10px] text-zinc-400">
-                            +{p.keywords.length - 8}
-                          </span>
-                        )}
+                        {p.keywords.map((kw) => {
+                          const selected = keywordFilters.includes(kw);
+                          return (
+                            <button
+                              key={kw}
+                              type="button"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                toggleKeyword(kw);
+                              }}
+                              title={
+                                selected
+                                  ? `'${kw}' 필터 해제`
+                                  : `'${kw}' 추가 (다중 = 모두 포함)`
+                              }
+                              className={`px-1.5 py-0.5 rounded text-[10px] border transition ${
+                                selected
+                                  ? "border-orange-500 bg-orange-500 text-white dark:bg-orange-600 dark:border-orange-500 font-medium"
+                                  : "border-orange-200 dark:border-orange-800 bg-orange-50 dark:bg-orange-900/20 text-orange-600 dark:text-orange-300 hover:bg-orange-100 dark:hover:bg-orange-900/40"
+                              }`}
+                            >
+                              {selected ? "✓ " : "🔖 "}
+                              {kw}
+                            </button>
+                          );
+                        })}
                       </div>
                     )}
                   </>

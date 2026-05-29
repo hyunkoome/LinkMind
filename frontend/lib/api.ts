@@ -378,14 +378,15 @@ export type WikiSort = "recent" | "oldest" | "alpha" | "alpha_desc";
 
 export async function listWikiPages(
   opts: {
-    status?: string; q?: string; keyword?: string;
+    status?: string; q?: string; keyword?: string[];
     sort?: WikiSort; limit?: number; offset?: number;
   } = {},
 ): Promise<WikiPageListResponse> {
   const params = new URLSearchParams();
   if (opts.status) params.set("status", opts.status);
   if (opts.q) params.set("q", opts.q);
-  if (opts.keyword) params.set("keyword", opts.keyword);
+  // 다중 키워드 (AND) — ?keyword=A&keyword=B
+  for (const k of opts.keyword ?? []) params.append("keyword", k);
   if (opts.sort) params.set("sort", opts.sort);
   params.set("limit", String(opts.limit ?? 50));
   params.set("offset", String(opts.offset ?? 0));

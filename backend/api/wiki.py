@@ -112,6 +112,14 @@ _STATUS_PREDICATE = """
     OR wp.body_status = CAST(:status AS TEXT)
 """
 
+# 다중 키워드 필터 (2026-05-29) — AND 의미: 선택한 키워드를 **모두** 가진 wiki 만.
+# @> (array contains). 빈/NULL keywords 컬럼은 COALESCE 로 '{}' 취급. :keywords 가
+# NULL (선택 없음) 이면 필터 없이 모두 통과 (CAST 분기 short-circuit).
+_KEYWORDS_PREDICATE = """
+    CAST(:keywords AS text[]) IS NULL
+    OR COALESCE(wp.keywords, ARRAY[]::text[]) @> CAST(:keywords AS text[])
+"""
+
 _LIST_SELECT = f"""
     SELECT
         wp.id, wp.topic_id, wp.slug, wp.title, wp.description,
@@ -125,7 +133,7 @@ _LIST_SELECT = f"""
     FROM wiki_pages wp
     WHERE ({_STATUS_PREDICATE})
       AND (CAST(:q AS TEXT) IS NULL OR ({_SEARCH_PREDICATE}))
-      AND (CAST(:keyword AS TEXT) IS NULL OR CAST(:keyword AS TEXT) = ANY(wp.keywords))
+      AND ({_KEYWORDS_PREDICATE})
 """
 
 # 그룹/pinned 우선 정렬 — 전체 tab 의 status 그룹 (completed→pending→issues) +
@@ -169,7 +177,7 @@ _COUNT_PAGES_SQL = text(f"""
     SELECT COUNT(*) FROM wiki_pages wp
     WHERE ({_STATUS_PREDICATE})
       AND (CAST(:q AS TEXT) IS NULL OR ({_SEARCH_PREDICATE}))
-      AND (CAST(:keyword AS TEXT) IS NULL OR CAST(:keyword AS TEXT) = ANY(wp.keywords))
+      AND ({_KEYWORDS_PREDICATE})
 """)
 
 
@@ -177,7 +185,10 @@ _COUNT_PAGES_SQL = text(f"""
 async def list_wiki_pages(
     status: str | None = Query(default=None, description="issues/pending/completed"),
     q: str | None = Query(default=None, description="title/description/slug 부분 매칭"),
-    keyword: str | None = Query(default=None, description="keywords 배열에서 정확 매칭"),
+    keyword: list[str] = Query(
+        default=[],
+        description="다중 키워드 (AND) — ?keyword=A&keyword=B. 모두 가진 wiki 만",
+    ),
     sort: str = Query(
         default=DEFAULT_WIKI_SORT,
         description="recent(최신)/oldest(오래된)/alpha(가나다)/alpha_desc(역순)",
@@ -186,7 +197,12 @@ async def list_wiki_pages(
     offset: int = Query(default=0, ge=0),
     session: AsyncSession = Depends(get_session),
 ) -> WikiPageListResponse:
-    params = {"status": status, "q": q, "keyword": keyword, "limit": limit, "offset": offset}
+    # 빈 list → None (필터 없음). non-empty → AND array-contains.
+    params = {
+        "status": status, "q": q,
+        "keywords": keyword or None,
+        "limit": limit, "offset": offset,
+    }
     total = (await session.execute(_COUNT_PAGES_SQL, params)).scalar() or 0
     rows = (await session.execute(_build_list_sql(sort), params)).mappings().all()
     pages = [
