@@ -154,9 +154,11 @@ class WriterAgent(AgentBase):
         user_msg = _build_user_message(prompt["user_template"], wiki_context)
 
         # LLM 호출 — vLLM Qwen2.5-7B (context window 8192 토큰).
-        # temperature 0.1 — 구성 일관성 우선. max_tokens 1024 — wiki body 700-1500자
-        # 면 ~500-900 token. 2048 은 가끔 "list 무한 반복" 으로 가득 채워 잘림.
-        # 1024 로 줄이면 자연 EOS 의존 + 잘리는 케이스 자른다.
+        # max_tokens 2048 (2026-05-29) — 옛 1024 는 한국어 wiki 에서 너무 작아
+        # completion 이 정확히 1024 에서 잘려 **마지막 ## Keywords 섹션이 생성 안 됨**
+        # (한글은 토큰을 많이 먹어 narrative 만으로 1024 소진). → 키워드 추출 실패.
+        # 2048 로 올려 7 섹션 + Keywords 까지 완주. (드물게 "list 무한 반복" degenerate
+        # 시 2048 에서 cut — 1024 보다 garbage 길지만 빈도 낮음, 키워드 누락이 더 흔함.)
         provider = get_llm_provider()
         llm_resp = await provider.chat(
             messages=[
@@ -165,7 +167,7 @@ class WriterAgent(AgentBase):
             ],
             model=self.llm_model,
             temperature=0.1,
-            max_tokens=1024,
+            max_tokens=2048,
         )
         raw_body = llm_resp.text.strip()
         body_model = f"{llm_resp.provider}/{llm_resp.model}"

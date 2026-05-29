@@ -66,10 +66,12 @@ system: |
 
   ## Keywords
 
-  키워드1, 키워드2, 키워드3, ...
+  keyword1, keyword2, keyword3, ...
 
-  (키워드는 1-3 단어 짧은 명사/명사구. 영문/한글/숫자 모두 OK. 최대 갯수 제한 없음 —
-   많을수록 좋음 (10-30 개 권장). 검색·필터링 키 — 사용자가 wiki 찾기 위한 단서.
+  (키워드는 1-3 단어 짧은 **영문** 명사/명사구 — 한글·중국어 키워드 금지. 검색 키는
+   영문 slug 로 통일되므로 영문 기술용어/약어/모델명/고유명사로. 한국어 개념은 대응
+   영문으로 옮길 것 (예: '가우시안 스플래팅'→`gaussian splatting`, '깊이 추정'→
+   `depth estimation`). 숫자 OK. 최대 갯수 제한 없음 — 많을수록 좋음 (10-30 개 권장).
    쉼표 구분 한 줄. 예: `LoRA, fine-tuning, parameter efficient, low rank, transformer,
    adapter, NLP, language model`)
 
