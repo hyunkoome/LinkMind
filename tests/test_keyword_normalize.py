@@ -25,15 +25,36 @@ from backend.utils.keywords import normalize_keyword, normalize_keywords
         ("3DTreeAlgorithms", "3d-tree-algorithms"),  # 숫자는 안 쪼갬 (3d 유지)
         # ── 일반 ──
         ("computer vision", "computer-vision"),
-        ("LiDAR", "li-dar"),                     # 약어+소문자 → li|dar... 실제 'LiDAR' = Li+DAR
         ("already-dashed", "already-dashed"),
         ("Mixed_Underscore Case", "mixed-underscore-case"),
         ("  trailing space  ", "trailing-space"),
         ("UPPER", "upper"),
-        ("HTMLParser", "html-parser"),           # 약어+단어
+        ("HTMLParser", "html-parser"),           # 약어목록에 없으면 분리
     ],
 )
 def test_normalize_keyword_examples(raw, expected):
+    assert normalize_keyword(raw) == expected
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        # ── 알려진 약어 (2026-05-29) — 통째로 소문자 (안 쪼갬) ──
+        ("LiDAR", "lidar"),
+        ("lidar", "lidar"),
+        ("LIDAR", "lidar"),
+        ("GitHub", "github"),
+        ("github", "github"),
+        ("IoT", "iot"),
+        ("IoTBoards", "iot-boards"),     # 약어 + 단어 → iot + boards
+        ("PyTorch", "pytorch"),
+        ("macOS", "macos"),
+        ("li-dar", "lidar"),             # 이미 분리된 옛 데이터도 재정규화 시 합쳐짐
+        ("git-hub", "github"),
+        ("io-t", "iot"),
+    ],
+)
+def test_known_acronyms_kept_whole(raw, expected):
     assert normalize_keyword(raw) == expected
 
 

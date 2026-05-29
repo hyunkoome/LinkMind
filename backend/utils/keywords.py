@@ -43,23 +43,70 @@ _NON_SLUG = re.compile(r"[^a-z0-9]+")
 
 _MAX_LEN = 80
 
+# 알려진 약어/브랜드 (2026-05-29, 사용자 요청) — mixed-case 라 위 camelCase 규칙이
+# 원치 않게 쪼개는 것들. 통째로 한 토큰 유지: LiDAR→lidar, GitHub→github, IoT→iot.
+# (AI/API/GPU 처럼 전부 대문자인 약어는 내부 경계가 없어 자동으로 안 쪼개짐 — 불필요.)
+# 새 약어는 정식 표기(예: "WebGPU") 그대로 추가하면 됨 — split 패턴은 자동 계산.
+_KNOWN_ACRONYMS: tuple[str, ...] = (
+    "LiDAR", "GitHub", "GitLab", "IoT", "KiCAD", "ChatGPT", "OpenAI",
+    "OpenCV", "GraphQL", "WebGL", "WebGPU", "PyTorch", "TensorFlow",
+    "NumPy", "SciPy", "macOS", "iOS", "iPadOS", "iPhone", "iPad",
+    "NeRF", "PostgreSQL", "MongoDB", "MLOps", "DevOps", "YouTube",
+    "DeepSeek", "DeepMind", "LangChain", "HuggingFace", "OpenGL",
+)
+
+
+def _split_tokens(s: str) -> list[str]:
+    """camelCase/약어/공백/구분자 → 소문자 토큰 리스트 (약어 병합 전 단계)."""
+    s = _CAMEL_LOWER_UPPER.sub("-", s)
+    s = _CAMEL_ACRONYM.sub("-", s)
+    s = _NON_SLUG.sub("-", s.lower()).strip("-")
+    return [t for t in s.split("-") if t]
+
+
+# 약어가 _split_tokens 로 쪼개졌을 때의 토큰 시퀀스 → 합친 canonical 형태.
+# 예: "LiDAR" → ("li","dar") → "lidar". 모듈 로드 시 1회 계산.
+_ACRONYM_MERGE: dict[tuple[str, ...], str] = {}
+for _a in _KNOWN_ACRONYMS:
+    _toks = tuple(_split_tokens(_a))
+    if len(_toks) > 1:        # 안 쪼개지는 약어(전부 대문자 등)는 처리 불필요
+        _ACRONYM_MERGE[_toks] = re.sub(r"[^a-z0-9]", "", _a.lower())
+_MAX_ACRONYM_TOKENS = max((len(k) for k in _ACRONYM_MERGE), default=1)
+
+
+def _merge_acronyms(tokens: list[str]) -> list[str]:
+    """토큰 시퀀스에서 알려진 약어 split 을 다시 합침 (greedy, longest-first)."""
+    out: list[str] = []
+    i, n = 0, len(tokens)
+    while i < n:
+        merged = False
+        for k in range(min(_MAX_ACRONYM_TOKENS, n - i), 1, -1):
+            seq = tuple(tokens[i:i + k])
+            if seq in _ACRONYM_MERGE:
+                out.append(_ACRONYM_MERGE[seq])
+                i += k
+                merged = True
+                break
+        if not merged:
+            out.append(tokens[i])
+            i += 1
+    return out
+
 
 def normalize_keyword(raw: str) -> str | None:
-    """단일 키워드 정규화. 영문 아니면(CJK/한글 포함) None, 빈 결과도 None."""
+    """단일 키워드 정규화. 영문 아니면(CJK/한글 포함) None, 빈 결과도 None.
+
+    알려진 약어(LiDAR/GitHub/IoT 등)는 통째로 유지 (li-dar 아니라 lidar).
+    """
     if not raw:
         return None
     s = raw.strip()
     if not s or _CJK_HANGUL_RE.search(s):
         return None
-    # camelCase / 약어 경계에 대시 삽입 (소문자화 전에 — 대소문자 정보 사용).
-    s = _CAMEL_LOWER_UPPER.sub("-", s)
-    s = _CAMEL_ACRONYM.sub("-", s)
-    s = s.lower()
-    # 영숫자 아닌 모든 것(공백/_/슬래시/구두점/삽입된 대시) → 단일 대시 + 양끝 제거.
-    s = _NON_SLUG.sub("-", s).strip("-")
-    if not s:
+    tokens = _merge_acronyms(_split_tokens(s))
+    if not tokens:
         return None
-    return s[:_MAX_LEN].strip("-") or None
+    return "-".join(tokens)[:_MAX_LEN].strip("-") or None
 
 
 def normalize_keywords(raws: Iterable[str]) -> list[str]:
