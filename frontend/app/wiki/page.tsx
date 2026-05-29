@@ -360,7 +360,7 @@ export default function WikiListPage() {
 
   return (
     <div className="flex-1 overflow-auto p-6 bg-zinc-50 dark:bg-zinc-950">
-      <div className="max-w-[100rem] mx-auto">
+      <div className="max-w-[120rem] mx-auto">
         <header className="mb-6">
           <h1 className="text-2xl font-bold text-zinc-900 dark:text-zinc-100">
             📖 LinkMind Wiki
@@ -825,7 +825,7 @@ export default function WikiListPage() {
 
           {/* 우측 패널 — 리스트에서 선택한 위키 상세 inline (페이지 이동 X) */}
           {selectedSlug && (
-            <aside className="w-full lg:w-[40rem] lg:shrink-0 lg:sticky lg:top-0 self-start lg:max-h-screen overflow-y-auto rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900">
+            <aside className="w-full lg:w-[52rem] lg:shrink-0 lg:sticky lg:top-0 self-start lg:max-h-screen overflow-y-auto rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900">
               <WikiDetailView
                 slug={selectedSlug}
                 variant="panel"
