@@ -6,11 +6,11 @@ import { usePathname } from "next/navigation";
 import ThemeToggle from "@/components/ThemeToggle";
 import { useT } from "@/lib/i18n/context";
 
-// nav 순서 (2026-05-29): ask 가 LinkMind 메인 사용 경로라 1순위 노출.
+// nav (2026-05-29): ask 가 LinkMind 메인 경로 (홈 '/'→ask redirect). 그래프 페이지는
+// 규모/효용 문제로 제거 — 키워드↔위키 탐색은 /wiki 가 담당. 그래프 코드는 /graph 로 보류.
 const NAV_HREFS = [
   { href: "/ask", icon: "🤖", key: "ask" as const },
   { href: "/wiki", icon: "📖", key: "wiki" as const },
-  { href: "/", icon: "🔮", key: "graph" as const },
   { href: "/ingest", icon: "📥", key: "ingest" as const },
   { href: "/settings", icon: "⚙️", key: "settings" as const },
 ];
