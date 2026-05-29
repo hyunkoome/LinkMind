@@ -248,7 +248,17 @@ async def ingest_telegram_message(
             r["kind"] = kind
             result["urls_ingested"].append(r)
 
-    if attachments:
+    # 첨부(사진)는 **같은 메시지에 URL 이 있을 때만** ingest — 그 URL 콘텐츠의 figure
+    # 로 다뤄진다 (classifier 가 URL 위키에 figure 소스로 link). URL 없는 단독 사진은
+    # 보통 스크린샷이라 고아 photo 위키 noise 만 됨 → ingest 안 함, 텔레그램에 남김
+    # (2026-05-29 사용자 결정). 결과가 비면 is_ingest_successful=False → 메시지 미삭제.
+    if attachments and not urls:
+        result["skipped_bare_attachments"] = len(attachments)
+        logger.info(
+            "telegram msg %s — URL 없는 첨부 %d 개 skip (텔레그램에 남김)",
+            message.msg_id, len(attachments),
+        )
+    if attachments and urls:
         from backend.ingest.document import ingest_document
 
         for att in attachments:
