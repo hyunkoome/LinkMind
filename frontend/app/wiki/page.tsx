@@ -355,7 +355,7 @@ export default function WikiListPage() {
 
   return (
     <div className="flex-1 overflow-auto p-6 bg-zinc-50 dark:bg-zinc-950">
-      <div className="max-w-5xl mx-auto">
+      <div className="max-w-7xl mx-auto">
         <header className="mb-6">
           <h1 className="text-2xl font-bold text-zinc-900 dark:text-zinc-100">
             📖 LinkMind Wiki
@@ -365,6 +365,10 @@ export default function WikiListPage() {
             한국어 markdown 본문을 합성합니다 (vLLM Qwen2.5-7B).
           </p>
         </header>
+
+        {/* 2-column — 왼쪽 사이드(키워드 cloud) + 오른쪽 메인(필터/탭/리스트) */}
+        <div className="flex flex-col lg:flex-row gap-5 items-start">
+          <aside className="w-full lg:w-72 lg:shrink-0 lg:sticky lg:top-0 self-stretch lg:self-start">
 
         {/* 키워드 cloud (2026-05-29) — 빈도순, '더 보기' 로 전부(빈도 1 포함)까지
             점진 로드. 클릭하면 토글 선택 (다중 = AND). 검색창으로 바로 찾기도 가능. */}
@@ -441,6 +445,10 @@ export default function WikiListPage() {
             )}
           </div>
         )}
+          </aside>
+
+          {/* 오른쪽 메인 — 필터/탭/검색/리스트 */}
+          <div className="flex-1 min-w-0 w-full">
 
         {/* 다중 키워드 필터 chip (AND) — 선택한 키워드 각각 제거 + 전체 해제 */}
         {keywordFilters.length > 0 && (
@@ -803,6 +811,8 @@ export default function WikiListPage() {
           </>
           );
         })()}
+          </div>{/* /오른쪽 메인 */}
+        </div>{/* /2-column flex */}
       </div>
     </div>
   );
