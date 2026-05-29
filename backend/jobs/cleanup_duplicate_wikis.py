@@ -53,7 +53,7 @@ from tqdm import tqdm
 
 from backend.db.connection import close_engine, get_session_factory
 from backend.embedding.wiki_qdrant import delete_wiki_page
-from backend.utils.external_ids import extract_external_ids
+from backend.utils.external_ids import extract_external_ids, native_identity_external_id
 from backend.utils.wiki_slug import sanitize_wiki_slug
 
 logging.basicConfig(level=logging.WARNING,
@@ -121,6 +121,43 @@ _INSERT_VERSION_SQL = text("""
 """)
 
 _DELETE_WIKI_SQL = text("DELETE FROM wiki_pages WHERE id = :page_id")
+
+
+# ── T3: orphan rehome (wiki 0개 item 에 정체성 wiki 보장) ──
+# idempotent §2 로 DB item 은 전부 비중복 — 따라서 모든 item 은 정체성 wiki 를
+# 가져야 한다 (사용자 원칙 2026-05-29). cleanup 이 phantom 을 지우며 self_wiki 를
+# 안 만들어준 orphan 을 복구. body_status='pending' → daemon 자동 합성.
+_FETCH_ORPHANS_SQL = text("""
+    SELECT i.id, i.source_type, i.source_url, i.title, i.summary
+    FROM items i
+    WHERE NOT EXISTS (SELECT 1 FROM wiki_page_items w WHERE w.item_id = i.id)
+""")
+
+_CREATE_IDENTITY_WIKI_SQL = text("""
+    INSERT INTO wiki_pages (slug, title, description, body_status)
+    VALUES (:slug, :title, :description, 'pending')
+    ON CONFLICT (slug) DO UPDATE SET slug = EXCLUDED.slug
+    RETURNING id
+""")
+
+_LINK_IDENTITY_WIKI_SQL = text("""
+    INSERT INTO wiki_page_items (wiki_page_id, item_id, confidence, source, role)
+    VALUES (:page_id, :item_id, 1.0, 'auto', :role)
+    ON CONFLICT (wiki_page_id, item_id) DO NOTHING
+""")
+
+
+def _orphan_identity(source_type: str, source_url: str | None, item_id: str) -> tuple[str, str]:
+    """orphan item 의 정체성 wiki (slug, role) — A2 native_identity_external_id 재사용.
+
+    자기 URL/타입에서 native id 가 나오면 그 slug (role='primary'), 없으면
+    url:item:<uuid> self_wiki (role='self'). 콘텐츠 추출 id 는 정체성 아님 (D10.6 A2).
+    """
+    nids = extract_external_ids(url=source_url, text=None) if source_url else []
+    native = native_identity_external_id(source_type=source_type, url=source_url, ids=nids)
+    if native is not None:
+        return sanitize_wiki_slug(native.slug), "primary"
+    return sanitize_wiki_slug(f"url:item:{item_id}"), "self"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -258,16 +295,85 @@ async def _delete_phantom(session: AsyncSession, *, wiki_id: str, maps: dict) ->
     await session.execute(_DELETE_WIKI_SQL, {"page_id": wiki_id})
 
 
+async def _rehome_orphan(session: AsyncSession, *, orphan: dict) -> None:
+    """orphan item 에 정체성 wiki 보장 (없으면 생성) + link. body_status='pending'."""
+    slug, role = _orphan_identity(
+        orphan["source_type"], orphan["source_url"], str(orphan["id"]))
+    title = orphan["title"] or slug
+    description = (orphan["summary"] or "")[:500] or None
+    row = (await session.execute(_CREATE_IDENTITY_WIKI_SQL, {
+        "slug": slug, "title": title, "description": description,
+    })).first()
+    if not row:
+        return
+    await session.execute(_LINK_IDENTITY_WIKI_SQL, {
+        "page_id": str(row[0]), "item_id": str(orphan["id"]), "role": role,
+    })
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # main
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def main(dry_run: bool, do_t1: bool, do_t2: bool, limit: int | None) -> None:
+async def _run_rehome(Session, dry_run: bool, limit: int | None) -> None:
+    """T3 — wiki 0개 orphan item 에 정체성 wiki 보장 (additive, 삭제 아님)."""
+    async with Session() as s:
+        orphans = [dict(r) for r in (await s.execute(_FETCH_ORPHANS_SQL)).mappings().all()]
+    if limit:
+        orphans = orphans[:limit]
+
+    # text 유무 분류 (이미지 = summary 없음, 합성하면 thin body)
+    with_text = [o for o in orphans if (o["summary"] or "").strip()]
+    no_text = [o for o in orphans if not (o["summary"] or "").strip()]
+    by_type: dict[str, int] = {}
+    for o in orphans:
+        by_type[o["source_type"]] = by_type.get(o["source_type"], 0) + 1
+
+    print(f"\norphan item (wiki 0개): {len(orphans)}", flush=True)
+    print(f"  source_type 별: {by_type}", flush=True)
+    print(f"  summary 있음(합성 가능)={len(with_text)}  없음(이미지 등)={len(no_text)}",
+          flush=True)
+    if orphans:
+        print("\n  [샘플 6]", flush=True)
+        for o in orphans[:6]:
+            slug, role = _orphan_identity(o["source_type"], o["source_url"], str(o["id"]))
+            print(f"    {o['source_type']:9} {(o['title'] or '')[:30]:32} → {slug[:40]} ({role})",
+                  flush=True)
+
+    if dry_run:
+        print("\n✅ DRY RUN — 변경 없음. 실제 실행: --rehome-orphans (--dry-run 빼고)",
+              flush=True)
+        return
+
+    start = time.monotonic()
+    done, errors = 0, 0
+    for o in tqdm(orphans, desc="🏠 orphan 정체성 wiki 생성", unit="item", mininterval=0.5):
+        async with Session() as session:
+            try:
+                await _rehome_orphan(session, orphan=o)
+                await session.commit()
+                done += 1
+            except Exception as exc:  # noqa: BLE001
+                await session.rollback()
+                errors += 1
+                tqdm.write(f"⚠ rehome 실패 (item={o['id']}): {exc}")
+    print("\n" + "=" * 72, flush=True)
+    print(f"✅ rehome 완료 — {done} item 정체성 wiki 생성/link (pending), errors={errors} "
+          f"({time.monotonic() - start:.0f}s). daemon 이 자동 합성.", flush=True)
+
+
+async def main(dry_run: bool, do_t1: bool, do_t2: bool, do_rehome: bool,
+               limit: int | None) -> None:
     Session = get_session_factory()
     print("=" * 72, flush=True)
     print(f"cleanup_duplicate_wikis — dry_run={dry_run} t1={do_t1} t2={do_t2} "
-          f"limit={limit or '전체'}", flush=True)
+          f"rehome={do_rehome} limit={limit or '전체'}", flush=True)
     print("=" * 72, flush=True)
+
+    # T3 rehome 는 독립 모드 (cleanup 부작용 복구) — 단독 실행.
+    if do_rehome:
+        await _run_rehome(Session, dry_run, limit)
+        return
 
     async with Session() as s:
         maps = await _build_maps(s)
@@ -334,9 +440,10 @@ async def main(dry_run: bool, do_t1: bool, do_t2: bool, limit: int | None) -> No
           f"errors={stats['errors']}  ({elapsed:.0f}s)", flush=True)
 
 
-async def _entry(dry_run: bool, do_t1: bool, do_t2: bool, limit: int | None) -> None:
+async def _entry(dry_run: bool, do_t1: bool, do_t2: bool, do_rehome: bool,
+                 limit: int | None) -> None:
     try:
-        await main(dry_run, do_t1, do_t2, limit)
+        await main(dry_run, do_t1, do_t2, do_rehome, limit)
     finally:
         await close_engine()
 
@@ -346,10 +453,12 @@ if __name__ == "__main__":
     parser.add_argument("--dry-run", action="store_true", help="수치+샘플만, 변경 X")
     parser.add_argument("--t1-only", action="store_true", help="self_wiki merge 만")
     parser.add_argument("--t2-only", action="store_true", help="phantom 삭제만")
+    parser.add_argument("--rehome-orphans", action="store_true",
+                        help="wiki 0개 orphan item 에 정체성 wiki 생성 (additive, 단독 모드)")
     parser.add_argument("--limit", type=int, default=None, help="각 단계 N건만 (디버깅)")
     args = parser.parse_args()
 
     do_t1 = not args.t2_only
     do_t2 = not args.t1_only
-    asyncio.run(_entry(args.dry_run, do_t1, do_t2, args.limit))
+    asyncio.run(_entry(args.dry_run, do_t1, do_t2, args.rehome_orphans, args.limit))
     sys.stdout.flush()

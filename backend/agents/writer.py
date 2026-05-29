@@ -22,7 +22,6 @@ trigger_reason 종류 (ctx.extra['trigger_reason']):
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -44,7 +43,9 @@ _UPDATE_BODY_SQL = text("""
     SET body = :body,
         body_model = :body_model,
         body_prompt_version = :body_prompt_version,
-        body_generated_at = :body_generated_at,
+        body_generated_at = now(),           -- SQL now() (UTC). 옛 Python datetime.utcnow()
+                                             -- 은 naive 라 timestamptz 에 세션 TZ(KST)로
+                                             -- 오해석돼 9h 어긋났음 (2026-05-29 fix).
         body_status = 'completed',
         body_processing_started_at = NULL    -- 처리 끝났으니 marker clear
     WHERE id = :page_id
@@ -119,11 +120,18 @@ class WriterAgent(AgentBase):
         wiki_context = retr_result.output_meta
         trigger_reason = ctx.extra.get("trigger_reason", "user_request")
 
-        # body_status = 'pending' 로 마킹 (다른 동시 합성 방지 + UI 가시화)
+        # body_processing_started_at = now() 마킹 (UI 'generating' 시각화).
+        # ★ 즉시 commit ★ — 이 mark 와 invoke() 끝의 clear(started_at=NULL)가 같은
+        # 미커밋 트랜잭션 안에 있으면, 다른 세션(frontend stats)은 set→clear 를 한
+        # 번에 보게 돼 'generating'(started_at NOT NULL)을 영영 못 본다. ~15s LLM
+        # 합성 동안 frontend 가 'generating'(blue pulse)을 보려면 mark 를 먼저
+        # commit 해 가시화해야 한다 (2026-05-29 fix). 실패 시엔 started_at 이 남지만
+        # 5분 후 'queuing' 으로 자연 복귀 + daemon backoff 재시도.
         await ctx.session.execute(
             _MARK_GENERATING_SQL,
             {"page_id": str(ctx.related_wiki_page_id)},
         )
+        await ctx.session.commit()
 
         return {
             "wiki_page_id": str(ctx.related_wiki_page_id),
@@ -172,14 +180,12 @@ class WriterAgent(AgentBase):
         # version+1 결정 (latest_version 은 retriever 가 가져옴)
         latest = int(wiki_context["page"]["latest_version"] or 0)
         new_version = latest + 1
-        generated_at = datetime.utcnow()
 
-        # 1) wiki_pages.body UPDATE
+        # 1) wiki_pages.body UPDATE (body_generated_at 은 SQL now() — 위 SQL 참고)
         await session.execute(_UPDATE_BODY_SQL, {
             "body": body,
             "body_model": body_model,
             "body_prompt_version": self.agent_version,
-            "body_generated_at": generated_at,
             "page_id": str(page_id),
         })
 

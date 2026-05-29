@@ -12,6 +12,7 @@ from __future__ import annotations
 from backend.jobs.cleanup_duplicate_wikis import (
     _detect_t1,
     _detect_t2,
+    _orphan_identity,
     _pick_t1_target,
 )
 
@@ -186,3 +187,33 @@ def test_t1_and_t2_disjoint():
     assert "wid-url__item__ee" in {p["self_wiki"] for p in t1}
     assert t2 == ["wid-github__phantom-repo"]
     assert not (t1_wikis & set(t2))      # disjoint
+
+
+# ──────────────── T3 — orphan rehome 정체성 선택 ────────────────
+
+def test_orphan_identity_url_no_external_is_self():
+    """일반 블로그 (자기 URL 에 외부 id 없음) → url:item self_wiki."""
+    slug, role = _orphan_identity("url", "https://someblog.com/post", "abc-123")
+    assert slug == "url__item__abc-123"
+    assert role == "self"
+
+
+def test_orphan_identity_image_document_is_self():
+    """텔레그램 사진 (source_url=/files/hash, 외부 id 없음) → self."""
+    slug, role = _orphan_identity("document", "/files/deadbeef", "img-1")
+    assert slug == "url__item__img-1"
+    assert role == "self"
+
+
+def test_orphan_identity_youtube_recovers_native():
+    """youtube 자료 → 자기 URL 의 yt 정체성 복구 (role primary)."""
+    slug, role = _orphan_identity("youtube", "https://www.youtube.com/watch?v=Byo7yew9-OQ", "x")
+    assert slug == "yt__byo7yew9-oq"
+    assert role == "primary"
+
+
+def test_orphan_identity_no_url_is_self():
+    """source_url 없는 메모 → self."""
+    slug, role = _orphan_identity("telegram", None, "memo-9")
+    assert slug == "url__item__memo-9"
+    assert role == "self"
