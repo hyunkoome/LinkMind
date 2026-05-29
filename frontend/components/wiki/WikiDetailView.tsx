@@ -214,10 +214,9 @@ export default function WikiDetailView({
                   <button
                     type="button"
                     onClick={onClose}
-                    className="text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 text-lg leading-none"
-                    aria-label="닫기"
+                    className="text-xs px-2 py-1 rounded border border-zinc-300 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
                   >
-                    ✕
+                    ✕ 상세 닫기
                   </button>
                 )}
               </>
