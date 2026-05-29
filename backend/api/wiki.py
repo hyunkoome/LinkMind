@@ -112,11 +112,11 @@ _STATUS_PREDICATE = """
     OR wp.body_status = CAST(:status AS TEXT)
 """
 
-_LIST_PAGES_SQL = text(f"""
+_LIST_SELECT = f"""
     SELECT
         wp.id, wp.topic_id, wp.slug, wp.title, wp.description,
         wp.body_status, wp.body_generated_at,
-        wp.body_processing_started_at,
+        wp.body_processing_started_at, wp.keywords,
         wp.is_pinned, wp.created_at, wp.updated_at,
         (SELECT COUNT(*) FROM wiki_page_items wpi
             WHERE wpi.wiki_page_id = wp.id
@@ -126,30 +126,43 @@ _LIST_PAGES_SQL = text(f"""
     WHERE ({_STATUS_PREDICATE})
       AND (CAST(:q AS TEXT) IS NULL OR ({_SEARCH_PREDICATE}))
       AND (CAST(:keyword AS TEXT) IS NULL OR CAST(:keyword AS TEXT) = ANY(wp.keywords))
-    ORDER BY
-        -- 2026-05-27 (전체 tab) — completed → pending → ready 그룹 순서
-        -- (CAST :status IS NULL 일 때만 active). 단일 tab 일 때는 의미 없음 (1 그룹).
-        CASE
-            WHEN CAST(:status AS TEXT) IS NULL THEN
-                CASE wp.body_status
-                    WHEN 'completed' THEN 0
-                    WHEN 'pending'   THEN 1
-                    WHEN 'issues'     THEN 2
-                    ELSE 3
-                END
-            ELSE 0
-        END ASC,
-        -- pending tab 일 때 generating (started_at NOT NULL) 먼저 — '실제 합성 중'
-        -- 자료가 list 상단. 다른 tab 은 모두 같은 ordinal (0) — 영향 X.
-        (CAST(:status AS TEXT) = 'pending'
-         AND wp.body_processing_started_at IS NOT NULL) DESC,
-        wp.is_pinned DESC,
-        -- 같은 그룹 안 알파벳 (title ASC, case-insensitive).
-        -- pending tab 의 'queuing' 자료는 사실 updated_at ASC 가 자연 (다음 처리
-        -- 순서) 인데, 사용자 명시: 알파벳. queuing 안에서도 title 정렬.
-        LOWER(wp.title) ASC
-    LIMIT :limit OFFSET :offset
-""")
+"""
+
+# 그룹/pinned 우선 정렬 — 전체 tab 의 status 그룹 (completed→pending→issues) +
+# pending tab 의 generating 우선 + pinned. 사용자가 고른 sort 는 이 뒤에 붙음
+# (그룹 안에서 정렬). 단일 tab 일 때 그룹 ordinal 은 모두 0 이라 무의미.
+_GROUP_ORDER = """
+    CASE
+        WHEN CAST(:status AS TEXT) IS NULL THEN
+            CASE wp.body_status
+                WHEN 'completed' THEN 0 WHEN 'pending' THEN 1
+                WHEN 'issues' THEN 2 ELSE 3 END
+        ELSE 0
+    END ASC,
+    (CAST(:status AS TEXT) = 'pending'
+     AND wp.body_processing_started_at IS NOT NULL) DESC,
+    wp.is_pinned DESC
+"""
+
+# 사용자 선택 정렬 — allowlist (SQL injection 방지: key 로만 lookup, 값은 고정).
+# 날짜는 합성 시각(body_generated_at) 우선, 없으면 updated_at. 동률 tie-break 로
+# title 추가해 페이지 간 안정적 순서 (pagination 일관).
+_SORT_CLAUSES: dict[str, str] = {
+    "recent": "COALESCE(wp.body_generated_at, wp.updated_at) DESC NULLS LAST, LOWER(wp.title) ASC",
+    "oldest": "COALESCE(wp.body_generated_at, wp.updated_at) ASC NULLS LAST, LOWER(wp.title) ASC",
+    "alpha": "LOWER(wp.title) ASC, wp.created_at ASC",
+    "alpha_desc": "LOWER(wp.title) DESC, wp.created_at ASC",
+}
+DEFAULT_WIKI_SORT = "recent"
+
+
+def _build_list_sql(sort: str):
+    """sort key (allowlist) 로 ORDER BY 를 조립한 list SQL 반환."""
+    clause = _SORT_CLAUSES.get(sort, _SORT_CLAUSES[DEFAULT_WIKI_SORT])
+    return text(
+        f"{_LIST_SELECT}\n    ORDER BY {_GROUP_ORDER},\n        {clause}\n"
+        "    LIMIT :limit OFFSET :offset"
+    )
 
 
 _COUNT_PAGES_SQL = text(f"""
@@ -162,16 +175,20 @@ _COUNT_PAGES_SQL = text(f"""
 
 @router.get("", response_model=WikiPageListResponse)
 async def list_wiki_pages(
-    status: str | None = Query(default=None, description="empty/generating/ready/stale"),
+    status: str | None = Query(default=None, description="issues/pending/completed"),
     q: str | None = Query(default=None, description="title/description/slug 부분 매칭"),
     keyword: str | None = Query(default=None, description="keywords 배열에서 정확 매칭"),
+    sort: str = Query(
+        default=DEFAULT_WIKI_SORT,
+        description="recent(최신)/oldest(오래된)/alpha(가나다)/alpha_desc(역순)",
+    ),
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     session: AsyncSession = Depends(get_session),
 ) -> WikiPageListResponse:
     params = {"status": status, "q": q, "keyword": keyword, "limit": limit, "offset": offset}
     total = (await session.execute(_COUNT_PAGES_SQL, params)).scalar() or 0
-    rows = (await session.execute(_LIST_PAGES_SQL, params)).mappings().all()
+    rows = (await session.execute(_build_list_sql(sort), params)).mappings().all()
     pages = [
         WikiPageListItem(
             id=r["id"],
@@ -184,6 +201,7 @@ async def list_wiki_pages(
             body_processing_started_at=r["body_processing_started_at"],
             source_count=int(r["source_count"] or 0),
             is_pinned=bool(r["is_pinned"]),
+            keywords=list(r["keywords"] or []),
             created_at=r["created_at"],
             updated_at=r["updated_at"],
         )

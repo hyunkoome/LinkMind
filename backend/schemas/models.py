@@ -307,6 +307,7 @@ class WikiPageListItem(BaseModel):
     body_processing_started_at: datetime | None = None
     source_count: int = 0
     is_pinned: bool = False
+    keywords: list[str] = []
     created_at: datetime
     updated_at: datetime
 

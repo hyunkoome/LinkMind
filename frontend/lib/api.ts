@@ -270,6 +270,7 @@ export interface WikiPageListItem {
   body_processing_started_at: string | null;        // NOT NULL ⇒ writer 진행 중
   source_count: number;
   is_pinned: boolean;
+  keywords: string[];
   created_at: string;
   updated_at: string;
 }
@@ -372,13 +373,20 @@ export interface WikiRegenerateResponse {
   error: string | null;
 }
 
+// sort: recent(최신) | oldest(오래된) | alpha(가나다) | alpha_desc(역순)
+export type WikiSort = "recent" | "oldest" | "alpha" | "alpha_desc";
+
 export async function listWikiPages(
-  opts: { status?: string; q?: string; keyword?: string; limit?: number; offset?: number } = {},
+  opts: {
+    status?: string; q?: string; keyword?: string;
+    sort?: WikiSort; limit?: number; offset?: number;
+  } = {},
 ): Promise<WikiPageListResponse> {
   const params = new URLSearchParams();
   if (opts.status) params.set("status", opts.status);
   if (opts.q) params.set("q", opts.q);
   if (opts.keyword) params.set("keyword", opts.keyword);
+  if (opts.sort) params.set("sort", opts.sort);
   params.set("limit", String(opts.limit ?? 50));
   params.set("offset", String(opts.offset ?? 0));
   return fetchJSON<WikiPageListResponse>(`/wiki?${params.toString()}`);

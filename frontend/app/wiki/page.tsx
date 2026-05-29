@@ -4,11 +4,12 @@
  * D10 wave-1g — /wiki — wiki page list.
  *
  * 기능:
- *  - filter (status / q text)
- *  - pagination (50 per page)
- *  - 각 page card 클릭 → /wiki/[slug] 상세
- *  - body_status 칩 (empty/generating/ready/stale) 색상 구분
- *  - source_count 표시
+ *  - filter (status tab / q text / keyword)
+ *  - 정렬 select (2026-05-29): 날짜순 최신/오래된 · 가나다 오름/내림 (URL ?sort=)
+ *  - pagination (페이지당 10/50/100)
+ *  - 각 page card 클릭 → /wiki/[slug] 상세 (completed 만)
+ *  - body_status 칩 (issues/pending(generating·queuing)/completed) 색상 구분
+ *  - keywords pill (2026-05-29) — 클릭 시 ?keyword= 필터. source_count 표시
  */
 
 import Link from "next/link";
@@ -20,11 +21,22 @@ import {
   getWikiStats,
   listWikiPages,
   type WikiPageListItem,
+  type WikiSort,
   type WikiStatsResponse,
 } from "@/lib/api";
 
 const PAGE_SIZE_OPTIONS = [10, 50, 100] as const;
 const DEFAULT_PAGE_SIZE = 50;
+
+// 정렬 옵션 (2026-05-29) — 날짜는 합성 시각(body_generated_at) 우선. URL ?sort= 동기화.
+const SORT_OPTIONS: { key: WikiSort; label: string }[] = [
+  { key: "recent", label: "날짜순 (최신)" },
+  { key: "oldest", label: "날짜순 (오래된)" },
+  { key: "alpha", label: "가나다 (오름)" },
+  { key: "alpha_desc", label: "가나다 (내림)" },
+];
+const SORT_KEYS = SORT_OPTIONS.map((o) => o.key);
+const DEFAULT_SORT: WikiSort = "recent";
 
 // 2026-05-27 통일: backend body_status = frontend label.
 //   - 'ready'     — ingest 직후, body 미합성 (사용자 클릭 시 lazy)
@@ -86,6 +98,12 @@ export default function WikiListPage() {
   const pageSize: number = (PAGE_SIZE_OPTIONS as readonly number[]).includes(rawPageSize)
     ? rawPageSize
     : DEFAULT_PAGE_SIZE;
+
+  // 정렬 — URL ?sort= (default recent). allowlist 밖이면 default 로 fallback.
+  const rawSort = searchParams.get("sort") || DEFAULT_SORT;
+  const sort: WikiSort = (SORT_KEYS as string[]).includes(rawSort)
+    ? (rawSort as WikiSort)
+    : DEFAULT_SORT;
 
   // 입력창 local state (debounce 위함) — URL 의 q 와 분리, debounce 후 URL 반영
   const [qInput, setQInput] = useState(q);
@@ -160,6 +178,7 @@ export default function WikiListPage() {
       status: statusFilter || undefined,
       q: q || undefined,
       keyword: keywordFilter || undefined,
+      sort,
       limit: pageSize,
       offset: (page - 1) * pageSize,
     })
@@ -175,7 +194,7 @@ export default function WikiListPage() {
     return () => {
       alive = false;
     };
-  }, [q, statusFilter, keywordFilter, page, pageSize]);
+  }, [q, statusFilter, keywordFilter, sort, page, pageSize]);
 
   // stats fetch — mount 시 1회 + pending 이 있으면 10초 polling (자동 daemon
   // 진행 상황 시각화). pending=0 이면 polling 종료.
@@ -429,7 +448,27 @@ export default function WikiListPage() {
                 </span>{" "}
                 / {totalPages}
               </div>
-              {/* 페이지당 개수 — 10/50/100 라디오 (2026-05-27) */}
+              {/* 정렬 select (2026-05-29) + 페이지당 개수 라디오 */}
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-1.5">
+                  <span>정렬</span>
+                  <select
+                    value={sort}
+                    onChange={(e) =>
+                      updateQuery({
+                        sort: e.target.value === DEFAULT_SORT ? null : e.target.value,
+                        page: null,
+                      })
+                    }
+                    className="px-1.5 py-0.5 rounded text-[11px] border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-700 dark:text-zinc-300"
+                  >
+                    {SORT_OPTIONS.map((o) => (
+                      <option key={o.key} value={o.key}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               <div className="flex items-center gap-1.5">
                 <span>페이지당</span>
                 {PAGE_SIZE_OPTIONS.map((n) => {
@@ -454,6 +493,7 @@ export default function WikiListPage() {
                     </button>
                   );
                 })}
+              </div>
               </div>
             </div>
 
@@ -502,6 +542,32 @@ export default function WikiListPage() {
                         )}
                       </span>
                     </div>
+                    {/* keywords pills (2026-05-29) — 클릭 시 ?keyword= 필터.
+                        카드가 Link 라 preventDefault/stopPropagation 으로 네비 막음. */}
+                    {p.keywords && p.keywords.length > 0 && (
+                      <div className="mt-1.5 flex flex-wrap gap-1">
+                        {p.keywords.slice(0, 8).map((kw) => (
+                          <button
+                            key={kw}
+                            type="button"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              updateQuery({ keyword: kw, page: null });
+                            }}
+                            title={`keyword '${kw}' 로 필터`}
+                            className="px-1.5 py-0.5 rounded text-[10px] border border-orange-200 dark:border-orange-800 bg-orange-50 dark:bg-orange-900/20 text-orange-600 dark:text-orange-300 hover:bg-orange-100 dark:hover:bg-orange-900/40"
+                          >
+                            🔖 {kw}
+                          </button>
+                        ))}
+                        {p.keywords.length > 8 && (
+                          <span className="px-1 py-0.5 text-[10px] text-zinc-400">
+                            +{p.keywords.length - 8}
+                          </span>
+                        )}
+                      </div>
+                    )}
                   </>
                 );
 
