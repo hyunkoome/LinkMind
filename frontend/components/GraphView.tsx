@@ -184,10 +184,12 @@ export default function GraphView({
             base = 1.5;
           }
           // 강조 단계 (사용자 피드백): 흰색 일괄로 가리지 말기.
-          //   selected (단 하나) : 1.7x + 흰색
+          //   selected (단 하나) : 크게 강조. item 은 base 가 작아(1.5) 1.7x 해도
+          //                        안 보이므로 최소 크기 보장 (선택 자료가 우측 그래프에
+          //                        확실히 보이게 — 사용자 요구 2026-05-29).
           //   related (그 친구들): 1.3x + 원래 색 (정체성 유지)
           //   non-related        : 원래 사이즈 + 어둡게 (visually 흐림)
-          if (node.id === selectedId) return base * 1.7;
+          if (node.id === selectedId) return Math.max(base * 1.7, 10);
           if (relatedIds?.has(node.id)) return base * 1.3;
           return base;
         }}

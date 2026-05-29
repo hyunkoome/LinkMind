@@ -199,7 +199,7 @@ export default function ItemDetails({ itemId, onClose }: ItemDetailsProps) {
       )}
 
       {item && (
-        <div className="p-4 space-y-4">
+        <div className="p-4 space-y-4 max-w-3xl mx-auto w-full">
           {/* title + URL */}
           <div>
             <h2 className="text-base font-semibold mb-1 break-words">

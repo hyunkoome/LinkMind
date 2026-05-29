@@ -59,20 +59,22 @@ export default function HomePage() {
   const [history, setHistory] = useState<HistoryFrame[]>([]);
 
   // 좌/중/우 3분할 패널 폭 (마우스 드래그 리사이즈). 중앙은 flex-1 (나머지 자동).
+  // 우측 그래프는 보조라 작게 (기본 280, 최대 600). 좌측 트리 160~480.
   const [leftW, setLeftW] = useState(256);
-  const [rightW, setRightW] = useState(384);
+  const [rightW, setRightW] = useState(280);
   useEffect(() => {
     try {
       const l = window.localStorage.getItem("linkmind:graph-leftW");
       const r = window.localStorage.getItem("linkmind:graph-rightW");
-      if (l) setLeftW(Number(l));
-      if (r) setRightW(Number(r));
+      // 이전에 저장된 과한 값도 현재 범위로 clamp (우측이 너무 컸던 것 교정)
+      if (l) setLeftW(Math.max(160, Math.min(480, Number(l))));
+      if (r) setRightW(Math.max(180, Math.min(600, Number(r))));
     } catch {
       /* ignore */
     }
   }, []);
   const onLeftResize = useCallback((clientX: number) => {
-    const w = Math.max(160, Math.min(560, clientX));
+    const w = Math.max(160, Math.min(480, clientX));
     setLeftW(w);
     try {
       window.localStorage.setItem("linkmind:graph-leftW", String(w));
@@ -81,7 +83,7 @@ export default function HomePage() {
     }
   }, []);
   const onRightResize = useCallback((clientX: number) => {
-    const w = Math.max(240, Math.min(900, window.innerWidth - clientX));
+    const w = Math.max(180, Math.min(600, window.innerWidth - clientX));
     setRightW(w);
     try {
       window.localStorage.setItem("linkmind:graph-rightW", String(w));

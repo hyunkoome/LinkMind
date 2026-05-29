@@ -138,7 +138,7 @@ export default function NodeDetails({
 
       {/* Topic detail */}
       {topic && !loading && (
-        <div className="p-4 space-y-4">
+        <div className="p-4 space-y-4 max-w-3xl mx-auto w-full">
           <div>
             <h2 className="text-base font-semibold mb-1 break-words">
               {topic.title}
@@ -220,7 +220,7 @@ export default function NodeDetails({
 
       {/* Category detail */}
       {category && !loading && (
-        <div className="p-4 space-y-4">
+        <div className="p-4 space-y-4 max-w-3xl mx-auto w-full">
           <div>
             <h2 className="text-base font-semibold mb-1 break-words">
               {category.pinned ? "📌 " : ""}
