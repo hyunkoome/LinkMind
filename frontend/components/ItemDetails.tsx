@@ -2,7 +2,10 @@
 
 import { useEffect, useState } from "react";
 
-import { fileUrl, getItem, patchItem } from "@/lib/api";
+import Link from "next/link";
+
+import WikiBody from "@/components/wiki/WikiBody";
+import { fileUrl, getItem, getWikiPage, patchItem, type WikiPageDetail } from "@/lib/api";
 import { useT } from "@/lib/i18n/context";
 import type { ItemAttachment, ItemDetail } from "@/types/graph";
 
@@ -34,6 +37,12 @@ export default function ItemDetails({ itemId, onClose }: ItemDetailsProps) {
   const [notesDraft, setNotesDraft] = useState<string>("");
   const [saving, setSaving] = useState(false);
   const [collapsed, setCollapsedState] = useState(false);
+
+  // D10.5 세션 A — 자료가 속한 wiki body inline (graph 우측 패널)
+  const [selectedWikiSlug, setSelectedWikiSlug] = useState<string | null>(null);
+  const [wikiDetail, setWikiDetail] = useState<WikiPageDetail | null>(null);
+  const [wikiLoading, setWikiLoading] = useState(false);
+  const [wikiError, setWikiError] = useState<string | null>(null);
 
   const localeForDate = locale === "ko" ? "ko-KR" : "en-US";
 
@@ -81,10 +90,27 @@ export default function ItemDetails({ itemId, onClose }: ItemDetailsProps) {
       .then((it) => {
         setItem(it);
         setNotesDraft(it.user_notes || "");
+        // 자료의 1번째 wiki (self/completed 우선 정렬) 자동 선택
+        setSelectedWikiSlug(it.wikis.length > 0 ? it.wikis[0].slug : null);
       })
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false));
   }, [itemId]);
+
+  // 선택된 wiki slug 의 body + keywords fetch (기존 GET /wiki/{slug} 재사용)
+  useEffect(() => {
+    if (!selectedWikiSlug) {
+      setWikiDetail(null);
+      setWikiError(null);
+      return;
+    }
+    setWikiLoading(true);
+    setWikiError(null);
+    getWikiPage(selectedWikiSlug)
+      .then(setWikiDetail)
+      .catch((e: Error) => setWikiError(e.message))
+      .finally(() => setWikiLoading(false));
+  }, [selectedWikiSlug]);
 
   const toggleRead = async () => {
     if (!item) return;
@@ -274,6 +300,83 @@ export default function ItemDetails({ itemId, onClose }: ItemDetailsProps) {
               </div>
               <div className="text-xs text-zinc-700 dark:text-zinc-300 whitespace-pre-wrap leading-relaxed bg-zinc-50 dark:bg-zinc-800 p-2 rounded">
                 {item.summary}
+              </div>
+            </section>
+          )}
+
+          {/* D10.5 세션 A — 이 자료의 wiki 페이지 본문 inline */}
+          {item.wikis.length > 0 && (
+            <section>
+              <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1 flex items-center justify-between">
+                <span>{locale === "ko" ? "위키" : "Wiki"}</span>
+                {selectedWikiSlug && (
+                  <Link
+                    href={`/wiki/${encodeURIComponent(selectedWikiSlug)}`}
+                    className="normal-case text-orange-600 dark:text-orange-400 hover:underline"
+                  >
+                    {locale === "ko" ? "전체 보기 →" : "open full →"}
+                  </Link>
+                )}
+              </div>
+
+              {/* 여러 wiki 에 속하면 탭으로 전환 */}
+              {item.wikis.length > 1 && (
+                <div className="flex flex-wrap gap-1 mb-2">
+                  {item.wikis.map((w) => (
+                    <button
+                      key={w.slug}
+                      type="button"
+                      onClick={() => setSelectedWikiSlug(w.slug)}
+                      className={`text-[10px] px-2 py-0.5 rounded transition truncate max-w-[10rem] ${
+                        w.slug === selectedWikiSlug
+                          ? "bg-orange-500 text-white"
+                          : "bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-200 dark:hover:bg-zinc-700"
+                      }`}
+                      title={w.title || w.slug}
+                    >
+                      {w.role === "self" ? "★ " : ""}
+                      {w.title || w.slug}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              <div className="bg-zinc-50 dark:bg-zinc-800/50 rounded p-2 max-h-[28rem] overflow-y-auto">
+                {wikiLoading && (
+                  <div className="text-xs text-zinc-500">
+                    {locale === "ko" ? "위키 불러오는 중…" : "loading wiki…"}
+                  </div>
+                )}
+                {wikiError && (
+                  <div className="text-xs text-red-500">{wikiError}</div>
+                )}
+                {!wikiLoading && !wikiError && wikiDetail && (
+                  <>
+                    {/* keywords pill */}
+                    {wikiDetail.keywords.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mb-2">
+                        {wikiDetail.keywords.map((kw) => (
+                          <Link
+                            key={kw}
+                            href={`/wiki?keyword=${encodeURIComponent(kw)}`}
+                            className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-200 dark:hover:bg-blue-800/40"
+                          >
+                            {kw}
+                          </Link>
+                        ))}
+                      </div>
+                    )}
+                    {wikiDetail.body ? (
+                      <WikiBody body={wikiDetail.body} />
+                    ) : (
+                      <div className="text-xs text-zinc-500 italic">
+                        {locale === "ko"
+                          ? "아직 본문이 합성되지 않았습니다 (처리 대기/진행 중)."
+                          : "wiki body not synthesized yet (queued/in progress)."}
+                      </div>
+                    )}
+                  </>
+                )}
               </div>
             </section>
           )}

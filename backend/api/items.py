@@ -37,6 +37,7 @@ from backend.schemas.models import (
     ItemAttachmentSummary,
     ItemDetail,
     ItemUpdateRequest,
+    ItemWikiRef,
 )
 
 logger = logging.getLogger(__name__)
@@ -59,8 +60,19 @@ def _to_attachment_summary(row: dict) -> ItemAttachmentSummary:
     )
 
 
+def _to_wiki_ref(row: dict) -> ItemWikiRef:
+    return ItemWikiRef(
+        slug=row["slug"],
+        title=row.get("title"),
+        role=row.get("role"),
+        body_status=row.get("body_status"),
+        confidence=row.get("confidence"),
+    )
+
+
 def _to_item_detail(row: dict) -> ItemDetail:
     attachments = [_to_attachment_summary(a) for a in (row.get("attachments") or [])]
+    wikis = [_to_wiki_ref(w) for w in (row.get("wikis") or [])]
     return ItemDetail(
         id=row["id"],
         source_type=row["source_type"],
@@ -81,6 +93,7 @@ def _to_item_detail(row: dict) -> ItemDetail:
         is_read=bool(row.get("is_read")),
         read_at=row.get("read_at"),
         attachments=attachments,
+        wikis=wikis,
     )
 
 

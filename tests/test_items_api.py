@@ -9,7 +9,15 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from backend.api.items import _merge_keep_order, _TAG_MAX
+from datetime import datetime, timezone
+from uuid import uuid4
+
+from backend.api.items import (
+    _merge_keep_order,
+    _TAG_MAX,
+    _to_item_detail,
+    _to_wiki_ref,
+)
 from backend.llm.keyword_extract import (
     _MIN_NOTES_LENGTH,
     _normalize_keyword,
@@ -167,3 +175,69 @@ def test_update_request_rejects_invalid_is_read_type():
 
 def test_tag_max_is_sensible():
     assert 16 <= _TAG_MAX <= 50
+
+
+# ── D10.5 세션 A — ItemDetail.wikis 매핑 ──────────────────────
+
+
+def test_to_wiki_ref_full_row():
+    """wiki_page_items JOIN wiki_pages row → ItemWikiRef."""
+    ref = _to_wiki_ref(
+        {
+            "slug": "yt__abc123",
+            "title": "어떤 영상",
+            "role": "self",
+            "body_status": "completed",
+            "confidence": 1.0,
+        }
+    )
+    assert ref.slug == "yt__abc123"
+    assert ref.title == "어떤 영상"
+    assert ref.role == "self"
+    assert ref.body_status == "completed"
+    assert ref.confidence == 1.0
+
+
+def test_to_wiki_ref_optional_fields_none():
+    """slug 만 필수 — 나머지 NULL 허용."""
+    ref = _to_wiki_ref({"slug": "url__item__x"})
+    assert ref.slug == "url__item__x"
+    assert ref.title is None
+    assert ref.role is None
+    assert ref.body_status is None
+    assert ref.confidence is None
+
+
+def _minimal_item_row(**extra) -> dict:
+    now = datetime.now(timezone.utc)
+    row = {
+        "id": uuid4(),
+        "source_type": "url",
+        "raw_content": "본문",
+        "ingested_at": now,
+        "updated_at": now,
+    }
+    row.update(extra)
+    return row
+
+
+def test_to_item_detail_maps_wikis():
+    """get_item_full 의 wikis 리스트가 ItemDetail.wikis 로 그대로 매핑."""
+    row = _minimal_item_row(
+        wikis=[
+            {"slug": "yt__abc", "title": "self wiki", "role": "self",
+             "body_status": "completed", "confidence": 1.0},
+            {"slug": "github__x-y", "title": "관련 repo", "role": "related",
+             "body_status": "pending", "confidence": 0.7},
+        ],
+    )
+    detail = _to_item_detail(row)
+    assert [w.slug for w in detail.wikis] == ["yt__abc", "github__x-y"]
+    assert detail.wikis[0].role == "self"
+    assert detail.wikis[1].body_status == "pending"
+
+
+def test_to_item_detail_no_wikis_defaults_empty():
+    """wikis 키 없거나 None 이면 빈 리스트 (자료가 아직 wiki 미분류)."""
+    assert _to_item_detail(_minimal_item_row()).wikis == []
+    assert _to_item_detail(_minimal_item_row(wikis=None)).wikis == []

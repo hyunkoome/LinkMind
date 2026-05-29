@@ -60,6 +60,15 @@ export interface ItemAttachment {
   height: number | null;
 }
 
+// D10.5 세션 A — 이 자료가 속한 wiki 페이지 참조 (graph 우측 패널 inline 용).
+export interface ItemWikiRef {
+  slug: string;
+  title: string | null;
+  role: string | null;        // self / primary / figure / related ...
+  body_status: string | null; // issues / pending / completed
+  confidence: number | null;
+}
+
 export interface ItemDetail {
   id: string;
   source_type: string;
@@ -80,6 +89,7 @@ export interface ItemDetail {
   is_read: boolean;
   read_at: string | null;
   attachments: ItemAttachment[];
+  wikis: ItemWikiRef[];
 }
 
 export interface ItemUpdateRequest {

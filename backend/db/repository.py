@@ -203,6 +203,26 @@ async def get_item_full(session: AsyncSession, item_id: UUID) -> dict[str, Any] 
         {"id": item_id},
     )
     item["attachments"] = [dict(r) for r in att_res.mappings().all()]
+
+    # D10.5 세션 A — 이 자료가 속한 wiki 페이지 목록 (graph 우측 패널 inline 용).
+    # 정렬: 자기 정체성(self/primary) → 합성 완료(completed) → confidence.
+    # body 는 무거워 미포함 — 프런트가 선택 slug 로 GET /wiki/{slug} 별도 조회.
+    wiki_res = await session.execute(
+        text("""
+            SELECT wp.slug, wp.title, wp.body_status,
+                   wpi.role, wpi.confidence
+            FROM wiki_page_items wpi
+            JOIN wiki_pages wp ON wp.id = wpi.wiki_page_id
+            WHERE wpi.item_id = :id
+            ORDER BY
+                CASE WHEN wpi.role IN ('self', 'primary') THEN 0 ELSE 1 END,
+                CASE WHEN wp.body_status = 'completed' THEN 0 ELSE 1 END,
+                wpi.confidence DESC NULLS LAST,
+                wp.slug
+        """),
+        {"id": item_id},
+    )
+    item["wikis"] = [dict(r) for r in wiki_res.mappings().all()]
     return item
 
 

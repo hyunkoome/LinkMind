@@ -134,6 +134,19 @@ class ItemAttachmentSummary(BaseModel):
     height: int | None = None
 
 
+class ItemWikiRef(BaseModel):
+    """이 자료가 속한 wiki 페이지 참조 — GET /items/{id} 가 동봉.
+
+    graph item 노드 클릭 시 우측 패널이 이 목록에서 wiki body 를 inline 표시.
+    body 자체는 무겁지 않게 미포함 — 선택된 slug 로 GET /wiki/{slug} 별도 조회.
+    """
+    slug: str
+    title: str | None = None
+    role: str | None = None          # self / primary / figure / related ...
+    body_status: str | None = None   # issues / pending / completed
+    confidence: float | None = None
+
+
 class ItemDetail(BaseModel):
     """item 의 전체 정보 — graph UI modality viewer / 상세 페이지용.
 
@@ -165,6 +178,9 @@ class ItemDetail(BaseModel):
     read_at: datetime | None = None
 
     attachments: list[ItemAttachmentSummary] = Field(default_factory=list)
+
+    # D10.5 세션 A — 이 자료가 속한 wiki 페이지들 (자기 정체성 + completed 우선 정렬)
+    wikis: list[ItemWikiRef] = Field(default_factory=list)
 
 
 class ItemUpdateRequest(BaseModel):
