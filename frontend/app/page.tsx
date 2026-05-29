@@ -23,26 +23,9 @@ const EMPTY: GraphResponse = { nodes: [], edges: [] };
 // 중앙(위키) 패널 최소 폭(px) — 좌/우 드래그 시 이만큼은 남김.
 const MIN_CENTER = 80;
 
-// 두 그래프 응답을 union (사용자 요구: 클릭 시 누적, 유니온 스테이션 hub-spoke).
-// dedup 은 node.data.id / edge.data.id 기준 — backend 가 같은 id 일관 발행.
-function mergeGraph(prev: GraphResponse, add: GraphResponse): GraphResponse {
-  const seenNodes = new Set(prev.nodes.map((n) => n.data.id));
-  const seenEdges = new Set(prev.edges.map((e) => e.data.id));
-  return {
-    nodes: [
-      ...prev.nodes,
-      ...add.nodes.filter((n) => !seenNodes.has(n.data.id)),
-    ],
-    edges: [
-      ...prev.edges,
-      ...add.edges.filter((e) => !seenEdges.has(e.data.id)),
-    ],
-  };
-}
-
-// navigation history — graph 상태 + 선택 노드 snapshot
+// navigation history — viewGraph(우측 시각화) + 선택 노드 snapshot
 interface HistoryFrame {
-  graph: GraphResponse;
+  viewGraph: GraphResponse | null;
   selectedNodeFullId: string | null;
   selectedItemId: string | null;
   isSubsetView: boolean;
@@ -51,6 +34,9 @@ interface HistoryFrame {
 export default function HomePage() {
   const { t, locale } = useT();
   const [graph, setGraph] = useState<GraphResponse>(EMPTY);
+  // viewGraph: 우측 그래프 시각화용 subset. null 이면 전체(graph). 트리(좌측)는 항상
+  // 전체(graph) 유지 — 그래프만 선택 항목 중심으로 focus (사용자 요구 2026-05-29).
+  const [viewGraph, setViewGraph] = useState<GraphResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
@@ -103,13 +89,13 @@ export default function HomePage() {
     setHistory((prev) => [
       ...prev,
       {
-        graph,
+        viewGraph,
         selectedNodeFullId,
         selectedItemId,
         isSubsetView,
       },
     ]);
-  }, [graph, selectedNodeFullId, selectedItemId, isSubsetView]);
+  }, [viewGraph, selectedNodeFullId, selectedItemId, isSubsetView]);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
@@ -120,6 +106,7 @@ export default function HomePage() {
           ? await getGraphCategories(500)
           : await getGraphTopics(5000);
       setGraph(g);
+      setViewGraph(null);
       setSelectedNodeFullId(null);
       setSelectedItemId(null);
       setIsSubsetView(false);
@@ -147,6 +134,7 @@ export default function HomePage() {
       try {
         const g = await searchGraph(q, 50);
         setGraph(g);
+        setViewGraph(null);
         setIsSubsetView(true);
       } catch (e) {
         setError((e as Error).message);
@@ -157,145 +145,60 @@ export default function HomePage() {
     [loadAll, pushHistory],
   );
 
-  // graph 안에 그 토픽의 item 노드가 이미 있는지 — edges 로 검사
-  const topicHasItemsInGraph = useCallback(
-    (topicFullId: string): boolean =>
-      graph.edges.some(
-        (e) =>
-          e.data.target === topicFullId && e.data.source.startsWith("item:"),
-      ),
-    [graph.edges],
-  );
-
-  // graph 안에 그 카테고리의 topic 노드가 이미 있는지
-  const categoryHasTopicsInGraph = useCallback(
-    (categoryFullId: string): boolean =>
-      graph.edges.some(
-        (e) =>
-          e.data.source === categoryFullId && e.data.target.startsWith("topic:"),
-      ),
-    [graph.edges],
-  );
-
-  const handleNodeClick = useCallback(
+  // 선택 항목 중심으로 우측 그래프(viewGraph)를 교체 — union 폐기 (사용자 요구
+  // 2026-05-29: 전체가 난잡, 선택 노드가 안 보임). 트리(좌측)는 graph(전체) 그대로
+  // 두고 viewGraph 만 그 항목 이웃으로. selectedId → GraphView 가 카메라 zoom + 강조.
+  const focusNode = useCallback(
     async (nodeId: string, type: "topic" | "item" | "category") => {
       setSelectedNodeFullId(nodeId);
-      // 사용자 요구 (유니온 스테이션 흐름): 클릭 시 graph 교체 X — 그 노드의 친구들을
-      // 기존 그래프에 union 으로 추가. 이미 있으면 fetch 안 하고 highlight 만.
-      if (type === "item") {
-        const itemUuid = nodeId.replace(/^item:/, "");
-        setSelectedItemId(itemUuid);
-        try {
-          const g = await getItemNeighborhood(itemUuid);
-          if (g.nodes.length > 0) {
-            pushHistory();
-            setGraph((prev) => mergeGraph(prev, g));
-            setIsSubsetView(true);
-          }
-        } catch (e) {
-          setError((e as Error).message);
+      try {
+        let g: GraphResponse | null = null;
+        if (type === "item") {
+          const itemUuid = nodeId.replace(/^item:/, "");
+          setSelectedItemId(itemUuid);
+          g = await getItemNeighborhood(itemUuid);
+        } else if (type === "category") {
+          setSelectedItemId(null);
+          const node = graph.nodes.find((n) => n.data.id === nodeId);
+          const slug = node?.data.slug;
+          if (!slug) return;
+          g = await expandGraphCategory(slug);
+        } else {
+          setSelectedItemId(null);
+          const topicUuid = nodeId.replace(/^topic:/, "");
+          g = await expandGraphTopic(topicUuid);
         }
-      } else if (type === "category") {
-        if (categoryHasTopicsInGraph(nodeId)) return;
-        const node = graph.nodes.find((n) => n.data.id === nodeId);
-        const slug = node?.data.slug;
-        if (!slug) return;
-        try {
-          const g = await expandGraphCategory(slug);
-          if (g.nodes.length > 0) {
-            pushHistory();
-            setGraph((prev) => mergeGraph(prev, g));
-            setIsSubsetView(true);
-          }
-        } catch (e) {
-          setError((e as Error).message);
+        if (g && g.nodes.length > 0) {
+          pushHistory();
+          setViewGraph(g); // 우측 그래프만 교체 (트리는 전체 유지)
+          setIsSubsetView(true);
         }
-      } else {
-        setSelectedItemId(null);
-        if (topicHasItemsInGraph(nodeId)) return;
-        const topicUuid = nodeId.replace(/^topic:/, "");
-        try {
-          const g = await expandGraphTopic(topicUuid);
-          if (g.nodes.length > 0) {
-            pushHistory();
-            setGraph((prev) => mergeGraph(prev, g));
-            setIsSubsetView(true);
-          }
-        } catch (e) {
-          setError((e as Error).message);
-        }
+      } catch (e) {
+        setError((e as Error).message);
       }
     },
-    [graph.nodes, pushHistory, categoryHasTopicsInGraph, topicHasItemsInGraph],
+    [graph.nodes, pushHistory],
   );
 
+  // 그래프 노드 클릭 = 트리 선택 = 동일한 focus 동작.
+  const handleNodeClick = focusNode;
   const handleSidebarSelect = useCallback(
     (fullId: string) => {
-      setSelectedNodeFullId(fullId);
-      setSelectedItemId(null);
-      // 사용자 보고: 그래프 컨텍스트 유지가 중요. graph 에 이미 그 노드의 친구들이
-      // 보이면 fetch 안 하고 highlight 만 (selectedNodeFullId 변경 → relatedIds 자동 강조).
-      // graph 에 없으면 expand fetch.
-      // item 클릭 — ItemDetails 자동 expand + graph 에 이미 있으면 highlight 만
-      if (fullId.startsWith("item:")) {
-        const itemUuid = fullId.replace(/^item:/, "");
-        setSelectedItemId(itemUuid);
-        // graph 에 그 item 노드 있는지 확인
-        const inGraph = graph.nodes.some((n) => n.data.id === fullId);
-        if (inGraph) return;
-        // 없으면 neighborhood fetch + union
-        getItemNeighborhood(itemUuid)
-          .then((g) => {
-            if (g.nodes.length > 0) {
-              pushHistory();
-              setGraph((prev) => mergeGraph(prev, g));
-              setIsSubsetView(true);
-            }
-          })
-          .catch((e) => setError((e as Error).message));
-        return;
-      }
-      if (fullId.startsWith("category:")) {
-        if (categoryHasTopicsInGraph(fullId)) return;
-        const node = graph.nodes.find((n) => n.data.id === fullId);
-        const slug = node?.data.slug;
-        if (!slug) return;
-        expandGraphCategory(slug)
-          .then((g) => {
-            if (g.nodes.length > 0) {
-              pushHistory();
-              setGraph((prev) => mergeGraph(prev, g));
-              setIsSubsetView(true);
-            }
-          })
-          .catch((e) => setError((e as Error).message));
-      } else if (fullId.startsWith("topic:")) {
-        if (topicHasItemsInGraph(fullId)) return;
-        const topicUuid = fullId.replace(/^topic:/, "");
-        expandGraphTopic(topicUuid)
-          .then((g) => {
-            if (g.nodes.length > 0) {
-              pushHistory();
-              setGraph((prev) => mergeGraph(prev, g));
-              setIsSubsetView(true);
-            }
-          })
-          .catch((e) => setError((e as Error).message));
-      }
+      const type: "topic" | "item" | "category" = fullId.startsWith("item:")
+        ? "item"
+        : fullId.startsWith("category:")
+          ? "category"
+          : "topic";
+      void focusNode(fullId, type);
     },
-    [
-      graph.nodes,
-      pushHistory,
-      topicHasItemsInGraph,
-      categoryHasTopicsInGraph,
-    ],
+    [focusNode],
   );
 
   const handleReturnToPrevious = useCallback(() => {
     setHistory((prev) => {
       if (prev.length === 0) return prev;
       const last = prev[prev.length - 1];
-      setGraph(last.graph);
+      setViewGraph(last.viewGraph);
       setSelectedNodeFullId(last.selectedNodeFullId);
       setSelectedItemId(last.selectedItemId);
       setIsSubsetView(last.isSubsetView);
@@ -321,7 +224,7 @@ export default function HomePage() {
     if (!selectedNodeFullId) return out;
     out.add(selectedNodeFullId);
 
-    const edges = graph.edges.map((e) => e.data);
+    const edges = (viewGraph ?? graph).edges.map((e) => e.data);
     if (selectedNodeFullId.startsWith("topic:")) {
       // 해당 topic 의 모든 item 추가
       for (const e of edges) {
@@ -352,17 +255,21 @@ export default function HomePage() {
       }
     }
     return out;
-  }, [selectedNodeFullId, graph.edges]);
+  }, [selectedNodeFullId, viewGraph, graph]);
 
-  // NodeDetails 안의 자료/토픽 카드 클릭 (raw uuid 들어옴) → 선택 + 카메라 zoom
-  const handleItemClickFromPanel = useCallback((itemUuid: string) => {
-    setSelectedItemId(itemUuid);
-    setSelectedNodeFullId(`item:${itemUuid}`);
-  }, []);
-  const handleTopicClickFromPanel = useCallback((topicUuid: string) => {
-    setSelectedNodeFullId(`topic:${topicUuid}`);
-    setSelectedItemId(null);
-  }, []);
+  // NodeDetails 안의 자료/토픽 카드 클릭 (raw uuid) → 그 항목 중심으로 focus (그래프 교체)
+  const handleItemClickFromPanel = useCallback(
+    (itemUuid: string) => {
+      void focusNode(`item:${itemUuid}`, "item");
+    },
+    [focusNode],
+  );
+  const handleTopicClickFromPanel = useCallback(
+    (topicUuid: string) => {
+      void focusNode(`topic:${topicUuid}`, "topic");
+    },
+    [focusNode],
+  );
 
   return (
     <div className="flex h-full">
@@ -418,7 +325,7 @@ export default function HomePage() {
       {/* 우측 — 그래프 (보조, 리사이즈 가능) */}
       <aside style={{ width: rightW }} className="shrink-0 h-full relative">
         <GraphView
-          data={graph}
+          data={viewGraph ?? graph}
           onNodeClick={handleNodeClick}
           selectedId={selectedNodeFullId}
           relatedIds={relatedIds}
@@ -466,14 +373,15 @@ export default function HomePage() {
                   </span>
                 )}
                 {(() => {
-                  const catN = graph.nodes.filter((n) => n.data.type === "category").length;
-                  const topN = graph.nodes.filter((n) => n.data.type === "topic").length;
-                  const itemN = graph.nodes.filter((n) => n.data.type === "item").length;
+                  const g = viewGraph ?? graph;
+                  const catN = g.nodes.filter((n) => n.data.type === "category").length;
+                  const topN = g.nodes.filter((n) => n.data.type === "topic").length;
+                  const itemN = g.nodes.filter((n) => n.data.type === "item").length;
                   const parts: string[] = [];
                   if (catN > 0) parts.push(`${catN} categories`);
                   if (topN > 0) parts.push(`${topN} ${t.graph.topics}`);
                   if (itemN > 0) parts.push(`${itemN} ${t.graph.items}`);
-                  parts.push(`${graph.edges.length} ${t.graph.edges}`);
+                  parts.push(`${g.edges.length} ${t.graph.edges}`);
                   return parts.join(" · ");
                 })()}
               </span>
