@@ -115,6 +115,7 @@ async def main() -> int:
             await update_item_metadata(session, item_id=iid, source_metadata=new_meta)
             matched = await auto_link_topics(
                 session, item_id=iid, source_type=source_type, title=title, ids=ids,
+                url=source_url,
             )
             await session.commit()
             slugs = ", ".join(t["slug"] for t in matched)

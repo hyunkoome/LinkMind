@@ -56,20 +56,30 @@ def test_classifier_invoke_topic_based_wiki_creation():
     (6,625건) 의 원인. fix: item 의 topics 를 보고 external_id 있으면 그 wiki 보장 +
     self_wiki skip. external_id 없으면 fallback topic = self_wiki.
 
-    회귀 방지 — 핵심 패턴 검증.
+    D10.6 (2026-05-28): ext/fallback 분류 + confidence 필터는 순수 헬퍼
+    _select_identity_topics_for_wiki 로 추출 (동작 검증은 test_classifier_identity_topics).
+    여기선 invoke 가 topics 를 confidence 와 함께 조회 + 헬퍼 사용 + slug/role 처리
+    하는지 source 패턴만 회귀 검증.
     """
     import inspect
-    from backend.agents.classifier import ClassifierAgent
+    from backend.agents.classifier import (
+        ClassifierAgent,
+        _select_identity_topics_for_wiki,
+    )
 
     src = inspect.getsource(ClassifierAgent.invoke)
-    # item_topics 조회 — 사용자 mental model 의 진입점
+    # item_topics 조회 — 사용자 mental model 의 진입점 + D10.6: confidence 동반 조회
     assert "FROM item_topics it" in src
-    # external_id vs fallback 분류
-    assert "ext_topics" in src
-    assert "fallback_topics" in src
-    # 'url:item:' 로 fallback (self_wiki) 판단
-    assert "'url:item:'" in src or '"url:item:"' in src
+    assert "it.confidence" in src
+    # 정체성 topic 선별을 헬퍼에 위임
+    assert "_select_identity_topics_for_wiki" in src
     # role='self' 는 fallback wiki link 시 사용
     assert '"role": "self"' in src or '"role": role' in src
     # sanitize_wiki_slug 사용 — backfill 과 같은 slug 패턴
     assert "sanitize_wiki_slug" in src
+
+    # 헬퍼는 external_id vs fallback 분류 + 'url:item:' fallback 판단을 담당
+    helper_src = inspect.getsource(_select_identity_topics_for_wiki)
+    assert "ext_topics" in helper_src
+    assert "fallback_topics" in helper_src
+    assert "'url:item:'" in helper_src or '"url:item:"' in helper_src

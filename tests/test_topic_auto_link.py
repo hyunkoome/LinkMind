@@ -91,13 +91,18 @@ async def test_pdf_with_arxiv_and_github_creates_two_topics(state: _State):
 
 @pytest.mark.asyncio
 async def test_two_items_same_arxiv_share_topic(state: _State):
-    """다른 item 두 개가 같은 arxiv_id 를 가지면 같은 topic 으로 link → 자동 그룹핑."""
+    """다른 item 두 개가 같은 arxiv_id 를 가지면 같은 topic 으로 link → 자동 그룹핑.
+
+    url-type 의 정체성은 자기 URL 에서 (D10.6 A2) — arxiv abstract URL 을 넘기면
+    arxiv 가 정체성. pdf 는 native kind 가 arxiv 라 ids 만으로 arxiv 정체성.
+    """
     item_a = uuid4()
     item_b = uuid4()
     ids = [ExternalId(kind="arxiv", value="2106.09685")]
 
     await url_module.auto_link_topics(
         session=None, item_id=item_a, source_type="url", title="LoRA abs", ids=ids,
+        url="https://arxiv.org/abs/2106.09685",
     )
     await url_module.auto_link_topics(
         session=None, item_id=item_b, source_type="pdf", title="LoRA paper PDF", ids=ids,
@@ -164,10 +169,12 @@ async def test_empty_external_ids_no_title_uses_slug_as_title(state: _State):
 
 
 @pytest.mark.asyncio
-async def test_github_repo_with_arxiv_paper_link_creates_paper_topic(state: _State):
-    """GitHub repo item 의 ext_ids 가 self (github) + arxiv 면 arxiv 가 primary.
+async def test_github_repo_with_arxiv_paper_link_is_github_identity(state: _State):
+    """GitHub repo item 의 ext_ids 가 self (github) + README 의 arxiv 면 github 가 정체성.
 
-    paper 의 arxiv topic 이 main, github 자체 link 는 보조 (cross-modal).
+    D10.6 A2 (2026-05-29): '1 링크 = 1 위키' — 자료의 정체성은 자기 타입(github).
+    README 가 인용한 arxiv paper 는 0.7 관계 clue 로만 (별도 정체성 X). 옛 동작은
+    arxiv 를 primary 로 둬서 github repo 가 논문 wiki 에 흡수되는 중복의 원인이었다.
     """
     item_id = uuid4()
     ids = [
@@ -180,9 +187,9 @@ async def test_github_repo_with_arxiv_paper_link_creates_paper_topic(state: _Sta
     )
 
     by_slug = {t["slug"]: t for t in matched}
-    # arxiv 가 primary (1.0) — 이 GitHub item 은 그 paper 의 'code' role
-    assert by_slug["arxiv:2106.09685"]["confidence"] == 1.0
-    assert by_slug["arxiv:2106.09685"]["role"] == "code"
-    # github topic 도 별도 — 같은 repo 의 모든 modality 가 묶이는 단서
-    assert by_slug["github:microsoft/LoRA"]["confidence"] == 0.7
+    # github 가 정체성 (1.0) — 이 자료는 github repo 그 자체
+    assert by_slug["github:microsoft/LoRA"]["confidence"] == 1.0
     assert by_slug["github:microsoft/LoRA"]["role"] == "code"
+    # README 가 인용한 arxiv 는 0.7 관계 clue (별도 정체성 wiki 로 승격 X)
+    assert by_slug["arxiv:2106.09685"]["confidence"] == 0.7
+    assert by_slug["arxiv:2106.09685"]["role"] == "code"

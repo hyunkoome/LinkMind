@@ -324,3 +324,41 @@ def primary_external_id(ids: Iterable[ExternalId]) -> ExternalId | None:
         if best is None or rank[x.kind] < rank[best.kind]:
             best = x
     return best
+
+
+# source_type 별 '자기 정체성' external_id kind. 이 타입의 자료는 그 kind 만 정체성
+# 후보 — 콘텐츠(README/설명란/본문) 에서 추출된 다른 kind 는 관계(clue)로만 (D10.6 A2).
+_NATIVE_KINDS_BY_SOURCE: dict[str, tuple[str, ...]] = {
+    "youtube": ("yt",),
+    "youtube_playlist": ("ytpl",),
+    "github": ("github",),
+    "pdf": ("arxiv", "doi"),     # PDF 의 정체성 = 그 논문 (arxiv/doi)
+}
+
+
+def native_identity_external_id(
+    *, source_type: str, url: str | None, ids: Iterable[ExternalId],
+) -> ExternalId | None:
+    """자료의 '정체성' external_id 선택 — 자기 타입/URL 에서만 (D10.6 A2, 2026-05-29).
+
+    '1 링크 = 1 위키' 모델: 자료의 정체성은 사용자가 보낸 링크(자기 URL) 또는 자기
+    타입의 native id 다. 콘텐츠 안에서 발견된 링크(영상 설명란의 github, README 의
+    arxiv 등) 는 정체성이 아니라 cross-modal 관계(clue) 다.
+
+      - youtube/github/pdf 등 native kind 가 있는 타입: ids 중 그 kind 만 후보.
+        (ids[0] 가 보통 자기 native id, 나머지는 본문 clue.)
+      - url/telegram/slack/document 등: 자기 URL 에서 추출한 id 만 후보 (본문 X).
+      - 후보 없으면 None → 호출자가 url:item:<uuid> self 정체성으로 fallback.
+
+    옛 동작(2026-05-18~28)은 `primary_external_id(ids)` 를 고정 순위로만 골라서,
+    youtube 영상 설명란의 github(rank 2) 가 영상 자신의 yt(rank 3) 를 이겨 정체성을
+    가로채는 중복 wiki 버그가 있었다 ([[project-wiki-dedup-diagnosis]]).
+    """
+    ids = list(ids)
+    native_kinds = _NATIVE_KINDS_BY_SOURCE.get(source_type)
+    if native_kinds:
+        cands = [x for x in ids if x.kind in native_kinds]
+        return primary_external_id(cands)
+    # native kind 없는 타입(url/메모류) — 정체성은 자기 URL 에서만 (콘텐츠 추출 id 제외)
+    url_ids = extract_external_ids(url=url, text=None) if url else []
+    return primary_external_id(url_ids)

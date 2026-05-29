@@ -99,6 +99,11 @@ class ClassifierAgent(AgentBase):
 
     # 매칭 threshold (이 미만은 link 안 함). 사용자 override 가능 — ctx.extra 통해
     DEFAULT_THRESHOLD = 0.5
+    # 자기 정체성 topic 의 최소 confidence (D10.6, 2026-05-28). auto_link_topics 가
+    # 자료의 primary external_id (또는 fallback) 를 confidence=1.0 으로, cross-modal
+    # 단서 (예: YouTube 설명란의 github 링크) 를 0.7 로 단다. 이 미만 (0.7 단서) 은
+    # wiki 로 승격 안 함 — 중복 wiki 방지.
+    IDENTITY_TOPIC_MIN_CONFIDENCE = 0.9
     # 후보 wiki_pages 갯수 한계 (wave-1d 임시 — wave-1f 후 Qdrant top-K 로)
     MAX_CANDIDATES = 30
     # JSON parse retry 횟수
@@ -300,7 +305,7 @@ class ClassifierAgent(AgentBase):
         #    에서 자연 매칭 (ON CONFLICT find_or_create).
         topics_rows = (await session.execute(
             text("""
-                SELECT t.id, t.slug, t.title
+                SELECT t.id, t.slug, t.title, it.confidence, it.role
                 FROM item_topics it
                 JOIN topics t ON t.id = it.topic_id
                 WHERE it.item_id = :item_id
@@ -308,15 +313,16 @@ class ClassifierAgent(AgentBase):
             {"item_id": str(item_id)},
         )).mappings().all()
 
-        # external_id topic (`yt:`, `github:`, `arxiv:` 등) 과 fallback topic
-        # (`url:item:<uuid>`, external_id 없을 때 auto_link_topics 가 만든 거)
-        # 분류. fallback topic 은 self_wiki 자리.
-        ext_topics = [t for t in topics_rows if not t["slug"].startswith("url:item:")]
-        fallback_topics = [t for t in topics_rows if t["slug"].startswith("url:item:")]
-
-        # external_id 있으면 그것들만 → self_wiki skip (사용자 mental model).
-        # 없으면 fallback topic (= self_wiki) 처리.
-        topics_to_wiki = ext_topics if ext_topics else fallback_topics
+        # D10.6 (2026-05-28) 중복 wiki fix — 자기 정체성 topic 만 wiki 로 승격.
+        # 옛 코드는 it.confidence 를 안 읽어서 cross-modal 단서 (confidence=0.7,
+        # 예: YouTube 설명란의 github 링크) 까지 primary wiki 로 둔갑시켰다 → 같은
+        # 자료 1개가 yt__/github__/url__item__ 여러 wiki 로 쪼개짐. 이제 confidence
+        # 미달 단서는 item_topics 관계로만 남기고 wiki 는 안 만든다. 사용자가 그
+        # github repo 를 *직접* ingest 하면 그때 github__ 가 진짜 primary wiki 가 됨
+        # (M:N 설계 의도 유지).
+        topics_to_wiki, skipped_clue_topics = _select_identity_topics_for_wiki(
+            topics_rows, self.IDENTITY_TOPIC_MIN_CONFIDENCE,
+        )
 
         self_wiki_created = False
         for t in topics_to_wiki:
@@ -357,6 +363,15 @@ class ClassifierAgent(AgentBase):
             "linked_page_ids": linked_page_ids,
             "created_pages": created_pages,
             "skipped_low_conf": skipped_low_conf,
+            # D10.6 — confidence 미달로 wiki 승격 제외된 cross-modal 단서 (traceability)
+            "skipped_clue_topics": [
+                {
+                    "slug": t["slug"],
+                    "confidence": float(t["confidence"] or 0),
+                    "role": t["role"],
+                }
+                for t in skipped_clue_topics
+            ],
             "reasoning": reasoning,
             "raw_output": last_text,
         }
@@ -371,6 +386,38 @@ class ClassifierAgent(AgentBase):
 # ============================================================================
 # helpers
 # ============================================================================
+
+def _select_identity_topics_for_wiki(
+    topics_rows: list[Any], min_confidence: float,
+) -> tuple[list[Any], list[Any]]:
+    """item 의 topics 중 wiki 로 승격할 '자기 정체성' topic 만 골라낸다 (D10.6).
+
+    auto_link_topics 는 자료의 primary external_id (또는 external_id 없을 때
+    fallback `url:item:<uuid>`) 를 confidence=1.0 으로, cross-modal 단서 (예:
+    YouTube 설명란의 github 링크) 를 confidence=0.7 로 단다. confidence>=
+    min_confidence 인 자기 정체성만 wiki 로 승격하고, 낮은 confidence 단서는
+    wiki 를 안 만든다 (item_topics 관계로만 남음 → 그래프엔 보임).
+
+    external_id topic (`yt:`, `github:`, `arxiv:` 등) 이 하나라도 있으면 그것만
+    (self_wiki skip, 사용자 mental model), 없으면 fallback topic (= self_wiki) 처리.
+
+    Returns: (topics_to_wiki, skipped_clue_topics)
+      - topics_to_wiki: wiki 로 승격할 topic rows
+      - skipped_clue_topics: confidence 미달로 제외된 cross-modal 단서 (traceability)
+    """
+    identity: list[Any] = []
+    skipped: list[Any] = []
+    for t in topics_rows:
+        if float(t["confidence"] or 0) >= min_confidence:
+            identity.append(t)
+        else:
+            skipped.append(t)
+
+    ext_topics = [t for t in identity if not t["slug"].startswith("url:item:")]
+    fallback_topics = [t for t in identity if t["slug"].startswith("url:item:")]
+    topics_to_wiki = ext_topics if ext_topics else fallback_topics
+    return topics_to_wiki, skipped
+
 
 def _try_parse_json(s: str) -> dict[str, Any] | None:
     """LLM 출력에서 JSON 추출. ```json fence``` 또는 raw {} 모두 처리."""

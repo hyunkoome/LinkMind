@@ -52,7 +52,7 @@ from backend.utils.chunking import chunk_text
 from backend.utils.external_ids import (
     ExternalId,
     extract_external_ids,
-    primary_external_id,
+    native_identity_external_id,
     role_for_external_id,
 )
 from backend.utils.hashing import sha256_text
@@ -504,7 +504,7 @@ async def ingest_url(
             )
             await auto_link_topics(
                 session, item_id=existing, source_type="url",
-                title=doc.title, ids=ext_ids,
+                title=doc.title, ids=ext_ids, url=url,
             )
             await session.commit()
             return {
@@ -537,7 +537,7 @@ async def ingest_url(
         # ingest 직후 topic auto-link — 새 item commit 전 같은 transaction 안에서.
         await auto_link_topics(
             session, item_id=item_id, source_type="url",
-            title=doc.title, ids=ext_ids,
+            title=doc.title, ids=ext_ids, url=url,
         )
         # caption (텔레그램 등에서 URL 과 같이 온 사용자 메모) → user_notes append
         if caption and caption.strip():
@@ -659,7 +659,7 @@ async def _save_url_only(
         )
         await auto_link_topics(
             session, item_id=item_id, source_type="url",
-            title=title, ids=ext_ids,
+            title=title, ids=ext_ids, url=url,
         )
         # url-only 면 의미상 'url-only' / 'fetch-failed' tag 도 — graph 에서 시각적 구분
         from sqlalchemy import text as _sql_text
@@ -695,14 +695,21 @@ async def auto_link_topics(
     source_type: str,
     title: str | None,
     ids: list[ExternalId],
+    url: str | None = None,
 ) -> list[dict[str, Any]]:
     """item 의 external_ids 로 topic 자동 매핑.
 
-    primary external_id 로 topic find_or_create → link. 추가로 발견된 다른 external_id
-    (cross-modal 단서, 예: GitHub README 의 arxiv 링크) 도 topic 으로 매핑 — 단,
-    그 단서들은 confidence 를 낮춰서 사용자 confirm 여지를 둠.
+    정체성(primary) external_id 로 topic find_or_create → link (confidence 1.0).
+    추가로 발견된 다른 external_id (cross-modal 단서, 예: GitHub README 의 arxiv
+    링크, 영상 설명란의 github 링크) 도 topic 으로 매핑 — 단 confidence 0.7 로 낮춰
+    '관계' 로만 둔다 (별도 정체성 wiki 로 승격 X).
 
-    **Fallback** (Phase 2.5 wave-3): external_id 가 하나도 없는 url (일반 블로그,
+    **D10.6 A2 (2026-05-29)**: 정체성은 `native_identity_external_id` 가 자료의
+    *자기 타입/URL* 에서만 고른다 (콘텐츠 추출 id 제외). 옛 동작은 고정 순위라
+    youtube 영상이 설명란 github 를 정체성으로 가로채 중복 wiki 가 생겼다.
+    url-type 정체성을 자기 URL 에서 뽑으려면 호출자가 `url=` 를 넘긴다.
+
+    **Fallback** (Phase 2.5 wave-3): 정체성 external_id 가 없는 url (일반 블로그,
     회사 페이지 등) 이라도 자체 topic 1개 생성. slug=`url:item:<uuid>`. 그래야:
       - 그래프에서 topic 노드로 등장 (item 만 있는 자료가 보이지 않던 문제)
       - 카테고리 link 가능 (items.tags 가 곧 topic.tags 가 되니 자동 매칭)
@@ -710,37 +717,35 @@ async def auto_link_topics(
 
     Returns: 매핑된 topics 목록 [{topic_id, slug, role, ...}].
     """
-    primary = primary_external_id(ids) if ids else None
+    primary = native_identity_external_id(source_type=source_type, url=url, ids=ids)
 
-    # external_id 가 하나도 없을 때 fallback — item 자체 slug 의 topic
+    matched: list[dict[str, Any]] = []
+
+    # 1차: 자기 정체성 topic (confidence 1.0).
     if primary is None:
+        # 정체성 external_id 없음 (일반 블로그/회사 페이지/메모 등) → self 정체성
+        # (slug=`url:item:<uuid>`). 콘텐츠에서 발견된 external_id (본문/README 의
+        # arxiv·github 등) 는 아래 2차 루프에서 0.7 관계 clue 로 남는다 — D10.6 A2:
+        # 콘텐츠 링크는 정체성이 아니라 관계.
         fallback_slug = f"url:item:{item_id}"
-        fb_title = title or fallback_slug
         topic, _ = await find_or_create_topic(
             session,
             slug=fallback_slug,
-            title=fb_title,
+            title=title or fallback_slug,
             primary_external_id=None,
         )
-        await link_item_to_topic(
+        primary_slug: str | None = None
+        main_role = "primary"
+    else:
+        main_role = role_for_external_id(primary.kind, source_type)
+        topic, _ = await find_or_create_topic(
             session,
-            item_id=item_id,
-            topic_id=topic["id"],
-            role="primary",
-            confidence=1.0,
-            source="auto",
+            slug=primary.slug,
+            title=title or primary.slug,
+            primary_external_id={"kind": primary.kind, "value": primary.value},
         )
-        return [{**topic, "role": "primary", "confidence": 1.0}]
+        primary_slug = primary.slug
 
-    matched: list[dict[str, Any]] = []
-    # 1차: primary external_id 로 main topic
-    main_role = role_for_external_id(primary.kind, source_type)
-    topic, _ = await find_or_create_topic(
-        session,
-        slug=primary.slug,
-        title=title or primary.slug,
-        primary_external_id={"kind": primary.kind, "value": primary.value},
-    )
     await link_item_to_topic(
         session,
         item_id=item_id,
@@ -751,7 +756,7 @@ async def auto_link_topics(
     )
     matched.append({**topic, "role": main_role, "confidence": 1.0})
 
-    # 2차: 다른 external_id 들 — 보조 단서 (cross-modal). primary 와 같은 slug 면 skip.
+    # 2차: 다른 external_id 들 — 보조 단서 (cross-modal). 정체성 slug 면 skip.
     #
     # **중요**: cross-modal topic 의 title 은 부모 item 의 title 을 빌려오면 안 된다.
     # 예) github repo README 에 arxiv 링크 30개 → 30개 arxiv topic 다 repo 의 title
@@ -760,7 +765,7 @@ async def auto_link_topics(
     # 하거나 (예: arxiv URL 던지면 arxiv 의 진짜 title) 또는 seed_arxiv_metadata
     # 같은 job 으로 외부 API 에서 보강.
     for x in ids:
-        if x.slug == primary.slug:
+        if x.slug == primary_slug:
             continue
         role = role_for_external_id(x.kind, source_type)
         side_topic, _ = await find_or_create_topic(
