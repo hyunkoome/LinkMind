@@ -254,6 +254,22 @@ def youtube_ids_from_url(url: str) -> tuple[str | None, str | None]:
 # ──────────────────────────────────────────────────────────────
 
 
+_URL_IN_TEXT_RE = re.compile(r"https?://[^\s<>\"']+")
+
+
+def first_url(text: str | None) -> str | None:
+    """텍스트(캡션·메모 등) 어디서든 첫 http(s) URL 추출. 없으면 None.
+
+    텔레그램 사진 caption 이 '설명 텍스트 + URL' 일 수 있어 startswith 가 아니라 search.
+    """
+    if not text:
+        return None
+    m = _URL_IN_TEXT_RE.search(text)
+    if not m:
+        return None
+    return m.group(0).rstrip(").,」』]>)")
+
+
 def extract_external_ids(
     *,
     url: str | None = None,

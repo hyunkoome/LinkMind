@@ -34,6 +34,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.agents.base import AgentBase, AgentContext, load_prompt
 from backend.llm.base import ChatMessage
 from backend.llm.factory import get_llm_provider
+from backend.utils.external_ids import (
+    extract_external_ids,
+    first_url,
+    primary_external_id,
+)
 from backend.utils.wiki_slug import sanitize_wiki_slug
 
 logger = logging.getLogger("linkmind.agents.classifier")
@@ -324,8 +329,40 @@ class ClassifierAgent(AgentBase):
             topics_rows, self.IDENTITY_TOPIC_MIN_CONFIDENCE,
         )
 
+        # 사진(document) + URL 캡션 → 그 URL 의 위키에 figure 로 link, self_wiki 스킵
+        # (2026-05-29). 텔레그램 '사진+URL' 한 메시지가 사진/URL 2 item 으로 쪼개져
+        # 사진이 고아 photo 위키 되는 것 방지. caption(user_notes)의 URL → external_id
+        # → 그 위키. 위키 아직 없으면(URL 미classify) self_wiki fallback — 주기
+        # link_photo_captions 가 보정. (Option B: 사진은 별 item 유지, 소스로 link.)
+        photo_figure_linked = False
+        if item.get("source_type") == "document":
+            cap_url = first_url(item.get("user_notes"))
+            cap_primary = (
+                primary_external_id(extract_external_ids(url=cap_url, text=None))
+                if cap_url else None
+            )
+            if cap_primary is not None:
+                fig_slug = sanitize_wiki_slug(cap_primary.slug)
+                fig_row = (await session.execute(
+                    text("SELECT id FROM wiki_pages WHERE slug = :slug"),
+                    {"slug": fig_slug},
+                )).first()
+                if fig_row:
+                    fig_pid = str(fig_row[0])
+                    await session.execute(_UPSERT_WIKI_LINK_SQL, {
+                        "page_id": fig_pid, "item_id": str(item_id),
+                        "confidence": 1.0, "role": "figure",
+                    })
+                    if fig_pid not in linked_page_ids:
+                        linked_page_ids.append(fig_pid)
+                    photo_figure_linked = True
+
         self_wiki_created = False
         for t in topics_to_wiki:
+            is_self_fallback = t["slug"].startswith("url:item:")
+            # 사진을 caption URL 위키에 figure 로 연결했으면 self_wiki 안 만듦.
+            if is_self_fallback and photo_figure_linked:
+                continue
             wiki_slug = sanitize_wiki_slug(t["slug"])
             wiki_title = t["title"] or item.get("title") or wiki_slug
             wiki_desc = (item.get("summary") or "")[:500] or None
@@ -337,7 +374,6 @@ class ClassifierAgent(AgentBase):
             if not row:
                 continue
             pid = str(row[0])
-            is_self_fallback = t["slug"].startswith("url:item:")
             # role: external_id wiki = 'primary' (그 자료의 주 wiki),
             #       fallback (self_wiki) = 'self' (외부 ID 없는 자료의 1:1 wiki)
             role = "self" if is_self_fallback else "primary"

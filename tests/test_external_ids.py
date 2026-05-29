@@ -201,3 +201,14 @@ def test_primary_external_id_priority():
 
 def test_primary_returns_none_for_empty():
     assert primary_external_id([]) is None
+
+
+def test_first_url_extracts_anywhere():
+    """first_url — 텍스트(캡션) 어디서든 첫 http(s) URL (startswith 아님)."""
+    from backend.utils.external_ids import first_url
+    assert first_url("https://github.com/a/b") == "https://github.com/a/b"
+    assert first_url("설명 텍스트\n\nhttps://youtu.be/cDYIdId3XSY?si=x") == \
+        "https://youtu.be/cDYIdId3XSY?si=x"
+    assert first_url("그냥 메모") is None
+    assert first_url(None) is None
+    assert first_url("(https://x.com/a)") == "https://x.com/a"   # trailing ) strip
