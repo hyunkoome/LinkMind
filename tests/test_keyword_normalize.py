@@ -58,10 +58,42 @@ def test_normalize_keyword_examples(raw, expected):
         ("3D-GS", "3dgs"),
         ("3d-gs", "3dgs"),               # 이미 분리된 것도 합침
         ("3DGs", "3dgs"),
+        # 별칭(alias) — 구문 → canonical 통합
+        ("3d-gaussian-splatting", "3dgs"),
+        ("3D Gaussian Splatting", "3dgs"),
     ],
 )
 def test_known_acronyms_kept_whole(raw, expected):
     assert normalize_keyword(raw) == expected
+
+
+def test_keyword_config_parse_and_set():
+    """parse_acronyms/parse_aliases + set_keyword_config 런타임 갱신."""
+    from backend.utils.keywords import (
+        format_acronyms,
+        format_aliases,
+        parse_acronyms,
+        parse_aliases,
+        set_keyword_config,
+    )
+
+    try:
+        # 사용자 입력 텍스트 → 설정
+        acro = parse_acronyms("LiDAR\n# 주석\n\nGitHub")
+        assert acro == ["LiDAR", "GitHub"]
+        aliases = parse_aliases("Foo Bar = foobar\nbaz -> qux\n잘못된줄")
+        assert aliases == {"foo-bar": "foobar", "baz": "qux"}
+
+        set_keyword_config(acronyms=["LiDAR"], aliases={"foo-bar": "foobar"})
+        assert normalize_keyword("LiDAR") == "lidar"
+        assert normalize_keyword("Foo Bar") == "foobar"   # alias
+        assert normalize_keyword("GitHub") == "git-hub"   # 목록에서 빠져 분리됨
+        assert "LiDAR" in format_acronyms()
+        assert "foo-bar = foobar" in format_aliases()
+    finally:
+        set_keyword_config()   # 기본값 복원 (다른 테스트 영향 방지)
+    # 복원 확인
+    assert normalize_keyword("GitHub") == "github"
 
 
 @pytest.mark.parametrize(

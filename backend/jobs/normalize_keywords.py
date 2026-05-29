@@ -42,8 +42,49 @@ _UPDATE_SQL = text("""
 _COMMIT_EVERY = 500
 
 
+async def reapply_all(*, limit: int | None = None) -> dict[str, int]:
+    """모든 wiki_pages.keywords 재정규화 (현재 약어/별칭 설정 기준). 변경분만 UPDATE.
+
+    API '기존 데이터에 적용' 버튼이 호출 (설정은 PUT 후 reload 로 이미 반영된 상태).
+    Returns: {total, changed, keywords_before, keywords_after}.
+    """
+    Session = get_session_factory()
+    async with Session() as s:
+        rows = [
+            (str(r["id"]), list(r["keywords"] or []))
+            for r in (await s.execute(_FETCH_SQL)).mappings().all()
+        ]
+    if limit:
+        rows = rows[:limit]
+
+    plan: list[tuple[str, list[str]]] = []
+    tb = ta = 0
+    for wid, kws in rows:
+        new = normalize_keywords(kws)
+        tb += len(kws)
+        ta += len(new)
+        if new != kws:
+            plan.append((wid, new))
+
+    if plan:
+        async with Session() as session:
+            for idx, (wid, new) in enumerate(plan, 1):
+                await session.execute(_UPDATE_SQL, {"kw": new, "id": wid})
+                if idx % _COMMIT_EVERY == 0:
+                    await session.commit()
+            await session.commit()
+
+    return {
+        "total": len(rows), "changed": len(plan),
+        "keywords_before": tb, "keywords_after": ta,
+    }
+
+
 async def main(dry_run: bool, limit: int | None) -> None:
     Session = get_session_factory()
+    # CLI 도 DB 의 약어/별칭 설정을 따름 (Settings 에서 편집한 값 반영).
+    from backend import runtime_settings
+    await runtime_settings.load_keyword_config_only()
     print("=" * 72, flush=True)
     print(f"normalize_keywords — dry_run={dry_run} limit={limit or '전체'}", flush=True)
     print("=" * 72, flush=True)

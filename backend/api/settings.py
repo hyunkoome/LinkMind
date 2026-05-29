@@ -52,6 +52,15 @@ class PromptActivate(BaseModel):
     version: str = Field(..., min_length=1)
 
 
+class KeywordConfigUpdate(BaseModel):
+    """키워드 정규화 설정 — 약어(split 예외) + 별칭. 텍스트(한 줄당 항목).
+
+    None = 변경 안 함, 빈 문자열 = 기본값으로 복귀.
+    """
+    acronyms: str | None = Field(default=None, description="약어 목록 (한 줄당 하나)")
+    aliases: str | None = Field(default=None, description="별칭 'from = to' (한 줄당)")
+
+
 # ─── LLM settings ─────────────────────────────────────────────
 
 
@@ -68,6 +77,31 @@ async def update_llm_settings(payload: LLMSettingsUpdate) -> dict[str, Any]:
     ):
         raise HTTPException(400, f"알 수 없는 provider: {payload.default_llm_provider}")
     return await runtime_settings.update_settings(payload.model_dump())
+
+
+# ─── 키워드 정규화 설정 (약어/별칭) ───────────────────────────
+
+
+@router.get("/keywords")
+async def get_keyword_config() -> dict[str, Any]:
+    """현재 적용 중인 약어/별칭 텍스트 + 코드 기본값."""
+    return runtime_settings.keyword_config_snapshot()
+
+
+@router.put("/keywords")
+async def update_keyword_config(payload: KeywordConfigUpdate) -> dict[str, Any]:
+    """약어/별칭 저장 + 즉시 반영 (신규 ingest 부터 적용). 기존 데이터는 reapply 로."""
+    return await runtime_settings.update_keyword_config(
+        acronyms=payload.acronyms, aliases=payload.aliases,
+    )
+
+
+@router.post("/keywords/reapply")
+async def reapply_keyword_config() -> dict[str, Any]:
+    """현재 설정으로 기존 모든 wiki 의 keywords 재정규화. 변경 수 반환."""
+    from backend.jobs.normalize_keywords import reapply_all
+    stats = await reapply_all()
+    return {"ok": True, **stats}
 
 
 @router.get("/llm/models")

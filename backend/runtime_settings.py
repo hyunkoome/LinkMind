@@ -40,6 +40,9 @@ _KEYS = {
     "vllm_model",
 }
 
+# 키워드 정규화 설정 (약어 split 예외 + 별칭). app_settings 에 텍스트로 저장.
+_KEYWORD_KEYS = {"keyword_acronyms", "keyword_aliases"}
+
 # prompt name → (version, content)
 _PROMPT_NAMES = ("rag_system", "summary_system")
 
@@ -136,9 +139,32 @@ async def reload() -> None:
         _prompt_cache.clear()
         _prompt_cache.update(prompts)
         _loaded = True
+    # 키워드 정규화 설정 (약어/별칭) DB → keywords 모듈 반영.
+    _apply_keyword_config(kv)
     # provider 인스턴스 캐시 무효화 — 다음 요청부터 새 model 로 새 provider 생성.
     from backend.llm.factory import get_llm_provider
     get_llm_provider.cache_clear()
+
+
+def _apply_keyword_config(kv: dict[str, str]) -> None:
+    """app_settings 의 keyword_acronyms/keyword_aliases → keywords 모듈 설정.
+
+    값이 없으면(미설정) None 으로 넘겨 keywords 의 DEFAULT 사용.
+    """
+    from backend.utils import keywords as kw
+    acro_text = kv.get("keyword_acronyms")
+    alias_text = kv.get("keyword_aliases")
+    kw.set_keyword_config(
+        acronyms=kw.parse_acronyms(acro_text) if acro_text else None,
+        aliases=kw.parse_aliases(alias_text) if alias_text else None,
+    )
+
+
+async def load_keyword_config_only() -> None:
+    """배치 job 등에서 keyword 설정만 DB 로딩 (full reload 없이)."""
+    async with _session_factory()() as session:
+        kv = await repo.get_all_app_settings(session)
+    _apply_keyword_config(kv)
 
 
 def _ensure_loaded() -> None:
@@ -295,3 +321,36 @@ async def activate_version(*, name: str, version: str) -> dict[str, Any]:
         await session.commit()
     await reload()
     return await snapshot()
+
+
+# ── 키워드 정규화 설정 (약어/별칭) ────────────────────────────
+
+
+def keyword_config_snapshot() -> dict[str, Any]:
+    """현재 적용 중인 약어/별칭 텍스트 + 코드 기본값 (Settings UI 표시용)."""
+    from backend.utils import keywords as kw
+    return {
+        "acronyms": kw.format_acronyms(),
+        "aliases": kw.format_aliases(),
+        "defaults": {
+            "acronyms": "\n".join(kw.DEFAULT_ACRONYMS),
+            "aliases": "\n".join(f"{k} = {v}" for k, v in kw.DEFAULT_ALIASES.items()),
+        },
+    }
+
+
+async def update_keyword_config(
+    *, acronyms: str | None = None, aliases: str | None = None
+) -> dict[str, Any]:
+    """약어/별칭 텍스트 저장 (app_settings) + 즉시 반영. 빈 값 = 기본값 복귀(키 삭제)."""
+    async with _session_factory()() as session:
+        for key, text in (("keyword_acronyms", acronyms), ("keyword_aliases", aliases)):
+            if text is None:
+                continue                         # 해당 항목 변경 안 함
+            if text.strip() == "":
+                await repo.delete_app_setting(session, key)
+            else:
+                await repo.set_app_setting(session, key, text)
+        await session.commit()
+    await reload()
+    return keyword_config_snapshot()

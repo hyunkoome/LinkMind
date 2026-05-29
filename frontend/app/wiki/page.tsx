@@ -242,7 +242,7 @@ export default function WikiListPage() {
             : "border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/60 text-zinc-700 dark:text-zinc-300 hover:border-blue-400 hover:text-blue-600 dark:hover:text-blue-400"
         }`}
       >
-        {selected && <span>✓</span>}
+        <span className={selected ? "" : "text-amber-400"}>{selected ? "⭐" : "☆"}</span>
         <span>{s.keyword}</span>
         <span className={selected ? "opacity-80" : "text-zinc-400 dark:text-zinc-500"}>
           {s.usage_count}
@@ -365,7 +365,7 @@ export default function WikiListPage() {
           <div className="mb-4 p-3 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900">
             <div className="flex items-center justify-between mb-2">
               <span className="text-xs font-medium text-zinc-600 dark:text-zinc-400">
-                🔖 키워드로 찾기{" "}
+                ⭐ 키워드로 찾기{" "}
                 <span className="font-normal text-zinc-400">
                   (클릭해서 다중 선택 · AND)
                 </span>
@@ -419,18 +419,18 @@ export default function WikiListPage() {
         {keywordFilters.length > 0 && (
           <div className="mb-4 flex flex-wrap items-center gap-1.5 text-xs">
             <span className="text-zinc-500 dark:text-zinc-400">
-              🔖 키워드 {keywordFilters.length > 1 ? `(모두 포함 · AND)` : ""}:
+              ⭐ 키워드 {keywordFilters.length > 1 ? `(모두 포함 · AND)` : ""}:
             </span>
             {keywordFilters.map((kw) => (
               <span
                 key={kw}
-                className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300"
+                className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300"
               >
                 <span className="font-medium">{kw}</span>
                 <button
                   type="button"
                   onClick={() => toggleKeyword(kw)}
-                  className="text-orange-500 hover:text-orange-700"
+                  className="text-blue-500 hover:text-blue-700"
                   title={`'${kw}' 제거`}
                 >
                   ×
@@ -733,11 +733,13 @@ export default function WikiListPage() {
                               }
                               className={`px-1.5 py-0.5 rounded text-[10px] border transition ${
                                 selected
-                                  ? "border-orange-500 bg-orange-500 text-white dark:bg-orange-600 dark:border-orange-500 font-medium"
-                                  : "border-orange-200 dark:border-orange-800 bg-orange-50 dark:bg-orange-900/20 text-orange-600 dark:text-orange-300 hover:bg-orange-100 dark:hover:bg-orange-900/40"
+                                  ? "border-blue-500 bg-blue-500 text-white dark:bg-blue-600 dark:border-blue-500 font-medium"
+                                  : "border-blue-200 dark:border-blue-900 bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-900/40"
                               }`}
                             >
-                              {selected ? "✓ " : "🔖 "}
+                              <span className={selected ? "" : "text-amber-400"}>
+                                {selected ? "⭐ " : "☆ "}
+                              </span>
                               {kw}
                             </button>
                           );

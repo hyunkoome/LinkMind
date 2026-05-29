@@ -157,6 +157,33 @@ export async function listModels(): Promise<ModelsListResponse> {
   return fetchJSON<ModelsListResponse>(`/settings/llm/models`);
 }
 
+// ── 키워드 정규화 설정 (약어/별칭) ──
+export interface KeywordConfig {
+  acronyms: string;
+  aliases: string;
+  defaults: { acronyms: string; aliases: string };
+}
+
+export async function getKeywordConfig(): Promise<KeywordConfig> {
+  return fetchJSON<KeywordConfig>(`/settings/keywords`);
+}
+
+export async function updateKeywordConfig(
+  body: { acronyms?: string; aliases?: string },
+): Promise<KeywordConfig> {
+  return fetchJSON<KeywordConfig>(`/settings/keywords`, {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function reapplyKeywordConfig(): Promise<{
+  ok: boolean; total: number; changed: number;
+  keywords_before: number; keywords_after: number;
+}> {
+  return fetchJSON(`/settings/keywords/reapply`, { method: "POST" });
+}
+
 export async function listPromptVersions(name: string): Promise<PromptVersion[]> {
   // backend 응답: {name: string, versions: PromptVersion[]} — versions 만 풀어서 반환
   const res = await fetchJSON<{ name: string; versions: PromptVersion[] }>(

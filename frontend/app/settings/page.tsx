@@ -4,11 +4,15 @@ import { useCallback, useEffect, useState } from "react";
 
 import {
   activatePromptVersion,
+  getKeywordConfig,
   getLLMSettings,
   listModels,
   listPromptVersions,
+  reapplyKeywordConfig,
   savePromptVersion,
+  updateKeywordConfig,
   updateLLMSettings,
+  type KeywordConfig,
 } from "@/lib/api";
 import { useT } from "@/lib/i18n/context";
 import type {
@@ -65,11 +69,155 @@ export default function SettingsPage() {
         onChanged={() => void reload()}
       />
 
+      {/* 키워드 정규화 (약어/별칭) */}
+      <KeywordSection />
+
       {/* Prompts */}
       {PROMPT_NAMES.map((name) => (
         <PromptSection key={name} name={name} onChanged={() => void reload()} />
       ))}
     </main>
+  );
+}
+
+// 키워드 정규화 설정 — 약어(split 예외) + 별칭(통합). textarea 편집 + 저장 + 재적용.
+function KeywordSection() {
+  const [cfg, setCfg] = useState<KeywordConfig | null>(null);
+  const [acronyms, setAcronyms] = useState("");
+  const [aliases, setAliases] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [reapplying, setReapplying] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const c = await getKeywordConfig();
+      setCfg(c);
+      setAcronyms(c.acronyms);
+      setAliases(c.aliases);
+    } catch (e) {
+      setErr((e as Error).message);
+    }
+  }, []);
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const onSave = async () => {
+    setSaving(true);
+    setErr(null);
+    setMsg(null);
+    try {
+      const c = await updateKeywordConfig({ acronyms, aliases });
+      setCfg(c);
+      setAcronyms(c.acronyms);
+      setAliases(c.aliases);
+      setMsg("저장됨 — 신규 ingest 부터 적용. 기존 데이터는 아래 '기존 데이터에 적용'.");
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const onReapply = async () => {
+    setReapplying(true);
+    setErr(null);
+    setMsg(null);
+    try {
+      const r = await reapplyKeywordConfig();
+      setMsg(
+        `기존 데이터 적용 완료 — ${r.changed}/${r.total} wiki 변경 ` +
+          `(키워드 ${r.keywords_before}→${r.keywords_after})`,
+      );
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setReapplying(false);
+    }
+  };
+
+  return (
+    <section className="mb-8 rounded-lg border border-zinc-200 dark:border-zinc-800 p-4">
+      <h2 className="text-base font-semibold mb-1">🔤 키워드 정규화</h2>
+      <p className="text-xs text-zinc-500 mb-3">
+        키워드는 영문 소문자-대시 slug 로 자동 정규화됩니다 (CJK/한글 키워드는 삭제).
+        아래에서 약어 예외와 별칭을 편집하세요. 저장하면 신규 ingest 부터 적용되고,
+        기존 데이터는 [기존 데이터에 적용] 으로 일괄 재정규화합니다.
+      </p>
+
+      {err && <div className="mb-2 text-xs text-red-500">에러: {err}</div>}
+      {msg && (
+        <div className="mb-2 text-xs text-emerald-600 dark:text-emerald-400">{msg}</div>
+      )}
+
+      <div className="grid md:grid-cols-2 gap-4">
+        <div>
+          <label className="block text-xs font-medium mb-1">
+            약어 (split 예외){" "}
+            <span className="font-normal text-zinc-400">
+              — 한 줄당 하나. 예: LiDAR → lidar, GitHub → github
+            </span>
+          </label>
+          <textarea
+            value={acronyms}
+            onChange={(e) => setAcronyms(e.target.value)}
+            rows={10}
+            spellCheck={false}
+            className="w-full px-2 py-1.5 text-xs font-mono rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900"
+          />
+        </div>
+        <div>
+          <label className="block text-xs font-medium mb-1">
+            별칭 / 통합{" "}
+            <span className="font-normal text-zinc-400">
+              — &lsquo;from = to&rsquo; 한 줄당. 예: 3d-gaussian-splatting = 3dgs
+            </span>
+          </label>
+          <textarea
+            value={aliases}
+            onChange={(e) => setAliases(e.target.value)}
+            rows={10}
+            spellCheck={false}
+            className="w-full px-2 py-1.5 text-xs font-mono rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900"
+          />
+        </div>
+      </div>
+
+      <div className="mt-3 flex items-center gap-2">
+        <button
+          type="button"
+          onClick={onSave}
+          disabled={saving}
+          className="px-3 py-1.5 text-xs rounded bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50"
+        >
+          {saving ? "저장 중…" : "저장"}
+        </button>
+        <button
+          type="button"
+          onClick={onReapply}
+          disabled={reapplying}
+          className="px-3 py-1.5 text-xs rounded border border-blue-400 dark:border-blue-600 text-blue-700 dark:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/30 disabled:opacity-50"
+          title="현재 설정으로 기존 모든 wiki 의 키워드를 다시 정규화"
+        >
+          {reapplying ? "적용 중… (수 초)" : "기존 데이터에 적용"}
+        </button>
+        {cfg && (
+          <button
+            type="button"
+            onClick={() => {
+              setAcronyms(cfg.defaults.acronyms);
+              setAliases(cfg.defaults.aliases);
+            }}
+            className="ml-auto px-2 py-1 text-[11px] text-zinc-500 hover:text-zinc-700 hover:underline"
+            title="코드 기본값으로 되돌림 (저장해야 반영)"
+          >
+            기본값 불러오기
+          </button>
+        )}
+      </div>
+    </section>
   );
 }
 
