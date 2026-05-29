@@ -35,6 +35,8 @@ from backend.db.repository import (
 
 # keyword 클릭 시 그 키워드의 위키 노드 수 상한 (co-occurrence 그래프 가독성).
 COOCCUR_WIKI_LIMIT = 30
+# wiki 클릭 시 키워드당 이웃 위키 상한 (위키 중심 co-occurrence).
+WIKI_COOCCUR_NEIGHBOR_LIMIT = 8
 from backend.schemas.models import GraphEdge, GraphNode, GraphResponse
 
 logger = logging.getLogger(__name__)
@@ -279,19 +281,45 @@ async def graph_wiki_expand(
     slug: str,
     session: AsyncSession = Depends(get_session),
 ) -> GraphResponse:
-    """wiki 클릭 시 expand — 그 wiki 1개 + 그 안의 item 들 (sources/figures).
+    """wiki 클릭 → 키워드 관계 그래프 (co-occurrence).
 
-    노드: wiki 1 + item N. 엣지: wiki→item.
+    중심 wiki + 그 wiki 의 키워드들 + 각 키워드를 공유하는 이웃 wiki + 엣지
+    (keyword→wiki). 같은 키워드를 공유하는 위키들이 키워드를 통해 연결된다.
     """
-    wikis = await list_wiki_nodes(session, slugs=[slug])
-    if not wikis:
+    center_rows = await list_wiki_nodes(session, slugs=[slug])
+    if not center_rows:
         return GraphResponse(nodes=[], edges=[])
+    center = center_rows[0]
+    kws = [k for k in (center.get("keywords") or []) if k and k.strip()]
 
-    wiki_by_id = {w["id"]: w for w in wikis}
-    links = await list_wiki_item_links(session, wiki_page_ids=[wikis[0]["id"]])
-    item_ids = list({lk["item_id"] for lk in links})
-    items = await list_items_summary(session, item_ids=item_ids)
-    return _build_kwi(None, wikis, items, links, wiki_by_id)
+    nodes: list[GraphNode] = []
+    seen: set[str] = set()
+
+    def add(n: GraphNode) -> None:
+        if n.data["id"] not in seen:
+            seen.add(n.data["id"])
+            nodes.append(n)
+
+    add(wiki_to_node(center))
+
+    edges: list[GraphEdge] = []
+    seen_e: set[str] = set()
+
+    def add_e(e: GraphEdge) -> None:
+        if e.data["id"] not in seen_e:
+            seen_e.add(e.data["id"])
+            edges.append(e)
+
+    for kw in kws:
+        neighbor = await list_wikis_for_keyword(
+            session, keyword=kw, limit=WIKI_COOCCUR_NEIGHBOR_LIMIT,
+        )
+        add(keyword_to_node(kw, len(neighbor)))
+        add_e(keyword_wiki_edge(kw, center["slug"]))
+        for w in neighbor:
+            add(wiki_to_node(w))
+            add_e(keyword_wiki_edge(kw, w["slug"]))
+    return GraphResponse(nodes=nodes, edges=edges)
 
 
 @router.get("/item/{item_id}", response_model=GraphResponse)

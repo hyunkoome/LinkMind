@@ -99,7 +99,8 @@ export default function HomePage() {
     setLoading(true);
     setError(null);
     try {
-      const g = await getGraphKeywords();
+      // 좌측 트리 진입용 — 빈도 상위 300 (나머지는 검색/펼침으로 도달).
+      const g = await getGraphKeywords(300);
       setGraph(g);
       setViewGraph(null);
       setSelectedNodeFullId(null);
@@ -309,11 +310,21 @@ export default function HomePage() {
       {/* 우측 — 그래프 (보조, 리사이즈 가능) */}
       <aside style={{ width: rightW }} className="shrink-0 h-full relative">
         <GraphView
-          data={viewGraph ?? graph}
+          data={viewGraph ?? EMPTY}
           onNodeClick={handleNodeClick}
           selectedId={selectedNodeFullId}
           relatedIds={relatedIds}
         />
+
+        {!viewGraph && (
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none px-6">
+            <span className="text-zinc-400 dark:text-zinc-500 text-xs text-center leading-relaxed whitespace-pre-line">
+              {locale === "ko"
+                ? "좌측에서 키워드를 펼쳐 위키를 클릭하면\n여기에 키워드 관계 그래프가 표시됩니다"
+                : "Expand a keyword and click a wiki on the left\nto see its keyword-relation graph here"}
+            </span>
+          </div>
+        )}
 
         <div className="absolute top-3 left-3 z-10 pointer-events-none flex flex-col gap-1.5">
           {/* 통계 — keyword ▸ wiki ▸ item */}
@@ -330,7 +341,7 @@ export default function HomePage() {
                   </span>
                 )}
                 {(() => {
-                  const g = viewGraph ?? graph;
+                  const g = viewGraph ?? EMPTY;
                   const kwN = g.nodes.filter((n) => n.data.type === "keyword").length;
                   const wikiN = g.nodes.filter((n) => n.data.type === "wiki").length;
                   const itemN = g.nodes.filter((n) => n.data.type === "item").length;
