@@ -792,17 +792,26 @@ export default function WikiListPage() {
                 return (
                   <li key={p.id}>
                     {isClickable ? (
-                      <button
-                        type="button"
+                      // div + role=button — 카드 안에 keyword pill <button> 이 있어
+                      // <button> 중첩(hydration error) 방지.
+                      <div
+                        role="button"
+                        tabIndex={0}
                         onClick={() => setSelectedSlug(p.slug)}
-                        className={`block w-full text-left p-3 rounded border transition ${
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            setSelectedSlug(p.slug);
+                          }
+                        }}
+                        className={`block w-full text-left p-3 rounded border transition cursor-pointer ${
                           selectedSlug === p.slug
                             ? "border-orange-400 dark:border-orange-500 bg-orange-50 dark:bg-orange-900/20 ring-1 ring-orange-300 dark:ring-orange-700"
                             : "border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:border-orange-400 dark:hover:border-orange-500"
                         }`}
                       >
                         {inner}
-                      </button>
+                      </div>
                     ) : (
                       <div
                         className="block p-3 rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 opacity-60 cursor-not-allowed"
