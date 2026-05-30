@@ -32,7 +32,7 @@ GitHub · Arxiv · YouTube · Image           (Phase 3+: Slack/WhatsApp/Discord)
                            ▼
         [D10 llm_wiki — 2026-05-26 wave-1+2 완료]
         - 4 agent (classifier + retriever + writer + critic stub)
-        - wiki body 자동 합성 (vLLM Qwen2.5-7B, 5 섹션 markdown)
+        - wiki body 자동 합성 (vLLM Gemma 4 26B-A4B-AWQ, 한국어 markdown — 2026-05-30 Qwen 에서 교체)
         - daemon = batch (concurrency 4, D11 통일)
 
         [D11 wiki 통합 — 2026-05-27 완료, 26 commits]

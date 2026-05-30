@@ -815,19 +815,42 @@ ingest going-forward fix 까지 확장. 모두 사용자 검증 완료.
   `components/wiki/WikiDetailView.tsx` 추출 (`variant` page/panel, /wiki/[slug] 공용 — 편집/재합성/
   Sources/Relationship/Keywords/메타/2단계 삭제 전부). 패널 폭 58rem, 전체 펼침(자체 스크롤 X).
 
+## ✅ 2026-05-30 — Gemma 4 전환 + tags 폐기 + summary 한국어 + vLLM DB화 (완료, 텔레그램 실시간 검증)
+
+- **Qwen → Gemma 4 26B-A4B (MoE, AWQ 4bit)** — 중국어 native bias 근본 제거. vLLM KV cache fp8 +
+  16384 ctx + reasoning-parser gemma4 + 멀티모달 끄기(`--limit-mm-per-prompt`) (RTX 4090). LoRA 는
+  Gemma MoE 미지원이라 제거. writer 풍부화 (max_tokens 6144, source top-8).
+- **위키 title/description 정제** — raw SNS 제목/중국어 → body 의 `#헤더`(정제 제목)·`>TL;DR`. writer
+  저장 + `backfill_description_from_tldr` (title 1208 + desc 14181).
+- **tags 완전 폐기** — #tag 검색(/search 폐기) + 위키 키워드 대체. summary 프롬프트 해시태그 제거,
+  ingest/writer/retriever/frontend tags 제거, items.tags 비움(14443) + summary 해시태그 줄 제거(12506).
+- **summary 한국어화** — `backfill_summary --only-foreign` (중국어만). 13839 중 중국어 0.
+- **vLLM 설정 DB화** — model/dtype/gpu_mem/max_len/kv_cache 를 app_settings + Settings UI. `vllm_restart.sh`
+  (=vllm_restart.py) 가 DB effective 읽어 재구동(shell env > --env-file). env VLLM_* 제거 (config fallback).
+- **위키 UI** — 날짜 정렬 `COALESCE(updated_at,created_at)`, 갱신날짜 색상 통일, 자료별 Summary 섹션
+  제거(위키 요약=본문 TL;DR), 헤더 모델명 동적(`ModelLabel` → getLLMSettings).
+- **watcher fix** — `setup()` seed_and_load (DB vllm_model 적재, 옛 Qwen 404 해결). 별 프로세스
+  (watcher/backfill/CLI)는 seed_and_load 필수 패턴.
+- 신규: `backend/utils/lang.py`(외국어 감지), `regenerate_foreign_wikis`, `backfill_description_from_tldr`,
+  `vllm_restart`, `run_summary_backfill --only-foreign`, `ModelLabel.tsx`. 테스트 `test_lang_foreign` 8개.
+
 ## 🎯 다음 세션 — 여기부터 (간단명료)
 
-> wiki/키워드/그래프 UX 정비 끝. 홈 = `/ask`. 이제:
+> Gemma 전환·tags 폐기·vLLM DB화 끝. 홈 = `/ask`. 이제:
 
-**1순위 — 대화형 /ask 페이지 (ChatGPT 식 멀티턴)**
-- 현재 `frontend/app/ask/page.tsx` 는 1-shot RAG (Step 1). → **멀티턴 대화 UI** 로 발전.
-- 대화 history 유지 + (가능하면) streaming + citation/related_wikis + 우측 wiki inline
-  (`WikiDetailView` 재사용 가능). backend `/ask` 응답에 `related_wikis[]` 이미 있음.
-- 이게 LinkMind 메인 사용 경로 — 빨리 완성해 학습(Phase 4)으로.
+**1순위 — 대화형 /ask (멀티턴 + 검색 + agentic action)**
+- 현재 `frontend/app/ask/page.tsx` 는 1-shot RAG (Step 1). → **멀티턴 대화 UI** + 세 요청 유형:
+  · 검색("OO 자료 찾아줘") · QA("OO 할 땐 어떻게 해?") · **agentic action**("위키 링크 관계를 로컬
+    데이터로 업데이트해줘" → 도구 호출 실행, 사용자 지시 기반).
+- 대화 history + streaming + citation/related_wikis + 우측 wiki inline (`WikiDetailView` 재사용).
+- 같이: **ask·검색을 wiki body 기반으로** (item.summary 의존 줄이기). `search_wiki_pages`(wiki_qdrant)
+  + `POST /wiki/search` 이미 구현 → 재사용.
 
-**2순위 — 학습 파이프라인 (Phase 4 진입)**
-- feedback 인프라 (`/ask` 답변 👍/👎/수정 메모 → feedback 테이블)
-- dataset exporter (raw + summary + user_notes + feedback → JSONL) → sVLL LoRA (LLaMA-Factory + Qwen2-VL)
+**2순위 — 자가학습 (auto-skills) + 학습 파이프라인 (Phase 4)**
+- **자가학습**: feedback(👍/👎) 누적 → prompt/ingester 자동 개선 (사용자 명령 없이, 자동).
+  ※ "위키 링크 업데이트해줘"는 자가학습 아니라 ①의 agentic action(사용자 지시).
+- **학습**: feedback 인프라 (👍/👎/수정 → feedback 테이블) → dataset exporter (raw + summary +
+  user_notes + feedback → JSONL) → sVLL LoRA (LLaMA-Factory + Qwen2-VL)
 
 **그 외 / 보류**
 - `/graph` 페이지 본격화할지 완전 삭제할지 결정 (현재 nav 제거 + 코드 보류)
