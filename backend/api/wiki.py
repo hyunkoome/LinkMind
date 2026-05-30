@@ -154,11 +154,11 @@ _GROUP_ORDER = """
 """
 
 # 사용자 선택 정렬 — allowlist (SQL injection 방지: key 로만 lookup, 값은 고정).
-# 날짜는 합성 시각(body_generated_at) 우선, 없으면 updated_at. 동률 tie-break 로
-# title 추가해 페이지 간 안정적 순서 (pagination 일관).
+# 최종 날짜 = updated_at 이 있으면 updated_at, 없으면 created_at (사용자 명시 2026-05-30).
+# 동률 tie-break 로 title 추가해 페이지 간 안정적 순서 (pagination 일관).
 _SORT_CLAUSES: dict[str, str] = {
-    "recent": "COALESCE(wp.body_generated_at, wp.updated_at) DESC NULLS LAST, LOWER(wp.title) ASC",
-    "oldest": "COALESCE(wp.body_generated_at, wp.updated_at) ASC NULLS LAST, LOWER(wp.title) ASC",
+    "recent": "COALESCE(wp.updated_at, wp.created_at) DESC NULLS LAST, LOWER(wp.title) ASC",
+    "oldest": "COALESCE(wp.updated_at, wp.created_at) ASC NULLS LAST, LOWER(wp.title) ASC",
     "alpha": "LOWER(wp.title) ASC, wp.created_at ASC",
     "alpha_desc": "LOWER(wp.title) DESC, wp.created_at ASC",
 }
