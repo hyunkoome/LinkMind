@@ -16,6 +16,7 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 
+import ModelLabel from "@/components/ModelLabel";
 import KeywordsEditor from "@/components/wiki/KeywordsEditor";
 import WikiBody from "@/components/wiki/WikiBody";
 import {
@@ -119,7 +120,7 @@ export default function AskPage() {
             🤖 LinkMind Ask
           </h1>
           <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-0.5">
-            자체 DB + 로컬 LLM (vLLM Qwen2.5-7B) 기반 답변. citation 클릭하면 우측에 wiki 표시.
+            자체 DB + 로컬 LLM (vLLM <ModelLabel />) 기반 답변. citation 클릭하면 우측에 wiki 표시.
           </p>
         </header>
 

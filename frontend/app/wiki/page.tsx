@@ -16,6 +16,7 @@
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
+import ModelLabel from "@/components/ModelLabel";
 import WikiDetailView from "@/components/wiki/WikiDetailView";
 import {
   batchRegenerateWiki,
@@ -367,7 +368,7 @@ export default function WikiListPage() {
           </h1>
           <p className="text-sm text-zinc-600 dark:text-zinc-400 mt-1">
             자료들을 의미 단위 wiki 페이지로 자동 분류·합성. 페이지를 열면 LLM 이
-            한국어 markdown 본문을 합성합니다 (vLLM Qwen2.5-7B).
+            한국어 markdown 본문을 합성합니다 (vLLM <ModelLabel />).
           </p>
         </header>
 
