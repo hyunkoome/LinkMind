@@ -744,7 +744,7 @@ export default function WikiListPage() {
                       >
                         📅 {fmtDateShort(p.created_at)}
                         {p.updated_at && p.updated_at !== p.created_at && (
-                          <span className="ml-1 text-zinc-300 dark:text-zinc-600">
+                          <span className="ml-1">
                             · ↻ {fmtDateShort(p.updated_at)}
                           </span>
                         )}
