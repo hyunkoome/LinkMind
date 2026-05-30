@@ -850,7 +850,35 @@ ingest going-forward fix 까지 확장. 모두 사용자 검증 완료.
 - **자가학습**: feedback(👍/👎) 누적 → prompt/ingester 자동 개선 (사용자 명령 없이, 자동).
   ※ "위키 링크 업데이트해줘"는 자가학습 아니라 ①의 agentic action(사용자 지시).
 - **학습**: feedback 인프라 (👍/👎/수정 → feedback 테이블) → dataset exporter (raw + summary +
-  user_notes + feedback → JSONL) → sVLL LoRA (LLaMA-Factory + Qwen2-VL)
+  user_notes + feedback → JSONL) → sVLL LoRA (LLaMA-Factory + Qwen2-VL 또는 Gemma 4)
+
+### Phase 4 학습 파이프라인 — Gemma 4 26B-A4B QLoRA (RTX 4090 24GB)
+
+> 핵심 원칙: **운영 = AWQ(inference 전용), 학습 = 원본 + QLoRA** 로 분리. 별도 conda env(§4 — 학습용은
+> 그 시점에 생성). personal LoRA = 본인 데이터로 본인 모델만 (§1·§11, 운영자 공통모델 학습 절대 X).
+
+**1) 학습 (QLoRA, 24GB)**
+- 원본 `google/gemma-4-26B-A4B-it` (bf16, HF gated — 라이센스 동의 + HF_TOKEN) → **QLoRA**:
+  4bit NF4 로 base 로드 + LoRA adapter 만 학습. **운영 중인 AWQ 버전(cyankiwi/...-AWQ-4bit)은
+  inference 전용이라 직접 학습 불가** → 원본을 받아야 함.
+- **24GB 가능**: QLoRA 논문 기준 33B@24GB / 65B@48GB → 26B 는 여유. 단 조건:
+  paged AdamW(8bit) + **gradient checkpointing** + batch 1 + seq 1024~2048 제한 + grad accumulation.
+  MoE 라 weights 26B 전체를 4bit 로 로드(~13GB)하지만 연산은 active 4B.
+- **MoE LoRA 변수 (검증 필요)**: LLaMA-Factory / PEFT 가 Gemma 4 MoE 의 **expert layer 에 LoRA**
+  를 제대로 붙이는지. attention 만 target = 안전, expert 까지 target = 지원 확인 필요. 안 되면
+  더 작은 변형 **Gemma 4 E4B**(학습 쉬움) 또는 클라우드 GPU 학습으로 우회.
+
+**2) 데이터셋**
+- dataset exporter: raw_content + summary + user_notes + feedback(👍/👎/수정) → JSONL (instruction 형식).
+- Gemma 4 멀티모달 → **이미지 자료(PDF figure / 사진 / thumbnail)도 input** (§1 sVLL 비전과 직결).
+
+**3) 추론 최적화 (학습 후)**
+- LoRA adapter → **base 에 merge** → **AWQ 재양자화**(autoawq) → vLLM 서빙 (현재 운영 파이프 그대로).
+- **merge 필수**: vLLM 이 Gemma 4 **MoE 의 inference LoRA hot-swap 을 미지원**(2026-05-30 확인 —
+  `get_expert_mapping must be implemented`). adapter 를 따로 못 올리므로 merge 후 통째 재양자화.
+
+**4) continuous training loop (Phase 5)**
+- 주기적으로 feedback 누적 → QLoRA 재학습 → merge/양자화 → 재배포. 온프레미스 개인화 엔진 완성.
 
 **그 외 / 보류**
 - `/graph` 페이지 본격화할지 완전 삭제할지 결정 (현재 nav 제거 + 코드 보류)
