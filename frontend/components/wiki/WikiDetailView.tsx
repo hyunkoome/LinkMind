@@ -290,30 +290,6 @@ export default function WikiDetailView({
               <h2 className="text-lg font-bold mb-3 text-zinc-900 dark:text-zinc-100 break-words">
                 {page.title}
               </h2>
-              {/* Summary — 원자료(source) 요약. 본문(무엇인가/어떻게/왜...) 위에 배치 (2026-05-30). */}
-              {page.sources.some((s) => s.summary) && (
-                <section className="mb-5 border-l-2 border-zinc-300 dark:border-zinc-700 pl-3">
-                  <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1.5">
-                    Summary
-                  </div>
-                  <div className="space-y-2.5">
-                    {page.sources.map((s: WikiSource, i: number) =>
-                      s.summary ? (
-                        <div key={s.item_id}>
-                          {page.sources.length > 1 && (
-                            <div className="text-[10px] text-zinc-400 dark:text-zinc-500 mb-0.5">
-                              [{i + 1}] {s.title || s.item_id.slice(0, 8)}
-                            </div>
-                          )}
-                          <p className="text-xs text-zinc-600 dark:text-zinc-400 whitespace-pre-line leading-relaxed">
-                            {s.summary}
-                          </p>
-                        </div>
-                      ) : null,
-                    )}
-                  </div>
-                </section>
-              )}
               <WikiBody body={page.body || ""} />
             </article>
           )}
