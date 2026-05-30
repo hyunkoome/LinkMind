@@ -331,6 +331,11 @@ export default function WikiDetailView({
                         {s.confidence !== null && ` · conf=${s.confidence.toFixed(2)}`}
                         {s.role && ` · ${s.role}`}
                       </div>
+                      {s.summary && (
+                        <p className="text-[11px] text-zinc-600 dark:text-zinc-400 mt-1 whitespace-pre-line leading-relaxed">
+                          {s.summary}
+                        </p>
+                      )}
                     </li>
                   );
                 })}
