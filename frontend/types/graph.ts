@@ -107,6 +107,11 @@ export interface LLMSettings {
     openai_model?: string;
     anthropic_model?: string;
     vllm_model?: string;
+    vllm_dtype?: string;
+    vllm_gpu_mem_util?: string;
+    vllm_max_model_len?: string;
+    vllm_max_batched_tokens?: string;
+    vllm_kv_cache_dtype?: string;
   };
   override?: Record<string, string | null>;
   config_defaults?: Record<string, string>;
@@ -119,6 +124,11 @@ export interface LLMSettingsUpdate {
   openai_model?: string | null;
   anthropic_model?: string | null;
   vllm_model?: string | null;
+  vllm_dtype?: string | null;
+  vllm_gpu_mem_util?: string | null;
+  vllm_max_model_len?: string | null;
+  vllm_max_batched_tokens?: string | null;
+  vllm_kv_cache_dtype?: string | null;
 }
 
 // backend GET /settings/llm/models 응답 — 각 provider 별 사용 가능 여부 + default + 모델 목록

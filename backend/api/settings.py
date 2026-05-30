@@ -41,6 +41,12 @@ class LLMSettingsUpdate(BaseModel):
     openai_model: str | None = None
     anthropic_model: str | None = None
     vllm_model: str | None = None
+    # vLLM 컨테이너 구동 파라미터 (변경 후 vLLM 재구동 필요 — scripts/vllm_restart.sh).
+    vllm_dtype: str | None = None              # auto | float16 | bfloat16
+    vllm_gpu_mem_util: str | None = None       # 0.0~1.0 (문자열로 저장)
+    vllm_max_model_len: str | None = None      # e.g. 16384
+    vllm_max_batched_tokens: str | None = None  # e.g. 16384
+    vllm_kv_cache_dtype: str | None = None     # auto | fp8
 
 
 class PromptSave(BaseModel):

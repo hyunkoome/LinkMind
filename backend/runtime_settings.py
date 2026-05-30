@@ -38,6 +38,13 @@ _KEYS = {
     "openai_model",
     "anthropic_model",
     "vllm_model",
+    # vLLM 컨테이너 구동 파라미터 (DB override → scripts/vllm_restart.sh 가 읽어 주입).
+    # 변경해도 backend 는 영향 없고, vLLM 컨테이너 재구동 시에만 적용된다.
+    "vllm_dtype",
+    "vllm_gpu_mem_util",
+    "vllm_max_model_len",
+    "vllm_max_batched_tokens",
+    "vllm_kv_cache_dtype",
 }
 
 # 키워드 정규화 설정 (약어 split 예외 + 별칭). app_settings 에 텍스트로 저장.
@@ -203,6 +210,36 @@ def get_effective_vllm_model() -> str:
     return _settings_cache.get("vllm_model") or get_settings().vllm_model
 
 
+# vLLM 구동 파라미터 — DB override 우선, 없으면 config(env) default.
+# scripts/vllm_restart.sh 가 이 값들을 읽어 컨테이너 env 로 주입.
+def get_effective_vllm_dtype() -> str:
+    _ensure_loaded()
+    return _settings_cache.get("vllm_dtype") or get_settings().vllm_dtype
+
+
+def get_effective_vllm_gpu_mem_util() -> float:
+    _ensure_loaded()
+    val = _settings_cache.get("vllm_gpu_mem_util")
+    return float(val) if val else get_settings().vllm_gpu_mem_util
+
+
+def get_effective_vllm_max_model_len() -> int:
+    _ensure_loaded()
+    val = _settings_cache.get("vllm_max_model_len")
+    return int(val) if val else get_settings().vllm_max_model_len
+
+
+def get_effective_vllm_max_batched_tokens() -> int:
+    _ensure_loaded()
+    val = _settings_cache.get("vllm_max_batched_tokens")
+    return int(val) if val else get_settings().vllm_max_batched_tokens
+
+
+def get_effective_vllm_kv_cache_dtype() -> str:
+    _ensure_loaded()
+    return _settings_cache.get("vllm_kv_cache_dtype") or get_settings().vllm_kv_cache_dtype
+
+
 def get_active_prompt(name: str) -> tuple[str, str]:
     """활성 prompt 반환: (version, content). DB 미적재/누락 시 시드 default 로 fallback.
 
@@ -247,6 +284,11 @@ async def snapshot() -> dict[str, Any]:
             "openai_model": get_effective_openai_model(),
             "anthropic_model": get_effective_anthropic_model(),
             "vllm_model": get_effective_vllm_model(),
+            "vllm_dtype": get_effective_vllm_dtype(),
+            "vllm_gpu_mem_util": str(get_effective_vllm_gpu_mem_util()),
+            "vllm_max_model_len": str(get_effective_vllm_max_model_len()),
+            "vllm_max_batched_tokens": str(get_effective_vllm_max_batched_tokens()),
+            "vllm_kv_cache_dtype": get_effective_vllm_kv_cache_dtype(),
         },
         # 'config_defaults' = backend/config.py 의 Field default. DB 가 비어있을 때
         # fallback 으로만 사용. (이전엔 env 도 override 했지만 LLM 관련 env 는 제거됨.)
@@ -256,6 +298,11 @@ async def snapshot() -> dict[str, Any]:
             "openai_model": s.openai_model,
             "anthropic_model": s.anthropic_model,
             "vllm_model": s.vllm_model,
+            "vllm_dtype": s.vllm_dtype,
+            "vllm_gpu_mem_util": str(s.vllm_gpu_mem_util),
+            "vllm_max_model_len": str(s.vllm_max_model_len),
+            "vllm_max_batched_tokens": str(s.vllm_max_batched_tokens),
+            "vllm_kv_cache_dtype": s.vllm_kv_cache_dtype,
         },
         "prompts": active_prompts,
     }

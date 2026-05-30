@@ -237,6 +237,12 @@ function LLMSection({
   const [openaiModel, setOpenaiModel] = useState(effective.openai_model || "");
   const [anthropicModel, setAnthropicModel] = useState(effective.anthropic_model || "");
   const [vllmModel, setVllmModel] = useState(effective.vllm_model || "");
+  // vLLM 구동 파라미터 (변경 후 vLLM 재구동 필요)
+  const [vllmDtype, setVllmDtype] = useState(effective.vllm_dtype || "auto");
+  const [vllmGpuMem, setVllmGpuMem] = useState(effective.vllm_gpu_mem_util || "0.85");
+  const [vllmMaxLen, setVllmMaxLen] = useState(effective.vllm_max_model_len || "8192");
+  const [vllmBatched, setVllmBatched] = useState(effective.vllm_max_batched_tokens || "16384");
+  const [vllmKvCache, setVllmKvCache] = useState(effective.vllm_kv_cache_dtype || "auto");
   const [saving, setSaving] = useState(false);
 
   // settings 가 reload 되면 state 동기화
@@ -247,6 +253,11 @@ function LLMSection({
     setOpenaiModel(e.openai_model || "");
     setAnthropicModel(e.anthropic_model || "");
     setVllmModel(e.vllm_model || "");
+    setVllmDtype(e.vllm_dtype || "auto");
+    setVllmGpuMem(e.vllm_gpu_mem_util || "0.85");
+    setVllmMaxLen(e.vllm_max_model_len || "8192");
+    setVllmBatched(e.vllm_max_batched_tokens || "16384");
+    setVllmKvCache(e.vllm_kv_cache_dtype || "auto");
   }, [settings]);
 
   const save = async () => {
@@ -258,6 +269,11 @@ function LLMSection({
         openai_model: openaiModel || null,
         anthropic_model: anthropicModel || null,
         vllm_model: vllmModel || null,
+        vllm_dtype: vllmDtype || null,
+        vllm_gpu_mem_util: vllmGpuMem || null,
+        vllm_max_model_len: vllmMaxLen || null,
+        vllm_max_batched_tokens: vllmBatched || null,
+        vllm_kv_cache_dtype: vllmKvCache || null,
       } as Record<string, string | null>);
       onChanged();
     } catch (e) {
@@ -373,6 +389,72 @@ function LLMSection({
           )}
         </label>
       </div>
+
+      {/* vLLM 구동 파라미터 — DB 저장 후 vLLM 재구동 시 적용 */}
+      <div className="mt-4 pt-3 border-t border-zinc-200 dark:border-zinc-800">
+        <h3 className="text-xs font-medium mb-2 text-zinc-600 dark:text-zinc-400">
+          ⚙️ vLLM 구동 파라미터
+        </h3>
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">
+          <label className="block">
+            <span className="text-xs text-zinc-500">dtype</span>
+            <select
+              value={vllmDtype}
+              onChange={(e) => setVllmDtype(e.target.value)}
+              className="mt-1 w-full px-2 py-1.5 bg-zinc-50 dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded"
+            >
+              <option value="auto">auto</option>
+              <option value="float16">float16 (AWQ)</option>
+              <option value="bfloat16">bfloat16</option>
+            </select>
+          </label>
+          <label className="block">
+            <span className="text-xs text-zinc-500">GPU 메모리 (0~1)</span>
+            <input
+              type="text"
+              value={vllmGpuMem}
+              onChange={(e) => setVllmGpuMem(e.target.value)}
+              placeholder="0.85"
+              className="mt-1 w-full px-2 py-1.5 bg-zinc-50 dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded"
+            />
+          </label>
+          <label className="block">
+            <span className="text-xs text-zinc-500">KV cache dtype</span>
+            <select
+              value={vllmKvCache}
+              onChange={(e) => setVllmKvCache(e.target.value)}
+              className="mt-1 w-full px-2 py-1.5 bg-zinc-50 dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded"
+            >
+              <option value="auto">auto</option>
+              <option value="fp8">fp8 (context 2배)</option>
+            </select>
+          </label>
+          <label className="block">
+            <span className="text-xs text-zinc-500">max-model-len</span>
+            <input
+              type="text"
+              value={vllmMaxLen}
+              onChange={(e) => setVllmMaxLen(e.target.value)}
+              placeholder="16384"
+              className="mt-1 w-full px-2 py-1.5 bg-zinc-50 dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded"
+            />
+          </label>
+          <label className="block">
+            <span className="text-xs text-zinc-500">max-batched-tokens</span>
+            <input
+              type="text"
+              value={vllmBatched}
+              onChange={(e) => setVllmBatched(e.target.value)}
+              placeholder="16384"
+              className="mt-1 w-full px-2 py-1.5 bg-zinc-50 dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded"
+            />
+          </label>
+        </div>
+        <p className="text-[10px] text-amber-600 dark:text-amber-500 mt-2">
+          ⚠️ 저장 후 <code className="px-1 bg-zinc-100 dark:bg-zinc-800 rounded">bash scripts/vllm_restart.sh</code> 로 vLLM 을 재구동해야 적용됩니다 (컨테이너 구동 시점 인자).
+        </p>
+      </div>
+
       <div className="mt-3 flex items-center justify-between">
         <div className="text-[10px] text-zinc-400">{t.settings.emptyValueHint}</div>
         <button
