@@ -123,11 +123,32 @@ services:
       - "${VLLM_MODEL:-Qwen/Qwen2.5-7B-Instruct}"
       - "--port"
       - "8000"
+      # dtype — 양자화 모델용. Gemma 4 26B-A4B-AWQ 는 float16 권장 (AWQ kernel).
+      # Qwen 미양자화는 auto (bf16). quantization 자체는 모델 HF config 의
+      # quantization_config 로 vLLM 이 자동 감지 → --quantization 명시 불필요.
+      - "--dtype"
+      - "${VLLM_DTYPE:-auto}"
+      # reasoning parser — Gemma 4 (E2B/E4B 제외) 는 thinking 을 꺼도 <|channel>thought 태그를
+      # 생성한다. 이 parser 가 thought 를 reasoning_content 로 분리해 content 를 깨끗하게 유지.
+      # 안 주면 control 토큰이 위키 본문에 그대로 섞임. (Qwen 으로 되돌리려면 이 2줄 제거.)
+      - "--reasoning-parser"
+      - "${VLLM_REASONING_PARSER:-gemma4}"
+      # 멀티모달 끄기 — Gemma 4 는 vision/audio encoder 가 KV cache 를 잠식한다. 우리는
+      # 텍스트 위키만 생성하므로 image/audio/video 를 0 으로 제한해 그 메모리를 KV 로 회수
+      # → 8192 context + 16384 batched 가능 (기능 손실 없음, 2026-05-30). Qwen 복원 시 제거.
+      - "--limit-mm-per-prompt"
+      - '{"image": 0, "video": 0, "audio": 0}'
       - "--max-model-len"
       - "${VLLM_MAX_MODEL_LEN:-8192}"
       - "--gpu-memory-utilization"
       - "${VLLM_GPU_MEM_UTIL:-0.85}"
-      - "--enable-lora"                 # Phase 4 LoRA adapter hot-swap 대비
+      # KV cache fp8 — KV 메모리 절반 → context 2배(16384) 가능. 자료 많은 위키(input 큼)
+      # + 긴 출력(max_tokens 6144) 을 8192 한계 없이 처리. 품질 손실 미미 (2026-05-30).
+      - "--kv-cache-dtype"
+      - "${VLLM_KV_CACHE_DTYPE:-fp8}"
+      # --enable-lora 제거 (2026-05-30): Gemma 4 MoE 는 LoRA 미지원
+      #   (AttributeError: get_expert_mapping must be implemented). Phase 4 LoRA hot-swap 은
+      #   LoRA 지원 모델로 갈 때 다시 추가. Qwen 으로 되돌리려면 이 줄 복원.
       # ── throughput 최적화 (2026-05-26) ──
       - "--enable-prefix-caching"       # system prompt 매번 동일 → KV cache 재사용 (~20% 빨라짐)
       - "--max-num-batched-tokens"

@@ -35,8 +35,41 @@ from backend.embedding.wiki_qdrant import ensure_wiki_collection, upsert_wiki_pa
 from backend.llm.base import ChatMessage
 from backend.llm.factory import get_llm_provider
 from backend.utils.keywords import normalize_keywords
+from backend.utils.lang import FOREIGN_THRESHOLD, count_foreign_cjk
 
 logger = logging.getLogger("linkmind.agents.writer")
+
+
+# 본문 합성 모델(Qwen2.5-7B)은 Alibaba(중국) 모델이라 source 가 중국어/일본어면
+# "중국어 금지" 프롬프트 규칙을 어기고 그 언어로 써버리는 native bias 가 있다.
+# 2단계 방어 (2026-05-30):
+#   1) 생성 직후 외국어 감지 시 경고를 붙여 _MAX_LANG_RETRIES 회 재생성.
+#   2) 그래도 외국어가 남으면 → **한국어 번역 폴백**. 실측 결과 "중국어 금지하고 새로
+#      써라"(생성)는 native bias 를 못 이겼지만(재생성 3회 다 중국어), "이 텍스트를
+#      한국어로 번역하라"(변환)는 명확한 작업이라 Qwen 도 제대로 한다.
+_MAX_LANG_RETRIES = 1  # 최초 1회 + 재생성 1회. 그 다음은 번역 폴백이 더 확실.
+
+_LANG_RETRY_WARNING = (
+    "\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    "⚠️ 경고: 직전 출력에 **중국어/일본어가 섞여 있었습니다**. 이는 절대 허용되지 않습니다.\n"
+    "본문 전체를 **오직 한국어로만** 다시 작성하세요. source 자료가 중국어/영어/일본어여도\n"
+    "내용을 한국어로 풀어서 다시 쓰고, 한자·가나·중국어 문장을 단 한 글자도\n"
+    "포함하지 마세요. 영문 기술 용어/고유명사(LoRA, ROS2, Isaac Sim 등)만 원문 유지.\n"
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+)
+
+# 번역 폴백용 system prompt — 재생성으로 못 고친 외국어 본문을 한국어로 변환.
+_TRANSLATE_SYSTEM = (
+    "당신은 전문 번역가입니다. 입력은 위키 페이지 본문(markdown)이며 일부 문장이 "
+    "중국어 또는 일본어로 되어 있습니다. 이를 한국어 본문으로 변환하세요.\n\n"
+    "규칙:\n"
+    "- 중국어·일본어 문장을 모두 자연스러운 한국어로 번역한다.\n"
+    "- markdown 구조를 그대로 유지: ## 헤더 이름, > 인용, [N] citation 번호, 줄바꿈.\n"
+    "- 영문 기술 용어·고유명사·약어(LoRA, ROS2, Isaac Sim, GitHub 등)는 번역하지 말고 원문 유지.\n"
+    "- 이미 한국어인 문장은 그대로 둔다.\n"
+    "- 한자·가나·중국어 문장을 단 한 글자도 남기지 않는다.\n"
+    "- 설명이나 머리말 없이 변환된 본문만 출력한다."
+)
 
 
 _UPDATE_BODY_SQL = text("""
@@ -48,7 +81,15 @@ _UPDATE_BODY_SQL = text("""
                                              -- 은 naive 라 timestamptz 에 세션 TZ(KST)로
                                              -- 오해석돼 9h 어긋났음 (2026-05-29 fix).
         body_status = 'completed',
-        body_processing_started_at = NULL    -- 처리 끝났으니 marker clear
+        body_processing_started_at = NULL,   -- 처리 끝났으니 marker clear
+        -- title = body 의 # 헤더 (정제 제목). 옛날엔 raw item title(SNS 제목 + 해시태그
+        -- + "댓글 24" 등)을 복사해 지저분했음 — writer 가 # 헤더에 만든 깔끔한 제목으로
+        -- 통일 (2026-05-30, 사용자 명시). 못 뽑으면(None) 기존 title 유지 (COALESCE).
+        title = COALESCE(:title, title),
+        -- description = body 의 TL;DR (리스트 카드 미리보기). 옛날엔 item summary 를
+        -- 복사해 중국어가 섞였음 — 이제 한국어 body TL;DR 로 통일 (2026-05-30, 사용자 명시).
+        -- TL;DR 못 뽑으면(None) 기존 description 유지 (COALESCE).
+        description = COALESCE(:description, description)
     WHERE id = :page_id
 """)
 
@@ -106,6 +147,28 @@ class WriterAgent(AgentBase):
             self._prompt = load_prompt("writer", self.agent_version)
         return self._prompt
 
+    async def _translate_to_korean(self, provider, body: str) -> str:  # noqa: ANN001
+        """외국어가 섞인 body 를 한국어로 번역 (생성 재시도가 실패했을 때 폴백).
+
+        번역은 "입력을 그대로 한국어로" 라는 명확한 변환 작업이라 Qwen 의 중국어
+        native bias 에 덜 휘둘린다. temperature=0 (결정적). 실패하면 빈 문자열 →
+        caller 가 원본 유지.
+        """
+        try:
+            resp = await provider.chat(
+                messages=[
+                    ChatMessage(role="system", content=_TRANSLATE_SYSTEM),
+                    ChatMessage(role="user", content=body),
+                ],
+                model=self.llm_model,
+                temperature=0.0,
+                max_tokens=2048,
+            )
+            return resp.text.strip()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("writer 번역 폴백 LLM 호출 실패 (원본 유지): %s", exc)
+            return ""
+
     async def build_context(self, ctx: AgentContext) -> dict[str, Any]:
         if not ctx.related_wiki_page_id:
             raise ValueError("WriterAgent: related_wiki_page_id 필수")
@@ -153,24 +216,64 @@ class WriterAgent(AgentBase):
         system_msg = prompt["system"]
         user_msg = _build_user_message(prompt["user_template"], wiki_context)
 
-        # LLM 호출 — vLLM Qwen2.5-7B (context window 8192 토큰).
-        # max_tokens 2048 (2026-05-29) — 옛 1024 는 한국어 wiki 에서 너무 작아
-        # completion 이 정확히 1024 에서 잘려 **마지막 ## Keywords 섹션이 생성 안 됨**
-        # (한글은 토큰을 많이 먹어 narrative 만으로 1024 소진). → 키워드 추출 실패.
-        # 2048 로 올려 7 섹션 + Keywords 까지 완주. (드물게 "list 무한 반복" degenerate
-        # 시 2048 에서 cut — 1024 보다 garbage 길지만 빈도 낮음, 키워드 누락이 더 흔함.)
+        # LLM 호출 — vLLM Gemma 4 26B-A4B (context 16384, KV fp8, 2026-05-30 Qwen 에서 교체).
+        # max_tokens 6144 — 풍부한 위키 위해 상향. 자료 많은 위키는 input 이 크므로(82 source
+        #   = ~4100 토큰) 8192 context 로는 output 4096 과 충돌(8193>8192 에러)했다. KV fp8 로
+        #   context 를 16384 로 키워 input(최대 ~10000) + output 6144 둘 다 수용.
+        # temperature 0.6 — 옛 0.1 은 너무 결정적이라 반복(degenerate) 위험. Gemma 권장
+        #   1.0 과 위키 사실성(낮은 temp) 사이 절충. 필요 시 샘플 보고 조정.
         provider = get_llm_provider()
-        llm_resp = await provider.chat(
-            messages=[
-                ChatMessage(role="system", content=system_msg),
-                ChatMessage(role="user", content=user_msg),
-            ],
-            model=self.llm_model,
-            temperature=0.1,
-            max_tokens=2048,
-        )
-        raw_body = llm_resp.text.strip()
-        body_model = f"{llm_resp.provider}/{llm_resp.model}"
+
+        # ── 언어 안전장치 (2026-05-30) ──
+        # Qwen2.5-7B 는 중국 모델이라 source 가 중국어/일본어면 본문도 그 언어로
+        # 써버리는 native bias 가 있다 (프롬프트의 "중국어 금지" 규칙을 어김).
+        # 생성 직후 count_foreign_cjk 로 검사해 외국어가 임계 초과로 섞이면 더 강한
+        # 경고를 붙여 최대 _MAX_LANG_RETRIES 회 재생성. 끝까지 실패하면 마지막 결과를
+        # 저장하되 error 로그 (빈 본문보단 나음 + 백필로 추후 재시도 가능).
+        raw_body = ""
+        body_model = ""
+        llm_resp = None
+        extra_warning = ""
+        for attempt in range(1 + _MAX_LANG_RETRIES):
+            llm_resp = await provider.chat(
+                messages=[
+                    ChatMessage(role="system", content=system_msg),
+                    ChatMessage(role="user", content=user_msg + extra_warning),
+                ],
+                model=self.llm_model,
+                temperature=0.6,
+                max_tokens=6144,
+            )
+            raw_body = llm_resp.text.strip()
+            body_model = f"{llm_resp.provider}/{llm_resp.model}"
+            foreign_count = count_foreign_cjk(raw_body)
+            if foreign_count <= FOREIGN_THRESHOLD:
+                break
+            logger.warning(
+                "writer body 외국어(중국어/일본어) %d자 감지 — 재생성 %d/%d (page=%s)",
+                foreign_count, attempt + 1, _MAX_LANG_RETRIES, page_id,
+            )
+            extra_warning = _LANG_RETRY_WARNING
+
+        # ── 번역 폴백 — 재생성으로도 외국어가 남으면 한국어로 번역 ──
+        # "새로 써라"(생성)는 native bias 를 못 이기지만 "번역하라"(변환)는 잘 한다.
+        if count_foreign_cjk(raw_body) > FOREIGN_THRESHOLD:
+            before = count_foreign_cjk(raw_body)
+            logger.warning(
+                "writer body 외국어 %d자 — 재생성 실패, 한국어 번역 폴백 (page=%s)",
+                before, page_id,
+            )
+            translated = await self._translate_to_korean(provider, raw_body)
+            after = count_foreign_cjk(translated)
+            # 번역이 외국어를 줄였을 때만 채택 (드물게 번역이 더 망가지면 원본 유지)
+            if translated and after < before:
+                raw_body = translated
+            if count_foreign_cjk(raw_body) > FOREIGN_THRESHOLD:
+                logger.error(
+                    "writer body 번역 후에도 외국어 %d자 잔존 — 마지막 결과 저장 (page=%s). "
+                    "백필 재실행으로 추후 재시도 가능.",
+                    count_foreign_cjk(raw_body), page_id,
+                )
 
         # ── 사용자 명시 (2026-05-26): body 와 aside 의 데이터 중복 정리 ──
         # body 에서 ## Sources / ## Cross-links / ## Keywords 섹션 제거.
@@ -180,6 +283,9 @@ class WriterAgent(AgentBase):
         # 키워드 정규화 (2026-05-29) — 영문 only(CJK/한글 삭제) + 소문자-대시 + dedup.
         extracted_keywords = normalize_keywords(_parse_keywords_section(raw_body))
         body = _strip_metadata_sections(raw_body)
+        # 제목(# 헤더) + TL;DR(> 인용) 추출 → wiki_pages.title / description. 한국어·정제 통일.
+        clean_title = _extract_title(body)
+        tldr = _extract_tldr(body)
 
         # version+1 결정 (latest_version 은 retriever 가 가져옴)
         latest = int(wiki_context["page"]["latest_version"] or 0)
@@ -191,6 +297,8 @@ class WriterAgent(AgentBase):
             "body_model": body_model,
             "body_prompt_version": self.agent_version,
             "page_id": str(page_id),
+            "title": clean_title,
+            "description": tldr,
         })
 
         # 1.5) extracted_keywords 는 위에서 raw_body 로부터 파싱한 결과를 그대로 사용.
@@ -274,6 +382,57 @@ _METADATA_HEADER_PATTERNS = (
     "## 최근 추가",
     "## Latest",
 )
+
+
+def _extract_title(body: str) -> str | None:
+    """body 의 `# 헤더`(첫 H1)를 제목으로 추출.
+
+    writer 가 raw item title(SNS 제목·해시태그·"댓글 N" 등 지저분)을 받아도 `# 헤더`엔
+    핵심 제목(예: "CLOC")을 만든다. 이를 wiki_pages.title 로 써서 리스트·상세 제목을
+    정제 (옛날엔 raw item title 복사라 지저분했음). `## ` (H2)는 제외, 첫 `# ` 만.
+    너무 길면(>200자) raw 가 그대로 들어온 것으로 보고 버림(None → 기존 유지).
+    """
+    if not body:
+        return None
+    for line in body.split("\n"):
+        s = line.strip()
+        if s.startswith("# "):
+            title = s[2:].strip().strip("#").strip()
+            if title and len(title) <= 200:
+                return title
+            return None
+        if s and not s.startswith("#"):
+            # 첫 비어있지 않은 줄이 H1 이 아니면 헤더 없음
+            return None
+    return None
+
+
+def _extract_tldr(body: str) -> str | None:
+    """body 의 TL;DR (markdown `> ...` 인용 블록) 을 한 줄 텍스트로 추출.
+
+    writer_v1.yaml 형식상 `# title` 다음에 `> {TL;DR}` 가 온다. 리스트 카드의
+    description 미리보기로 쓴다 (옛날엔 item summary 복사라 중국어가 섞였음).
+    여러 줄 인용이면 합쳐서 반환. `>` 블록이 없으면 None (caller 가 기존 유지).
+    """
+    if not body:
+        return None
+    lines: list[str] = []
+    started = False
+    for line in body.split("\n"):
+        s = line.strip()
+        if s.startswith(">"):
+            started = True
+            lines.append(s.lstrip(">").strip())
+        elif started:
+            # 인용 블록 끝 (빈 줄 또는 다른 내용)
+            break
+    text = " ".join(p for p in lines if p).strip()
+    # 모델이 가끔 "TL;DR:" / "요약:" 접두어를 붙임 — 미리보기엔 군더더기라 제거.
+    for prefix in ("TL;DR:", "TL;DR :", "**TL;DR**:", "TL;DR", "요약:", "요약 :"):
+        if text[: len(prefix)].lower() == prefix.lower():
+            text = text[len(prefix):].strip()
+            break
+    return text or None
 
 
 def _strip_metadata_sections(body: str) -> str:
@@ -372,7 +531,9 @@ def _build_user_message(template: str, wiki_context: dict[str, Any]) -> str:
     )
 
     # 본문에 깊이 인용할 top-N + 나머지는 listing only
-    DEEP_TOP_N = 6
+    # (2026-05-30) 6→8 + summary 200→400 — Gemma 8192 context + max_tokens 4096 여유로
+    # source 를 더 풍부하게 전달해 본문 깊이 향상.
+    DEEP_TOP_N = 8
     deep_sources = sources[:DEEP_TOP_N]
     listing_only_sources = sources[DEEP_TOP_N:]
 
@@ -385,7 +546,7 @@ def _build_user_message(template: str, wiki_context: dict[str, Any]) -> str:
             f" [confidence={s.get('confidence', 1.0):.2f}, role={s.get('role') or '-'}]"
         )
         if s.get("summary"):
-            summary_short = s["summary"][:200]
+            summary_short = s["summary"][:400]
             sources_block_lines.append(f"  요약: {summary_short}")
         if s.get("tags"):
             sources_block_lines.append(f"  tags: {' '.join('#' + t for t in s['tags'][:6])}")
