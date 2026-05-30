@@ -14,6 +14,7 @@ chunks 빠진 "반쪽" item 이 생기는 문제 해결. analysis_worker 와 동
     python -m backend.jobs.backfill_summary               # summary IS NULL 인 모든 item
     python -m backend.jobs.backfill_summary <item_id>     # 특정 item 1개
     python -m backend.jobs.backfill_summary --force       # summary 있어도 모두 재생성
+    python -m backend.jobs.backfill_summary --only-foreign  # 중국어/일본어 섞인 summary 만 재생성
 """
 from __future__ import annotations
 
@@ -31,12 +32,17 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker  # noqa: E40
 from backend import runtime_settings  # noqa: E402
 from backend.db.connection import get_engine  # noqa: E402
 from backend.ingest.url import ExtractedDoc, _embed_and_index, _generate_and_save_summary  # noqa: E402
+from backend.utils.lang import (  # noqa: E402
+    FOREIGN_CJK_SQL_PATTERN,
+    FOREIGN_THRESHOLD,
+    count_foreign_cjk,
+)
 
 logger = logging.getLogger("linkmind.backfill_summary")
 
 
 async def _fetch_targets(
-    session: AsyncSession, *, item_id: UUID | None, force: bool,
+    session: AsyncSession, *, item_id: UUID | None, force: bool, only_foreign: bool,
 ) -> list[tuple[UUID, str, str, str | None, dict[str, Any]]]:
     """(item_id, source_type, raw_content, title, source_metadata) 튜플 목록."""
     if item_id is not None:
@@ -47,6 +53,21 @@ async def _fetch_targets(
             """),
             {"id": str(item_id)},
         )
+    elif only_foreign:
+        # 중국어/일본어 섞인 summary 만 — SQL 로 한자/가나 1자+ 후보를 좁힌 뒤
+        # Python count_foreign_cjk 로 threshold 초과만 정밀 선별 (Qwen 시절 잔재).
+        rows = await session.execute(
+            text(
+                "SELECT id, source_type, raw_content, title, source_metadata, summary "
+                "FROM items WHERE summary IS NOT NULL AND summary ~ :pat ORDER BY ingested_at"
+            ),
+            {"pat": FOREIGN_CJK_SQL_PATTERN},
+        )
+        return [
+            (r.id, r.source_type, r.raw_content, r.title, r.source_metadata or {})
+            for r in rows.all()
+            if count_foreign_cjk(r.summary) > FOREIGN_THRESHOLD
+        ]
     elif force:
         rows = await session.execute(text(
             "SELECT id, source_type, raw_content, title, source_metadata FROM items "
@@ -66,7 +87,8 @@ async def _fetch_targets(
 async def main() -> int:
     args = sys.argv[1:]
     force = "--force" in args
-    args = [a for a in args if a != "--force"]
+    only_foreign = "--only-foreign" in args
+    args = [a for a in args if a not in ("--force", "--only-foreign")]
     item_id: UUID | None = UUID(args[0]) if args else None
 
     engine = get_engine()
@@ -77,7 +99,9 @@ async def main() -> int:
     await runtime_settings.seed_and_load()
 
     async with session_factory() as session:
-        targets = await _fetch_targets(session, item_id=item_id, force=force)
+        targets = await _fetch_targets(
+            session, item_id=item_id, force=force, only_foreign=only_foreign,
+        )
         if not targets:
             print("대상 없음 (이미 모두 summary 보유, 또는 item 미존재).")
             return 0
