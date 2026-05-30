@@ -275,25 +275,6 @@ export default function ItemDetails({ itemId, onClose }: ItemDetailsProps) {
             </button>
           </section>
 
-          {/* tags */}
-          {item.tags.length > 0 && (
-            <section>
-              <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1">
-                {t.itemDetails.tagsLabel}
-              </div>
-              <div className="flex flex-wrap gap-1">
-                {item.tags.map((tag) => (
-                  <span
-                    key={tag}
-                    className="text-[10px] px-1.5 py-0.5 bg-zinc-100 dark:bg-zinc-800 rounded"
-                  >
-                    {tag}
-                  </span>
-                ))}
-              </div>
-            </section>
-          )}
-
           {/* summary */}
           {item.summary && (
             <section>

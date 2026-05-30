@@ -51,7 +51,7 @@ _FETCH_SOURCES_SQL = text("""
     SELECT
         wpi.item_id, wpi.confidence, wpi.source, wpi.role, wpi.user_action,
         i.title, i.summary, i.source_type, i.source_url,
-        i.tags, i.user_notes, i.is_read,
+        i.user_notes, i.is_read,
         i.ingested_at, i.source_metadata
     FROM wiki_page_items wpi
     JOIN items i ON i.id = wpi.item_id
@@ -198,7 +198,6 @@ async def _build_wiki_context(
             "source_url": r["source_url"],
             "confidence": float(r["confidence"]) if r["confidence"] is not None else None,
             "role": r["role"],
-            "tags": list(r["tags"] or []),
             "user_notes": r["user_notes"],
             "is_read": bool(r["is_read"]),
             "ingested_at": r["ingested_at"].isoformat() if r["ingested_at"] else None,

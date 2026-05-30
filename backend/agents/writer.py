@@ -548,8 +548,6 @@ def _build_user_message(template: str, wiki_context: dict[str, Any]) -> str:
         if s.get("summary"):
             summary_short = s["summary"][:400]
             sources_block_lines.append(f"  요약: {summary_short}")
-        if s.get("tags"):
-            sources_block_lines.append(f"  tags: {' '.join('#' + t for t in s['tags'][:6])}")
         if s.get("attachments"):
             att_summary = ", ".join(
                 f"{a.get('role') or 'file'}({a.get('mime_type') or '?'})"

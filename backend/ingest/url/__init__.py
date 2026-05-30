@@ -817,9 +817,10 @@ async def refresh_existing_item_analysis(
 async def _generate_and_save_summary(
     session: AsyncSession, *, item_id: UUID, doc: ExtractedDoc,
 ) -> tuple[str | None, list[str]]:
-    """LLM 으로 한국어 요약(+ 해시태그) 생성 → items.summary + tags 저장.
+    """LLM 으로 한국어 bullet 요약 생성 → items.summary 저장. (tags 생성 중단 2026-05-30)
 
-    Returns: (summary_text or None, final_tags). 실패해도 ingest 자체는 계속됨.
+    Returns: (summary_text or None, []). tags 는 더 이상 만들지 않음(항상 빈 리스트) —
+    #tag 검색 폐기 + 위키 키워드(wiki_pages.keywords)로 대체. 실패해도 ingest 는 계속됨.
     """
     # abstract 가 있고 너무 짧지 않으면 우선 입력으로. 없으면 본문 앞부분.
     # 둘 다 _SUMMARY_INPUT_LIMIT 으로 cap — 플레이리스트처럼 abstract 자체가 매우 긴
@@ -853,28 +854,10 @@ async def _generate_and_save_summary(
             "요약 생성 실패 (ingest 는 계속): %s: %s",
             type(e).__name__, e or "(no message)",
         )
-        # 그래도 paper_keywords 만이라도 tags 로 저장.
-        if doc.paper_keywords:
-            tags = _normalize_tags(doc.paper_keywords)[:_TAG_MAX]
-            await update_item_analysis(
-                session, item_id=item_id, summary=None, summary_model=None,
-                summary_prompt_version=None, categories=None, tags=tags,
-            )
-            await session.commit()
-            return None, tags
         return None, []
 
-    # LLM hashtags + paper meta keywords 머지 → dedup → 길이 제한.
-    llm_tags = _extract_hashtags(resp.text)
-    merged = _normalize_tags([*doc.paper_keywords, *llm_tags])
-    final_tags = merged[:_TAG_MAX]
-    if len(final_tags) < _TAG_MIN:
-        logger.info(
-            "tags 수가 최소(%d) 미달: %d개 (item=%s). prompt 가 hashtag 줄을 안 뽑았거나 "
-            "키워드 메타가 적은 페이지. summary 본문은 정상.",
-            _TAG_MIN, len(final_tags), item_id,
-        )
-
+    # tags 생성 중단 (2026-05-30) — #tag 검색 폐기 + 위키 키워드(wiki_pages.keywords)로
+    # 대체. tags=[] 로 저장해 재생성된 item 의 옛 tags 도 비운다 (items.tags 컬럼은 보존).
     await update_item_analysis(
         session,
         item_id=item_id,
@@ -882,24 +865,15 @@ async def _generate_and_save_summary(
         summary_model=f"{resp.provider}/{resp.model}",
         summary_prompt_version=prompt_version,
         categories=None,
-        tags=final_tags,
+        tags=[],
     )
     await session.commit()
 
-    # Qdrant chunk payload 의 tags 도 갱신 — 이제 #tag 검색이 Qdrant 필터 단계에서 동작.
-    if final_tags:
-        try:
-            await set_payload_for_item_chunks(
-                item_id=str(item_id), payload={"tags": final_tags},
-            )
-        except Exception as e:  # noqa: BLE001
-            logger.warning("Qdrant chunk payload tags 갱신 실패 (검색은 영향 받을 수 있음): %s", e)
-
     logger.info(
-        "요약 생성: item=%s, model=%s/%s, input=%s, len=%d, tags=%s",
-        item_id, resp.provider, resp.model, input_source, len(resp.text), final_tags,
+        "요약 생성: item=%s, model=%s/%s, input=%s, len=%d",
+        item_id, resp.provider, resp.model, input_source, len(resp.text),
     )
-    return resp.text, final_tags
+    return resp.text, []
 
 
 async def _embed_and_index(

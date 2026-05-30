@@ -77,7 +77,6 @@ export default function GraphView({
       source_type: n.data.source_type,
       source_url: n.data.source_url,
       summary: n.data.summary,
-      tags: n.data.tags,
       is_read: n.data.is_read,
       has_notes: n.data.has_notes,
     }));
