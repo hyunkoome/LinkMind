@@ -295,6 +295,12 @@ class TelegramChannelAgent(ChannelAgent):
         self.settings = _check_env()
         self.watcher_config = _load_watcher_config(self.settings)
 
+        # runtime_settings(DB app_settings) 적재 — vllm_model 등 effective 설정을 backend
+        # daemon 과 동일하게 사용. 안 하면 in-process ingest 가 config.py default(Qwen)로
+        # 떨어져 vLLM 404. env 의 VLLM_MODEL 을 DB 일원화로 제거한 뒤 필요해짐 (2026-05-30).
+        from backend import runtime_settings as _rs
+        await _rs.seed_and_load()
+
         from telethon import TelegramClient
 
         session_path = Path(self.settings.telegram_session_path)
