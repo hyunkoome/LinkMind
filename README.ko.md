@@ -20,11 +20,11 @@
 
 ## 소개
 
-**LinkMind 는 흩어진 자료를 한곳에 모아 "내 지식"으로 만드는 온프레미스 AI 엔진**이다. 텔레그램에 링크를 던지거나 URL 을 넣으면, 원본을 무손실로 보존하고(AI 요약 + 임베딩), 같은 주제끼리 묶어 **llm_wiki** 위키 페이지로 자동 합성한 뒤, 대화형 RAG(`/ask`)로 질문할 수 있다.
+**LinkMind 는 흩어진 자료를 한곳에 모아 "내 지식"으로 만드는 온프레미스 AI 엔진**입니다. 텔레그램에 링크를 던지거나 URL 을 넣으면, 원본을 무손실로 보존하고(AI 요약 + 임베딩), 같은 주제끼리 묶어 **llm_wiki** 위키 페이지로 자동 합성한 뒤, 대화형 RAG(`/ask`)로 질문할 수 있습니다.
 
-backend · agent · UI 를 한 저장소에서 같이 유지하는 **단일 self-contained 시스템**이라, 외부 client agent 없이 self-host 한 방에 다 따라온다.
+backend · agent · UI 를 한 저장소에서 같이 유지하는 **단일 self-contained 시스템**이라, 외부 client agent 없이 self-host 한 방에 다 따라옵니다.
 
-그런데 LinkMind 자체는 **수단**이다. 진짜 목표는 사용자가 누적한 데이터로 **sVLL(small Vision-Language LLM)을 LoRA 파인튜닝**해서 본인만의 personalized AI 엔진을 만들고, 이를 지속적으로 재학습(continuous training loop)하는 것이다. 그래서 모든 설계 결정은 **"이게 학습 데이터를 보존/구조화/내보내는 데 도움이 되는가?"** 라는 질문을 통과한다.
+그런데 LinkMind 자체는 **수단**입니다. 진짜 목표는 사용자가 누적한 데이터로 **sVLL(small Vision-Language LLM)을 LoRA 파인튜닝**해서 본인만의 personalized AI 엔진을 만들고, 이를 지속적으로 재학습(continuous training loop)하는 것입니다. 그래서 모든 설계 결정은 **"이게 학습 데이터를 보존/구조화/내보내는 데 도움이 되는가?"** 라는 질문을 통과합니다.
 
 > **배포 전략**: self-host 우선·기본 모드. 장기적으로 OSS(AGPL v3) 공개 + hosted SaaS 옵션. 단 **사용자 데이터로 운영자의 공통 모델을 학습하는 것은 절대 금지** — personal LoRA 는 "본인 데이터로 본인 모델만".
 
@@ -94,7 +94,7 @@ backend · agent · UI 를 한 저장소에서 같이 유지하는 **단일 self
 
 ## 🧩 아키텍처
 
-backend + agent + UI 를 한 저장소에서 유지하는 단일 배포 단위. 모든 모듈이 같은 venv · 같은 Postgres · 같은 Qdrant 를 공유한다.
+backend + agent + UI 를 한 저장소에서 유지하는 단일 배포 단위입니다. 모든 모듈이 같은 venv · 같은 Postgres · 같은 Qdrant 를 공유합니다.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -131,13 +131,13 @@ backend + agent + UI 를 한 저장소에서 유지하는 단일 배포 단위. 
 
 **기술 스택**: Python 3.11+ (검증 3.13.12 + torch 2.6.0+cu124) · FastAPI · SQLAlchemy 2.0 async + asyncpg · pydantic-settings · PostgreSQL 16 · Qdrant 1.12 · vLLM(Gemma 4 26B-A4B MoE-AWQ, KV cache fp8 + 16384 context) · sentence-transformers(bge-m3) · NVIDIA RTX 4090(CUDA 24GB) · Docker + nvidia-container-toolkit.
 
-> **LLM 은 vLLM(Gemma 4)이 기본.** OpenAI / Anthropic / Ollama 도 provider 추상화로 지원하지만 선택 사항이다. 모델·구동 설정은 DB(`app_settings`) + Settings UI 에서 관리하고 `scripts/vllm_restart.sh` 로 재구동한다.
+> **LLM 은 vLLM(Gemma 4)이 기본입니다.** OpenAI / Anthropic / Ollama 도 provider 추상화로 지원하지만 선택 사항입니다. 모델·구동 설정은 DB(`app_settings`) + Settings UI 에서 관리하고 `scripts/vllm_restart.sh` 로 재구동합니다.
 
 ---
 
 ## 🚀 빠른 시작
 
-> **사전 요건**: Ubuntu(또는 WSL2), NVIDIA RTX 4090(CUDA 24GB) 권장, Docker 24+ + nvidia-container-toolkit. 모든 설정은 `env/dev.env` 환경변수로 관리한다(`env/dev.env.example` 복사).
+> **사전 요건**: Ubuntu(또는 WSL2), NVIDIA RTX 4090(CUDA 24GB) 권장, Docker 24+ + nvidia-container-toolkit. 모든 설정은 `env/dev.env` 환경변수로 관리합니다(`env/dev.env.example` 복사).
 
 <details open>
 <summary><b>step1 — Python 베이스 환경</b></summary>
@@ -230,9 +230,9 @@ python -m ai_agents.telegram_inbox_watcher --no-backfill  # backfill 없이 list
 python -m ai_agents.telegram_inbox_watcher --backfill 50 --no-listen  # 지난 50개만 일괄 처리
 ```
 
-> step5 (`bash scripts/step5_run_dev.sh`)가 backend·frontend 와 함께 이 watcher 를 자동으로 백그라운드 기동한다.
+> step5 (`bash scripts/step5_run_dev.sh`)가 backend·frontend 와 함께 이 watcher 를 자동으로 백그라운드 기동합니다.
 
-**대화형 질문 (`/ask`)** — http://localhost:3001/ask 에서 자연어로 질문. 답변은 누적된 DB 자료 기반 RAG 로 생성되고, citation chips · related_wikis 가 함께 표시된다. 위키 카드를 클릭하면 우측 패널에 상세가 inline 으로 열린다.
+**대화형 질문 (`/ask`)** — http://localhost:3001/ask 에서 자연어로 질문하세요. 답변은 누적된 DB 자료 기반 RAG 로 생성되고, citation chips · related_wikis 가 함께 표시됩니다. 위키 카드를 클릭하면 우측 패널에 상세가 inline 으로 열립니다.
 
 **위키 상태 확인**
 
@@ -254,7 +254,7 @@ python -m backend.jobs.link_photo_captions --dry-run       # 사진 figure 연�
 
 ## 🔒 데이터 5대 원칙
 
-분석 결과(summary, embedding)는 재생성 가능하지만 raw 가 깨지면 복구 불가다. **항상 raw 를 먼저 저장하고 분석은 그 후.**
+분석 결과(summary, embedding)는 재생성 가능하지만 raw 가 깨지면 복구할 수 없습니다. **항상 raw 를 먼저 저장하고, 분석은 그 다음에 합니다.**
 
 | 원칙 | 의미 | 강제 위치 |
 |---|---|---|
@@ -284,18 +284,18 @@ python -m backend.jobs.link_photo_captions --dry-run       # 사진 figure 연�
 
 ## 🤝 기여
 
-LinkMind 는 현재 **단독 개발 단계**(self-host 완성도에 집중)다. 아직 외부 contribution 워크플로를 공식화하지 않았다. 버그 리포트·기능 제안·질문은 [GitHub Issues](https://github.com/hyunkoome/LinkMind/issues)로 남겨주면 검토한다.
+LinkMind 는 현재 **단독 개발 단계**(self-host 완성도에 집중)입니다. 아직 외부 contribution 워크플로를 공식화하지 않았습니다. 버그 리포트·기능 제안·질문은 [GitHub Issues](https://github.com/hyunkoome/LinkMind/issues)로 남겨주시면 검토합니다.
 
-참고로 이 저장소의 모든 문서·커밋 메시지는 한국어로 작성되며, 새 기능 추가 시 단위 테스트 동반 작성이 원칙이다.
+참고로 이 저장소의 모든 문서·커밋 메시지는 한국어로 작성되며, 새 기능 추가 시 단위 테스트 동반 작성이 원칙입니다.
 
 ---
 
 ## 📜 라이센스
 
-LinkMind 는 두 가지 라이센스 옵션을 지향한다 (현재는 self-host 단계로, 상용 라이센스는 "문의 기반"이다).
+LinkMind 는 두 가지 라이센스 옵션을 지향합니다 (현재는 self-host 단계로, 상용 라이센스는 "문의 기반"입니다).
 
-- **AGPL-3.0** — 연구 · self-host · 개인/회사 내부 사용은 무제한 자유. 단 변형해서 네트워크 서비스(SaaS)로 제공할 경우 변경 소스 공개 의무가 따른다 (Plausible / Cal.com / n8n 채택 모델). 자세한 조건은 [`LICENSE`](LICENSE) 참고.
-- **상용 라이센스** — AGPL-3.0 의 공개 의무 없이 닫힌 제품이나 SaaS 에 통합하고 싶다면 이메일로 문의: **hyunkookim.me@gmail.com**
+- **AGPL-3.0** — 연구 · self-host · 개인/회사 내부 사용은 무제한 자유입니다. 단 변형해서 네트워크 서비스(SaaS)로 제공할 경우 변경 소스 공개 의무가 따릅니다 (Plausible / Cal.com / n8n 채택 모델). 자세한 조건은 [`LICENSE`](LICENSE) 를 참고해 주세요.
+- **상용 라이센스** — AGPL-3.0 의 공개 의무 없이 닫힌 제품이나 SaaS 에 통합하고 싶다면 이메일로 문의 바랍니다: **hyunkookim.me@gmail.com**
 
 Copyright (C) 2026 Hyunkoo Kim ([@hyunkoome](https://github.com/hyunkoome)).
 
@@ -308,6 +308,6 @@ Copyright (C) 2026 Hyunkoo Kim ([@hyunkoome](https://github.com/hyunkoome)).
 
 <div align="center">
 
-**LinkMind** — 내가 모은 자료가, 결국 나만의 AI 가 된다.
+**LinkMind** — 내가 모은 자료가, 결국 나만의 AI 가 됩니다.
 
 </div>
