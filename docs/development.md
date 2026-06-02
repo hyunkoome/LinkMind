@@ -109,6 +109,7 @@ bash scripts/run_wiki_backfill.sh            # 옛 page 일괄 wiki body 합성 
 python -m backend.jobs.cleanup_duplicate_wikis --dry-run
 python -m backend.jobs.normalize_keywords --dry-run
 python -m backend.jobs.link_photo_captions --dry-run
+python -m backend.jobs.cleanup_overlinks --dry-run         # 본문-인용 over-link 청소 + self-wiki 보장
 
 # vLLM 모델/설정 관리 (DB 일원화)
 bash scripts/vllm_restart.sh --dry-run       # DB(app_settings)의 vLLM 설정 확인

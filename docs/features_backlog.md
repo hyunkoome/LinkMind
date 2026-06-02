@@ -411,7 +411,7 @@ vLLM-embed 인프라 작업으로 전환**.
 - TEI 임베딩 전환 🚫 폐기 — D13 (2026-05-23) 에서 **vLLM-embed 로 대체** (self-host
   정체성 일관성).
 - MinIO object storage ⏳ — Phase 2 후반. 현재 로컬 FS + `volumes/archive/` 4.7GB 로 충분.
-- **sVLL LoRA 파인튜닝** ⏳ — Phase 5 (몇 달 후):
+- **sVLL LoRA 파인튜닝** ⏳ — Phase 5:
   - 플랫폼: **PyTorch 기반**, **LLaMA-Factory** (UI + CLI, Qwen/LLaMA/Mistral/Qwen2-VL
     + LoRA + QLoRA + DPO/RLHF + vision-language 지원). 대안: Unsloth (메모리 효율 ↑),
     Axolotl (yaml config), torchtune (PyTorch 공식).
