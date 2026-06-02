@@ -38,6 +38,8 @@ from backend.embedding.wiki_qdrant import (
     upsert_wiki_page,
 )
 from backend.embedding.wiki_qdrant import search_wiki_pages as qdrant_search_wiki_pages
+from backend.utils.external_ids import extract_external_ids, native_identity_external_id
+from backend.utils.wiki_slug import sanitize_wiki_slug
 from backend.schemas.models import (
     WikiBatchRegenerateRequest,
     WikiBatchRegenerateResponse,
@@ -314,25 +316,66 @@ async def wiki_statuses(
     return {"statuses": {r["slug"]: r["body_status"] for r in rows}}
 
 
+_WIKI_BY_SLUG_FOR_ITEM_SQL = text("""
+    SELECT wp.slug, wp.title, wp.body_status
+    FROM wiki_page_items wpi
+    JOIN wiki_pages wp ON wp.id = wpi.wiki_page_id
+    WHERE wpi.item_id = :item_id AND wp.slug = :slug
+      AND (wpi.user_action IS NULL OR wpi.user_action != 'removed')
+    LIMIT 1
+""")
+
+
 @router.get("/by-item/{item_id}")
 async def get_wiki_by_item(
     item_id: UUID,
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    """item 의 정체성 위키(self/primary 우선)의 slug + body_status. 없으면 {"wiki": null}.
+    """item "자신의" 위키 slug + body_status. 없으면 {"wiki": null}.
 
-    ask 에서 URL 을 붙여 ingest 한 직후, classifier(백그라운드)가 자기 위키를 만들고
-    writer daemon 이 합성(pending→completed)하는 과정을 프론트가 폴링한다.
+    ask 에서 URL 을 붙여 ingest 한 직후, 그 자료의 *자기* 위키(native 정체성)가
+    classifier(백그라운드)로 생성되고 writer daemon 이 합성(pending→completed)되는
+    과정을 프론트가 폴링한다.
+
+    **native 정체성 우선**: 자기 URL 에서 파생한 위키(youtube→yt__, arxiv→arxiv__,
+    github→github__, 일반→url__item__)를 최우선 반환한다. 그래야 유튜브/아카이브/깃헙
+    링크를 붙였을 때 의미매칭된 다른 주제 위키가 아니라 *그 자료 자신의* 위키가 뜬다.
+    native 위키가 아직 없으면(드묾) self/primary+confidence fallback.
     """
+    item = (await session.execute(
+        text("SELECT source_type, source_url FROM items WHERE id = :id"),
+        {"id": str(item_id)},
+    )).mappings().first()
+
+    native_slug: str | None = None
+    if item:
+        ids = extract_external_ids(url=item["source_url"]) if item["source_url"] else []
+        native = native_identity_external_id(
+            source_type=item["source_type"], url=item["source_url"], ids=ids,
+        )
+        native_slug = (
+            sanitize_wiki_slug(native.slug) if native is not None
+            else sanitize_wiki_slug(f"url:item:{item_id}")
+        )
+
+    # 1) native 정체성 위키가 이 item 에 연결돼 있으면 그걸 반환 (자기 자료의 위키)
+    if native_slug:
+        row = (await session.execute(
+            _WIKI_BY_SLUG_FOR_ITEM_SQL, {"item_id": str(item_id), "slug": native_slug},
+        )).mappings().first()
+        if row:
+            return {"wiki": {
+                "slug": row["slug"], "title": row["title"], "body_status": row["body_status"],
+            }}
+
+    # 2) fallback — self/primary > confidence
     row = (await session.execute(
         _WIKI_BY_ITEM_SQL, {"item_id": str(item_id)},
     )).mappings().first()
     if not row:
         return {"wiki": None}
     return {"wiki": {
-        "slug": row["slug"],
-        "title": row["title"],
-        "body_status": row["body_status"],
+        "slug": row["slug"], "title": row["title"], "body_status": row["body_status"],
     }}
 
 
