@@ -19,7 +19,7 @@ import asyncio
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -296,6 +296,22 @@ _WIKI_BY_ITEM_SQL = text("""
         wpi.confidence DESC NULLS LAST
     LIMIT 1
 """)
+
+
+@router.post("/statuses")
+async def wiki_statuses(
+    slugs: list[str] = Body(..., embed=True),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """여러 slug 의 현재 body_status 를 한 번에 반환 {slug: status}. ask 의 related_wikis
+    배지를 live 로 갱신(pending→completed)하는 데 쓴다. (정적 스냅샷 staleness 해소.)"""
+    if not slugs:
+        return {"statuses": {}}
+    rows = (await session.execute(
+        text("SELECT slug, body_status FROM wiki_pages WHERE slug = ANY(:slugs)"),
+        {"slugs": slugs},
+    )).mappings().all()
+    return {"statuses": {r["slug"]: r["body_status"] for r in rows}}
 
 
 @router.get("/by-item/{item_id}")

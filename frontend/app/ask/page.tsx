@@ -24,6 +24,7 @@ import {
   askQuestion,
   getWikiByItem,
   getWikiPage,
+  getWikiStatuses,
   ingestAuto,
   type AskResponse,
   type WikiPageDetail,
@@ -249,6 +250,32 @@ export default function AskPage() {
     if (pollTokenRef.current === token) setWikiStatus(null); // 타임아웃 — 표시 정리
   };
 
+  // 답변의 모든 related_wikis 배지를 live 상태로 — batch 로 현재 status 조회해 갱신.
+  // 모두 terminal(completed/issues) 되면 종료. 새 질문/새 대화 시 취소.
+  const pollRelatedStatuses = async (slugsIn: string[]) => {
+    const slugs = Array.from(new Set(slugsIn));
+    if (slugs.length === 0) return;
+    const token = pollTokenRef.current; // pollWikiForItem 과 같은 토큰 공유 (공존)
+    for (let i = 0; i < 30; i++) {
+      if (pollTokenRef.current !== token) return;
+      try {
+        const statuses = await getWikiStatuses(slugs);
+        if (pollTokenRef.current !== token) return;
+        for (const [slug, status] of Object.entries(statuses)) {
+          updateWikiBadge(slug, status);
+        }
+        const allTerminal = slugs.every((s) => {
+          const st = statuses[s];
+          return st === "completed" || st === "issues";
+        });
+        if (allTerminal) return;
+      } catch {
+        /* 일시 오류 무시하고 계속 */
+      }
+      await new Promise((r) => setTimeout(r, 3000));
+    }
+  };
+
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const q = input.trim();
@@ -346,6 +373,10 @@ export default function AskPage() {
       );
       if (r.related_wikis.length > 0 && !selectedSlug) {
         setSelectedSlug(r.related_wikis[0].slug);
+      }
+      // 모든 관련 위키 배지를 live 상태로 갱신 (pending → completed 자동 반영)
+      if (r.related_wikis.length > 0) {
+        void pollRelatedStatuses(r.related_wikis.map((w) => w.slug));
       }
     } catch (e) {
       setError((e as Error).message);

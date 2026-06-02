@@ -393,6 +393,16 @@ export async function getWikiByItem(itemId: string): Promise<WikiByItem | null> 
   return r.wiki;
 }
 
+// 여러 slug 의 현재 body_status 를 한 번에 — ask related_wikis 배지 live 갱신용.
+export async function getWikiStatuses(slugs: string[]): Promise<Record<string, string>> {
+  if (slugs.length === 0) return {};
+  const r = await fetchJSON<{ statuses: Record<string, string> }>(`/wiki/statuses`, {
+    method: "POST",
+    body: JSON.stringify({ slugs }),
+  });
+  return r.statuses;
+}
+
 export async function regenerateWikiPage(slug: string): Promise<WikiRegenerateResponse> {
   return fetchJSON<WikiRegenerateResponse>(`/wiki/${encodeURIComponent(slug)}/regenerate`, {
     method: "POST",
