@@ -500,9 +500,14 @@ curl -s http://localhost:8000/wiki/_meta/stats | jq # wiki 상태 (completed/pen
 
 ## 라이센스
 
-**AGPL v3** (OSS 공개 시점에 LICENSE 추가 — Phase 6-B, 6+개월 후 예정). self-host 무제한 자유, 변형해서 SaaS 로 재판매 시 변경 사항 공개 의무. Plausible/Cal.com/n8n 채택 모델. 자세히는 [CLAUDE.md §14](CLAUDE.md).
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 
-`external/{openclaw,hermes-agent,hermes-webui}/` 의 참조 코드는 셋 다 **MIT** — AGPL v3 와 호환. 부분 코드 vendor 시 LICENSE/copyright notice 보존 필수.
+**GNU AGPL v3** — 전문은 [`LICENSE`](LICENSE) 참조.
+Copyright (C) 2026 Hyunkoo Kim ([hyunkoome](https://github.com/hyunkoome)).
+
+self-host 무제한 자유(개인/회사), 단 **변형해서 네트워크 서비스(SaaS)로 제공 시 변경 소스 공개 의무**. Plausible/Cal.com/n8n 채택 모델. AWS/Notion 류의 무단 SaaS 재판매 차단 목적. 자세히는 [CLAUDE.md §14](CLAUDE.md).
+
+`external/{openclaw,hermes-agent,hermes-webui}/` 의 참조 코드는 셋 다 **MIT** — AGPL v3 와 호환. 부분 코드 vendor 시 해당 파일에 MIT LICENSE/copyright attribution 주석 보존 필수.
 
 ## 기여 / 코드 스타일
 
