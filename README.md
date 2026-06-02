@@ -274,13 +274,11 @@ Analysis results (summary, embedding) can be regenerated, but if the raw breaks 
 | **1** | ✅ Done | Postgres + Qdrant + URL ingest + Embedding + Semantic Search + RAG |
 | **2** | ✅ Mostly done | AI summary/tagging, Slack export parser, embedding infra (vLLM-embed), category enrichment. Remaining: feedback table ⏳, dataset exporter ⏳ |
 | **2.5** | ✅ Done | Topic graph, ChannelAgent ABC, Next.js 16 + react-force-graph-3d UI, modality-aware viewer, 3-tier categories, Telegram multi-channel |
-| **3 (D10 wiki)** | ✅ wave-1+2 | schema + 4 agents + wiki API + Qdrant body search + frontend wiki list/detail + KeywordsEditor + backfill + writer daemon + batch CLI |
-| **3 (D11 UX merge)** | ✅ Done | Wiki-centric consolidation, unified status model, new `/ask` page (Step 1), 7-field search |
-| **3 (D10.6)** | ✅ Done | "1 link = 1 wiki", keyword normalization/cloud, photo-figure linking |
-| **3 (remaining)** | 🚧 In progress | Conversational `/ask` (multi-turn + search + agentic actions), real channel expansion in ai_agents, OCR/multimodal, self-learning, critic agent, dataset exporter |
+| **3** | ✅ Mostly done | **llm_wiki system** — classifier/retriever/writer agents, wiki API + Qdrant body search, wiki list/detail UI + KeywordsEditor, writer daemon + batch backfill, "1 link = 1 wiki", keyword normalization/cloud, photo-figure linking, conversational `/ask` (Step 1) |
+| **3** | 🚧 In progress | Conversational `/ask` (multi-turn + search + agentic actions), real channel expansion (Slack/WhatsApp/Discord), OCR/multimodal, self-learning, critic agent, dataset exporter |
 | **4** | ⬜ Not started | **sVLL LoRA fine-tuning** (Gemma 4 26B-A4B QLoRA or Qwen2-VL), vLLM serving |
 | **5** | ⬜ Not started | Continuous training loop, complete on-premise AI engine |
-| **6 (optional)** | Concept | OSS (AGPL v3) release → hosted SaaS (Auth.js + Stripe, multi-tenant, BYOK) |
+| **6** | Concept | OSS (AGPL v3) release → hosted SaaS (Auth.js + Stripe, multi-tenant, BYOK) |
 
 > Next priorities: **conversational `/ask` (multi-turn + search + agentic actions)** → **training pipeline (Phase 4)**.
 

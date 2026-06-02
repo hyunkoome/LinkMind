@@ -273,13 +273,11 @@ python -m backend.jobs.link_photo_captions --dry-run       # 사진 figure 연�
 | **1** | ✅ 완료 | Postgres + Qdrant + URL ingest + Embedding + Semantic Search + RAG |
 | **2** | ✅ 대부분 완료 | AI 요약/태깅, Slack export 파서, 임베딩 인프라(vLLM-embed), 카테고리 강화. 남은 것: feedback 테이블 ⏳, dataset exporter ⏳ |
 | **2.5** | ✅ 완료 | Topic 그래프, ChannelAgent ABC, Next.js 16 + react-force-graph-3d UI, modality-aware viewer, 3-tier categories, Telegram multi-channel |
-| **3 (D10 wiki)** | ✅ wave-1+2 | schema + 4 agent + wiki API + Qdrant body search + frontend wiki list/detail + KeywordsEditor + backfill + writer daemon + batch CLI |
-| **3 (D11 UX 통합)** | ✅ 완료 | wiki 중심 통합, status 모델 통일, `/ask` 신규 페이지(Step 1), 검색 7 필드 확장 |
-| **3 (D10.6)** | ✅ 완료 | "1 링크 = 1 위키", 키워드 정규화/클라우드, 사진 figure 연결 |
-| **3 (남은)** | 🚧 진행 | 대화형 `/ask`(멀티턴 + 검색 + agentic action), ai_agents 실제 채널 확장, OCR/멀티모달, 자가학습, critic agent, dataset exporter |
+| **3** | ✅ 대부분 완료 | **llm_wiki 시스템** — classifier/retriever/writer agent, wiki API + Qdrant body search, wiki 리스트/상세 UI + KeywordsEditor, writer daemon + batch backfill, "1 링크 = 1 위키", 키워드 정규화/클라우드, 사진 figure 연결, 대화형 `/ask`(Step 1) |
+| **3** | 🚧 진행 | 대화형 `/ask`(멀티턴 + 검색 + agentic action), 실제 채널 확장(Slack/WhatsApp/Discord), OCR/멀티모달, 자가학습, critic agent, dataset exporter |
 | **4** | ⬜ 미시작 | **sVLL LoRA 파인튜닝** (Gemma 4 26B-A4B QLoRA 또는 Qwen2-VL), vLLM 서빙 |
 | **5** | ⬜ 미시작 | Continuous training loop, 온프레미스 AI 엔진 완성 |
-| **6 (선택)** | 구상 | OSS(AGPL v3) 공개 → hosted SaaS (Auth.js + Stripe, multi-tenant, BYOK) |
+| **6** | 구상 | OSS(AGPL v3) 공개 → hosted SaaS (Auth.js + Stripe, multi-tenant, BYOK) |
 
 > 다음 우선순위: **대화형 `/ask`(멀티턴 + 검색 + agentic action)** → **학습 파이프라인(Phase 4)**.
 
