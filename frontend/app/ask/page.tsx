@@ -93,6 +93,7 @@ export default function AskPage() {
   const [wikiStatus, setWikiStatus] = useState<{ title: string; slug: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const pollTokenRef = useRef(0); // 새 질문/새 대화 시 이전 폴링 취소용
+  const sessionsRef = useRef<AskSession[]>([]); // 폴링 클로저에서 최신 sessions 참조
 
   // ─── 영속 상태 (localStorage) ───
   const [hydrated, setHydrated] = useState(false);
@@ -143,6 +144,31 @@ export default function AskPage() {
   const activeSession = sessions.find((s) => s.id === activeId) ?? null;
   const messages: AskMessage[] = activeSession?.messages ?? [];
 
+  // 폴링 클로저가 최신 sessions 를 읽을 수 있게 ref 동기화
+  useEffect(() => {
+    sessionsRef.current = sessions;
+  }, [sessions]);
+
+  // 답변 메시지의 related_wikis 배지(body_status 스냅샷)를 live 상태로 갱신.
+  // URL-paste 한 위키가 pending→completed 되면 채팅 배지도 따라 바뀌도록.
+  const updateWikiBadge = (slug: string, status: string) => {
+    setSessions((prev) =>
+      prev.map((s) => ({
+        ...s,
+        messages: s.messages.map((m) =>
+          m.related_wikis
+            ? {
+                ...m,
+                related_wikis: m.related_wikis.map((rw) =>
+                  rw.slug === slug ? { ...rw, body_status: status } : rw,
+                ),
+              }
+            : m,
+        ),
+      })),
+    );
+  };
+
   // 채팅 auto-scroll
   const chatEndRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -190,17 +216,30 @@ export default function AskPage() {
   // "생성 중" 표시 유지, completed 되면 우측 패널에 자동 표시. 새 질문/새 대화 시 취소.
   const pollWikiForItem = async (itemId: string) => {
     const token = ++pollTokenRef.current;
+    let shownDone = false;
     for (let i = 0; i < 30; i++) {
       if (pollTokenRef.current !== token) return; // 취소됨
       try {
         const w = await getWikiByItem(itemId);
         if (w && pollTokenRef.current === token) {
+          updateWikiBadge(w.slug, w.body_status); // 채팅 배지 live 동기화
           if (w.body_status === "completed") {
             setWikiStatus(null);
-            setSelectedSlug(w.slug); // 완성된 위키를 우측에 표시
-            return;
+            if (!shownDone) {
+              setSelectedSlug(w.slug); // 완성된 위키를 우측에 1회 표시
+              shownDone = true;
+            }
+            // 답변 메시지(related_wikis)에 이 위키가 들어와 배지까지 갱신됐으면 종료.
+            // 아직 답변 전(메시지 X)이면 계속 폴링해 다음 iter 에 배지 반영.
+            const inMessage = sessionsRef.current.some((s) =>
+              s.messages.some((m) =>
+                m.related_wikis?.some((rw) => rw.slug === w.slug),
+              ),
+            );
+            if (inMessage) return;
+          } else {
+            setWikiStatus({ title: w.title, slug: w.slug }); // 생성/합성 중
           }
-          setWikiStatus({ title: w.title, slug: w.slug }); // 생성/합성 중
         }
       } catch {
         /* 일시 오류 무시하고 계속 폴링 */
