@@ -371,7 +371,10 @@ export default function AskPage() {
             : s,
         ),
       );
-      if (r.related_wikis.length > 0 && !selectedSlug) {
+      // URL 을 붙인 경우엔 유사 위키를 미리 보여주지 않는다 — 그 자료의 "자기 위키" 가
+      // 합성 완료되면 pollWikiForItem 이 우측에 띄운다 (그 전엔 placeholder 유지).
+      // URL 없이 순수 질문일 때만 가장 관련도 높은 위키를 자동 표시.
+      if (pinIds.length === 0 && r.related_wikis.length > 0 && !selectedSlug) {
         setSelectedSlug(r.related_wikis[0].slug);
       }
       // 모든 관련 위키 배지를 live 상태로 갱신 (pending → completed 자동 반영)
