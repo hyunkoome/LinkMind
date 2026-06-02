@@ -23,6 +23,7 @@ import WikiBody from "@/components/wiki/WikiBody";
 import {
   askQuestion,
   getWikiPage,
+  ingestAuto,
   type AskResponse,
   type WikiPageDetail,
 } from "@/lib/api";
@@ -34,7 +35,18 @@ import {
   type AskMessage,
   type AskProject,
   type AskSession,
+  type IngestedSource,
 } from "@/lib/askStore";
+
+// ask 입력 안의 URL 추출 — 붙여넣으면 자동 ingest 후 그 자료를 근거로 답변.
+const URL_RE = /https?:\/\/[^\s<>"')\]]+/g;
+function extractUrls(text: string): string[] {
+  const m = text.match(URL_RE);
+  if (!m) return [];
+  // trailing 문장부호 제거 + 중복 제거
+  const cleaned = m.map((u) => u.replace(/[.,;!?)\]]+$/, ""));
+  return Array.from(new Set(cleaned));
+}
 
 // 2026-05-27 rename: 'issues' / 'pending' / 'completed' (wiki list 와 일관).
 const STATUS_COLORS: Record<string, string> = {
@@ -75,6 +87,7 @@ function Divider({ onPointerDown }: { onPointerDown: (e: React.PointerEvent) => 
 export default function AskPage() {
   const [input, setInput] = useState("");
   const [pending, setPending] = useState(false);
+  const [ingestStatus, setIngestStatus] = useState<string | null>(null); // URL 수집 진행 표시
   const [error, setError] = useState<string | null>(null);
 
   // ─── 영속 상태 (localStorage) ───
@@ -208,7 +221,36 @@ export default function AskPage() {
     setError(null);
 
     try {
-      const r: AskResponse = await askQuestion({ question: q, top_k: 5 });
+      // ── agentic action: URL-paste-ingest ──
+      // 입력에 URL 이 있으면 먼저 자동 수집(idempotent) → 그 item 을 답변 context 에 pin.
+      // 위키 합성은 ingest 가 건 classifier BackgroundTask 가 백그라운드로 처리.
+      const urls = extractUrls(q);
+      const pinIds: string[] = [];
+      const ingested: IngestedSource[] = [];
+      for (let i = 0; i < urls.length; i++) {
+        setIngestStatus(`🔗 링크 수집 중 (${i + 1}/${urls.length})…`);
+        try {
+          const res = await ingestAuto({ url: urls[i], analyze_now: true });
+          if (res.item_id) {
+            pinIds.push(res.item_id);
+            ingested.push({
+              item_id: res.item_id,
+              title: res.title || urls[i],
+              url: urls[i],
+              created: !!res.created,
+            });
+          }
+        } catch (ie) {
+          setError(`링크 수집 실패: ${urls[i]} — ${(ie as Error).message}`);
+        }
+      }
+      setIngestStatus(null);
+
+      const r: AskResponse = await askQuestion({
+        question: q,
+        top_k: 5,
+        pin_item_ids: pinIds.length ? pinIds : undefined,
+      });
       const assistantMsg: AskMessage = {
         role: "assistant",
         content: r.answer,
@@ -216,6 +258,7 @@ export default function AskPage() {
         citations: r.citations,
         related_wikis: r.related_wikis,
         llm_model: `${r.llm_provider}/${r.llm_model}`,
+        ingested: ingested.length ? ingested : undefined,
       };
       setSessions((prev) =>
         prev.map((s) =>
@@ -236,6 +279,7 @@ export default function AskPage() {
       setError((e as Error).message);
     } finally {
       setPending(false);
+      setIngestStatus(null);
     }
   };
 
@@ -572,6 +616,25 @@ export default function AskPage() {
                 <span className="text-[10px] text-zinc-400">{m.ts}</span>
               </div>
 
+              {/* URL-paste-ingest 로 이 답변 직전 수집한 자료 chip */}
+              {m.ingested && m.ingested.length > 0 && (
+                <div className="mb-2 flex flex-wrap gap-1">
+                  {m.ingested.map((g) => (
+                    <a
+                      key={g.item_id}
+                      href={g.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title={g.url}
+                      className="inline-flex items-center gap-1 max-w-[260px] text-[10px] px-1.5 py-0.5 rounded-full border border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300 hover:underline"
+                    >
+                      🔗 {g.created ? "수집됨" : "기존"}
+                      <span className="truncate">{g.title}</span>
+                    </a>
+                  ))}
+                </div>
+              )}
+
               {m.role === "assistant" ? (
                 <WikiBody body={m.content} className="text-zinc-800 dark:text-zinc-200" />
               ) : (
@@ -648,7 +711,9 @@ export default function AskPage() {
 
           {pending && (
             <div className="text-xs text-zinc-500 italic">
-              🤖 LinkMind 가 자체 DB 검색 중… (vLLM ~30-60초)
+              {ingestStatus
+                ? ingestStatus
+                : "🤖 LinkMind 가 자체 DB 검색 중… (vLLM ~30-60초)"}
             </div>
           )}
 

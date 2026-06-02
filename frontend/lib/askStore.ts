@@ -11,6 +11,13 @@
 
 import type { AskCitation, AskRelatedWiki } from "./api";
 
+export interface IngestedSource {
+  item_id: string;
+  title: string;
+  url: string;
+  created: boolean; // false = 이미 수집돼 있던 자료 (idempotent)
+}
+
 export interface AskMessage {
   role: "user" | "assistant";
   content: string;
@@ -18,6 +25,8 @@ export interface AskMessage {
   citations?: AskCitation[];
   related_wikis?: AskRelatedWiki[];
   llm_model?: string;
+  // URL-paste-ingest 로 이 답변 직전 수집한 자료 (assistant 메시지에 표시)
+  ingested?: IngestedSource[];
 }
 
 export interface AskSession {

@@ -194,6 +194,8 @@ export interface AskRequest {
   top_k?: number;
   llm_provider?: string;
   llm_model?: string;
+  // ask 에서 URL 붙여 방금 ingest 한 item — context 최상단 강제 포함 (URL-paste-ingest)
+  pin_item_ids?: string[];
 }
 
 export interface AskCitation {

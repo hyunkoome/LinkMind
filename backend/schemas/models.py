@@ -88,6 +88,10 @@ class AskRequest(BaseModel):
     top_k: int = Field(default=8, ge=1, le=30)
     llm_provider: Literal["openai", "claude", "ollama"] | None = None
     llm_model: str | None = None
+    # ask 에서 URL 을 붙여 방금 ingest 한 item — 벡터검색 결과와 무관하게 context
+    # 최상단에 강제 포함 (agentic action: URL-paste-ingest, 2026-06-02). 임베딩 인덱싱
+    # 타이밍 race / 순위 누락을 피하기 위해 명시 pin.
+    pin_item_ids: list[UUID] | None = None
 
 
 class AskCitation(BaseModel):
