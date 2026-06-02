@@ -147,3 +147,13 @@ scratch/
 
 # ---------- 구현시 디버깅 캡쳐 이미지 폴더 ----------
 debugs/
+
+# ---------- AI 개발 보조 파일 (Claude Code 등) — 로컬 전용, 공개 저장소엔 X ----------
+# 개발 가이드/에이전트 지침은 개인 PC 로컬에만 둔다. 공개용 문서는 docs/ 로 정리.
+.claude/
+CLAUDE.md
+**/CLAUDE.md
+AGENTS.md
+**/AGENTS.md
+.cursorrules
+.aider*
