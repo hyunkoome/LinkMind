@@ -12,7 +12,7 @@
 ![Qdrant](https://img.shields.io/badge/Qdrant-1.12-DC244C)
 ![vLLM](https://img.shields.io/badge/vLLM-Gemma%204%2026B--A4B-FFCE00)
 
-**English** | [한국어](README_KR.md)
+**English** | [한국어](README.ko.md)
 
 </div>
 
