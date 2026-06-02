@@ -1,5 +1,8 @@
 # Feature Backlog
 
+> **Phase 번호 기준**: README / `CLAUDE.md §12` (2026-06-02 재번호 — 옛 2+2.5 병합=2, 완료 wiki=3, LoRA=5, training loop=6, OSS/SaaS=7). 이 문서 본문의 일부 옛 번호(LoRA=Phase 4, Phase 2.5, Phase 3 OCR 등)는 **레거시**일 수 있으니 정답은 README/§12.
+
+
 세션 중 사용자가 요청한 기능들을 검증/구현 phase 별로 정리. 우선순위는 Phase A → B → C 순.
 TodoWrite 는 "현재 세션의 작업 단계" 추적용, 이 문서는 "기능 단위 backlog" 의 source of truth.
 
@@ -277,7 +280,7 @@ force push: `hyunkoo.dev@watanow.com` → `hyunkoome <hyunkookim.me@gmail.com>`.
 - ask 전용 더 작은 모델 (qwen2.5:7b 또는 ask-tuned) — Settings 에 ingest_model /
   ask_model 분리 필드
 - streaming response (Streamlit 첫 토큰부터 표시)
-- 궁극적으로 **sVLL LoRA 파인튜닝** (Phase 4) — 사용자 데이터 학습 모델로 ask 까지
+- 궁극적으로 **sVLL LoRA 파인튜닝** (Phase 5) — 사용자 데이터 학습 모델로 ask 까지
   처리. 학습 데이터 self-loop 완성.
 
 ---
@@ -380,12 +383,12 @@ vLLM-embed 인프라 작업으로 전환**.
 - arxiv 모듈 (현재는 URL ingest 가 arxiv abs 페이지를 우회 처리 — 별도 모듈로 정돈 시 citation 메타 더 정확)
 - OCR / 멀티모달 이미지 분석 (Phase 3)
 
-### C3. 학습 데이터 파이프라인 (CLAUDE.md Phase 3-5) — 2026-05-25 사용자 명확화 반영
+### C3. 학습 데이터 파이프라인 (CLAUDE.md Phase 3-6) — 2026-05-25 사용자 명확화 반영
 
 **중요 원칙**:
 - 지금 단계 (wave-1~5 + D12 + D10 예정) 의 vLLM 모델 (Qwen2.5-7B 등) 은
   **inference 만** — 사용자 데이터로 학습 절대 X.
-- 학습은 **Phase 4** 에서 시작 — base 모델 + 사용자 본인 LoRA adapter = "내 자체 모델".
+- 학습은 **Phase 5** 에서 시작 — base 모델 + 사용자 본인 LoRA adapter = "내 자체 모델".
 - §11 Privacy 원칙: personal LoRA 는 "사용자 본인 데이터로 본인 모델만" — 운영자 공통
   모델 학습 절대 금지.
 
@@ -394,9 +397,9 @@ vLLM-embed 인프라 작업으로 전환**.
   가 의미 단위 클러스터링으로 진화 예정.
 - feedback 테이블 ⏳ — 사용자 평가 (요약/답변 quality) → Continuous training loop.
   wave 6~7 예정. `/ask` 답변에 👍/👎/수정 메모.
-- dataset exporter ⏳ — Phase 3 후반. **LLaMA-Factory JSONL 포맷** — raw +
+- dataset exporter ⏳ — Phase 5. **LLaMA-Factory JSONL 포맷** — raw +
   summary + user_notes + feedback → 학습 input.
-- **YouTube 자막 재시도 보강 (raw→summary→wiki 체인)** ⏳ — Phase 4 직전 (2026-06-02
+- **YouTube 자막 재시도 보강 (raw→summary→wiki 체인)** ⏳ — Phase 5 직전 (2026-06-02
   사용자 결정, MVP 급하지 않아 미룸). 자막이 IP rate-limit / uploader disabled 로
   빠진 영상(특히 Shorts)은 raw_content 가 빈약 → summary/wiki 도 빈약. throttle 은
   시간 지나면 풀리므로, 실패한 YouTube item 을 나중에 모아 ① 자막 재시도 →
@@ -404,11 +407,11 @@ vLLM-embed 인프라 작업으로 전환**.
   (`body_status='pending'`) 마킹 → writer daemon 자동 재합성. `backend/jobs/` 에
   dry-run + idempotent 잡으로. **위키 본문은 item.summary 기반이라(retriever.py:53,
   writer.py:548) raw 만 보강해선 위키가 안 바뀜 — 반드시 summary→wiki 체인까지 태워야
-  함.** Phase 4 학습 데이터 품질 향상이 목적.
+  함.** Phase 5 학습 데이터 품질 향상이 목적.
 - TEI 임베딩 전환 🚫 폐기 — D13 (2026-05-23) 에서 **vLLM-embed 로 대체** (self-host
   정체성 일관성).
 - MinIO object storage ⏳ — Phase 2 후반. 현재 로컬 FS + `volumes/archive/` 4.7GB 로 충분.
-- **sVLL LoRA 파인튜닝** ⏳ — Phase 4 (몇 달 후):
+- **sVLL LoRA 파인튜닝** ⏳ — Phase 5 (몇 달 후):
   - 플랫폼: **PyTorch 기반**, **LLaMA-Factory** (UI + CLI, Qwen/LLaMA/Mistral/Qwen2-VL
     + LoRA + QLoRA + DPO/RLHF + vision-language 지원). 대안: Unsloth (메모리 효율 ↑),
     Axolotl (yaml config), torchtune (PyTorch 공식).
@@ -420,7 +423,7 @@ vLLM-embed 인프라 작업으로 전환**.
   - GPU 분배: vLLM 중단 → LLaMA-Factory ~12GB → 학습 종료 후 vLLM 재가동.
   - 서빙: vLLM 으로 `--enable-lora --lora-modules linkmind=path/to/adapter` —
     adapter swap 가능.
-- Continuous training loop ⏳ — Phase 5. 자가학습 — 주기적 (예: 매주) feedback
+- Continuous training loop ⏳ — Phase 6. 자가학습 — 주기적 (예: 매주) feedback
   누적 → LoRA 재학습 → 새 adapter 배포.
 
 ---
@@ -556,7 +559,7 @@ karpathy llm_wiki + multi-agent (physics-intern state-centric) + YAML prompt (ml
 - 🚧 critic agent 본격 (citation 검증 + contradiction flag + writer 후처리)
 - 🚧 lint job (모순/stale/orphan)
 - 🚧 `/ask` 답변 filing-back (wiki 적립)
-- 🚧 dataset exporter (Phase 4 LoRA 학습 입력)
+- 🚧 dataset exporter (Phase 5 LoRA 학습 입력)
 
 ### D10.5. ItemDetails user_notes append textarea 통합 ⏳ (D10 안정화 후 작은 wave)
 
@@ -855,13 +858,13 @@ ingest going-forward fix 까지 확장. 모두 사용자 검증 완료.
 - 같이: **ask·검색을 wiki body 기반으로** (item.summary 의존 줄이기). `search_wiki_pages`(wiki_qdrant)
   + `POST /wiki/search` 이미 구현 → 재사용.
 
-**2순위 — 자가학습 (auto-skills) + 학습 파이프라인 (Phase 4)**
+**2순위 — 자가학습 (auto-skills) + 학습 파이프라인 (Phase 5)**
 - **자가학습**: feedback(👍/👎) 누적 → prompt/ingester 자동 개선 (사용자 명령 없이, 자동).
   ※ "위키 링크 업데이트해줘"는 자가학습 아니라 ①의 agentic action(사용자 지시).
 - **학습**: feedback 인프라 (👍/👎/수정 → feedback 테이블) → dataset exporter (raw + summary +
   user_notes + feedback → JSONL) → sVLL LoRA (LLaMA-Factory + Qwen2-VL 또는 Gemma 4)
 
-### Phase 4 학습 파이프라인 — Gemma 4 26B-A4B QLoRA (RTX 4090 24GB)
+### Phase 5 학습 파이프라인 — Gemma 4 26B-A4B QLoRA (RTX 4090 24GB)
 
 > 핵심 원칙: **운영 = AWQ(inference 전용), 학습 = 원본 + QLoRA** 로 분리. 별도 conda env(§4 — 학습용은
 > 그 시점에 생성). personal LoRA = 본인 데이터로 본인 모델만 (§1·§11, 운영자 공통모델 학습 절대 X).
@@ -886,7 +889,7 @@ ingest going-forward fix 까지 확장. 모두 사용자 검증 완료.
 - **merge 필수**: vLLM 이 Gemma 4 **MoE 의 inference LoRA hot-swap 을 미지원**(2026-05-30 확인 —
   `get_expert_mapping must be implemented`). adapter 를 따로 못 올리므로 merge 후 통째 재양자화.
 
-**4) continuous training loop (Phase 5)**
+**4) continuous training loop (Phase 6)**
 - 주기적으로 feedback 누적 → QLoRA 재학습 → merge/양자화 → 재배포. 온프레미스 개인화 엔진 완성.
 
 **그 외 / 보류**
