@@ -129,7 +129,7 @@ A single deployment unit that keeps backend + agent + UI in one repository. Ever
 | **`ai_agents/`** | Multi-channel inbox/gateway daemons. Call the backend HTTP API (never the LLM directly) |
 | **`frontend/`** | Next.js 16 App Router + React 19 + Tailwind v4 + react-force-graph-3d + three.js |
 
-**Tech stack**: Python 3.11+ (verified on 3.13.12 + torch 2.6.0+cu124) · FastAPI · SQLAlchemy 2.0 async + asyncpg · pydantic-settings · PostgreSQL 16 · Qdrant 1.12 · vLLM (Gemma 4 26B-A4B MoE-AWQ, KV cache fp8 + 16384 context) · sentence-transformers (bge-m3) · NVIDIA RTX 4090 (CUDA, 24GB) · Docker + nvidia-container-toolkit.
+**Tech stack**: Python 3.11+ (verified on 3.13.12 + torch 2.6.0+cu124) · FastAPI · SQLAlchemy 2.0 async + asyncpg · pydantic-settings · PostgreSQL 16 · Qdrant 1.12 · vLLM (Gemma 4 26B-A4B MoE-AWQ, KV cache fp8 + 16384 context) · sentence-transformers (bge-m3) · NVIDIA GPU (≥24GB VRAM recommended, 24GB minimum — e.g. RTX 4090) · Docker + nvidia-container-toolkit.
 
 > **The default LLM is vLLM (Gemma 4).** OpenAI / Anthropic / Ollama are also supported through the provider abstraction, but they are optional. Model and runtime settings are managed in the DB (`app_settings`) + Settings UI, and restarted via `scripts/vllm_restart.sh`.
 
@@ -137,7 +137,7 @@ A single deployment unit that keeps backend + agent + UI in one repository. Ever
 
 ## 🚀 Quickstart
 
-> **Prerequisites**: Ubuntu (or WSL2), NVIDIA RTX 4090 (CUDA, 24GB) recommended, Docker 24+ + nvidia-container-toolkit. All settings live in the `env/dev.env` environment file (copy from `env/dev.env.example`).
+> **Prerequisites**: Ubuntu (or WSL2), NVIDIA GPU with **≥24GB VRAM recommended (24GB minimum)** — e.g. RTX 4090, Docker 24+ + nvidia-container-toolkit. All settings live in the `env/dev.env` environment file (copy from `env/dev.env.example`).
 
 <details open>
 <summary><b>step1 — Python base environment</b></summary>

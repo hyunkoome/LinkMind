@@ -129,7 +129,7 @@ backend + agent + UI 를 한 저장소에서 유지하는 단일 배포 단위�
 | **`ai_agents/`** | 여러 채널의 inbox/gateway daemon. backend HTTP API 호출 (LLM 직접 호출 금지) |
 | **`frontend/`** | Next.js 16 App Router + React 19 + Tailwind v4 + react-force-graph-3d + three.js |
 
-**기술 스택**: Python 3.11+ (검증 3.13.12 + torch 2.6.0+cu124) · FastAPI · SQLAlchemy 2.0 async + asyncpg · pydantic-settings · PostgreSQL 16 · Qdrant 1.12 · vLLM(Gemma 4 26B-A4B MoE-AWQ, KV cache fp8 + 16384 context) · sentence-transformers(bge-m3) · NVIDIA RTX 4090(CUDA 24GB) · Docker + nvidia-container-toolkit.
+**기술 스택**: Python 3.11+ (검증 3.13.12 + torch 2.6.0+cu124) · FastAPI · SQLAlchemy 2.0 async + asyncpg · pydantic-settings · PostgreSQL 16 · Qdrant 1.12 · vLLM(Gemma 4 26B-A4B MoE-AWQ, KV cache fp8 + 16384 context) · sentence-transformers(bge-m3) · NVIDIA GPU(VRAM 24GB 이상 권장, 최소 24GB — 예: RTX 4090) · Docker + nvidia-container-toolkit.
 
 > **LLM 은 vLLM(Gemma 4)이 기본입니다.** OpenAI / Anthropic / Ollama 도 provider 추상화로 지원하지만 선택 사항입니다. 모델·구동 설정은 DB(`app_settings`) + Settings UI 에서 관리하고 `scripts/vllm_restart.sh` 로 재구동합니다.
 
@@ -137,7 +137,7 @@ backend + agent + UI 를 한 저장소에서 유지하는 단일 배포 단위�
 
 ## 🚀 빠른 시작
 
-> **사전 요건**: Ubuntu(또는 WSL2), NVIDIA RTX 4090(CUDA 24GB) 권장, Docker 24+ + nvidia-container-toolkit. 모든 설정은 `env/dev.env` 환경변수로 관리합니다(`env/dev.env.example` 복사).
+> **사전 요건**: Ubuntu(또는 WSL2), NVIDIA GPU **VRAM 24GB 이상 권장(최소 24GB)** — 예: RTX 4090, Docker 24+ + nvidia-container-toolkit. 모든 설정은 `env/dev.env` 환경변수로 관리합니다(`env/dev.env.example` 복사).
 
 <details open>
 <summary><b>step1 — Python 베이스 환경</b></summary>
