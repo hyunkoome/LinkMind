@@ -381,6 +381,18 @@ export async function getWikiPage(
   return fetchJSON<WikiPageDetail>(`/wiki/${encodeURIComponent(slug)}${qs ? "?" + qs : ""}`);
 }
 
+export interface WikiByItem {
+  slug: string;
+  title: string;
+  body_status: string; // 'issues' | 'pending' | 'completed'
+}
+
+// item 의 정체성 위키(self/primary) — ask URL-paste 후 위키 생성/합성 폴링용. 없으면 null.
+export async function getWikiByItem(itemId: string): Promise<WikiByItem | null> {
+  const r = await fetchJSON<{ wiki: WikiByItem | null }>(`/wiki/by-item/${itemId}`);
+  return r.wiki;
+}
+
 export async function regenerateWikiPage(slug: string): Promise<WikiRegenerateResponse> {
   return fetchJSON<WikiRegenerateResponse>(`/wiki/${encodeURIComponent(slug)}/regenerate`, {
     method: "POST",

@@ -282,6 +282,44 @@ async def _wiki_context_to_response(wiki_context: dict) -> WikiPageDetail:
     )
 
 
+# item 의 정체성 위키(self/primary 우선) — ask 의 URL-paste-ingest 후 "이 자료의 위키"
+# 를 찾아 상태(pending/completed)를 폴링하는 데 쓴다. /{slug} 보다 먼저 등록(2 세그먼트라
+# 충돌은 없지만 방어적으로 위에 둠).
+_WIKI_BY_ITEM_SQL = text("""
+    SELECT wp.slug, wp.title, wp.body_status
+    FROM wiki_page_items wpi
+    JOIN wiki_pages wp ON wp.id = wpi.wiki_page_id
+    WHERE wpi.item_id = :item_id
+      AND (wpi.user_action IS NULL OR wpi.user_action != 'removed')
+    ORDER BY
+        CASE wpi.role WHEN 'self' THEN 0 WHEN 'primary' THEN 1 ELSE 2 END,
+        wpi.confidence DESC NULLS LAST
+    LIMIT 1
+""")
+
+
+@router.get("/by-item/{item_id}")
+async def get_wiki_by_item(
+    item_id: UUID,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """item 의 정체성 위키(self/primary 우선)의 slug + body_status. 없으면 {"wiki": null}.
+
+    ask 에서 URL 을 붙여 ingest 한 직후, classifier(백그라운드)가 자기 위키를 만들고
+    writer daemon 이 합성(pending→completed)하는 과정을 프론트가 폴링한다.
+    """
+    row = (await session.execute(
+        _WIKI_BY_ITEM_SQL, {"item_id": str(item_id)},
+    )).mappings().first()
+    if not row:
+        return {"wiki": None}
+    return {"wiki": {
+        "slug": row["slug"],
+        "title": row["title"],
+        "body_status": row["body_status"],
+    }}
+
+
 @router.get("/{slug}", response_model=WikiPageDetail)
 async def get_wiki_page(
     slug: str,

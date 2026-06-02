@@ -22,6 +22,7 @@ import KeywordsEditor from "@/components/wiki/KeywordsEditor";
 import WikiBody from "@/components/wiki/WikiBody";
 import {
   askQuestion,
+  getWikiByItem,
   getWikiPage,
   ingestAuto,
   type AskResponse,
@@ -88,7 +89,10 @@ export default function AskPage() {
   const [input, setInput] = useState("");
   const [pending, setPending] = useState(false);
   const [ingestStatus, setIngestStatus] = useState<string | null>(null); // URL 수집 진행 표시
+  // URL-paste 후 그 자료의 위키 생성/합성 진행 표시 (pending → completed 폴링)
+  const [wikiStatus, setWikiStatus] = useState<{ title: string; slug: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const pollTokenRef = useRef(0); // 새 질문/새 대화 시 이전 폴링 취소용
 
   // ─── 영속 상태 (localStorage) ───
   const [hydrated, setHydrated] = useState(false);
@@ -182,6 +186,30 @@ export default function AskPage() {
   };
 
   // ─── 질문 전송 ───
+  // URL-paste 한 자료의 위키를 폴링 — 없으면(classifier 생성 중)·pending(합성 중)이면
+  // "생성 중" 표시 유지, completed 되면 우측 패널에 자동 표시. 새 질문/새 대화 시 취소.
+  const pollWikiForItem = async (itemId: string) => {
+    const token = ++pollTokenRef.current;
+    for (let i = 0; i < 30; i++) {
+      if (pollTokenRef.current !== token) return; // 취소됨
+      try {
+        const w = await getWikiByItem(itemId);
+        if (w && pollTokenRef.current === token) {
+          if (w.body_status === "completed") {
+            setWikiStatus(null);
+            setSelectedSlug(w.slug); // 완성된 위키를 우측에 표시
+            return;
+          }
+          setWikiStatus({ title: w.title, slug: w.slug }); // 생성/합성 중
+        }
+      } catch {
+        /* 일시 오류 무시하고 계속 폴링 */
+      }
+      await new Promise((r) => setTimeout(r, 3000));
+    }
+    if (pollTokenRef.current === token) setWikiStatus(null); // 타임아웃 — 표시 정리
+  };
+
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const q = input.trim();
@@ -219,6 +247,8 @@ export default function AskPage() {
     setInput("");
     setPending(true);
     setError(null);
+    setWikiStatus(null);
+    pollTokenRef.current++; // 이전 폴링 취소
 
     try {
       // ── agentic action: URL-paste-ingest ──
@@ -245,6 +275,9 @@ export default function AskPage() {
         }
       }
       setIngestStatus(null);
+
+      // 수집한 자료의 위키 생성/합성 폴링 시작 (답변 생성과 동시 진행)
+      if (pinIds.length) void pollWikiForItem(pinIds[0]);
 
       const r: AskResponse = await askQuestion({
         question: q,
@@ -289,6 +322,8 @@ export default function AskPage() {
     setInput("");
     setError(null);
     setMenuFor(null);
+    setWikiStatus(null);
+    pollTokenRef.current++; // 진행 중 위키 폴링 취소
   };
 
   const selectSession = (id: string) => {
@@ -714,6 +749,20 @@ export default function AskPage() {
               {ingestStatus
                 ? ingestStatus
                 : "🤖 LinkMind 가 자체 DB 검색 중… (vLLM ~30-60초)"}
+            </div>
+          )}
+
+          {/* URL-paste 한 자료의 위키 생성/합성 진행 — 완성되면 우측 패널에 자동 표시 */}
+          {wikiStatus && (
+            <div className="text-xs text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-900/20 p-2 rounded border border-blue-200 dark:border-blue-800 flex items-start gap-2">
+              <span className="animate-pulse mt-0.5">📝</span>
+              <span>
+                <span className="font-medium">{wikiStatus.title}</span> 위키 생성 중…
+                <Link href="/wiki?status=pending" className="ml-1 underline hover:text-blue-900 dark:hover:text-blue-100">
+                  위키 ▸ pending 탭
+                </Link>
+                에서도 확인할 수 있습니다.
+              </span>
             </div>
           )}
 
