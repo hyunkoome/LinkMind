@@ -50,7 +50,9 @@ export default function RootLayout({
       <body className="min-h-screen h-screen bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100 flex flex-col">
         <LocaleProvider>
           <Header />
-          <div className="flex-1 min-h-0">{children}</div>
+          {/* flex flex-col — 페이지가 flex-1/h-full 로 viewport 잔여 높이를 꽉 채우게.
+              block 이면 자식의 flex-1 이 무효라 높이가 collapse 됨 (ask 패널 빈공간 버그). */}
+          <div className="flex-1 min-h-0 flex flex-col">{children}</div>
         </LocaleProvider>
       </body>
     </html>

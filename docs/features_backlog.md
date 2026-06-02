@@ -396,6 +396,15 @@ vLLM-embed 인프라 작업으로 전환**.
   wave 6~7 예정. `/ask` 답변에 👍/👎/수정 메모.
 - dataset exporter ⏳ — Phase 3 후반. **LLaMA-Factory JSONL 포맷** — raw +
   summary + user_notes + feedback → 학습 input.
+- **YouTube 자막 재시도 보강 (raw→summary→wiki 체인)** ⏳ — Phase 4 직전 (2026-06-02
+  사용자 결정, MVP 급하지 않아 미룸). 자막이 IP rate-limit / uploader disabled 로
+  빠진 영상(특히 Shorts)은 raw_content 가 빈약 → summary/wiki 도 빈약. throttle 은
+  시간 지나면 풀리므로, 실패한 YouTube item 을 나중에 모아 ① 자막 재시도 →
+  raw_content 보강 ② summary 재생성(보강된 raw 기반) ③ 연결된 wiki_pages 를 stale
+  (`body_status='pending'`) 마킹 → writer daemon 자동 재합성. `backend/jobs/` 에
+  dry-run + idempotent 잡으로. **위키 본문은 item.summary 기반이라(retriever.py:53,
+  writer.py:548) raw 만 보강해선 위키가 안 바뀜 — 반드시 summary→wiki 체인까지 태워야
+  함.** Phase 4 학습 데이터 품질 향상이 목적.
 - TEI 임베딩 전환 🚫 폐기 — D13 (2026-05-23) 에서 **vLLM-embed 로 대체** (self-host
   정체성 일관성).
 - MinIO object storage ⏳ — Phase 2 후반. 현재 로컬 FS + `volumes/archive/` 4.7GB 로 충분.

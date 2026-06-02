@@ -233,7 +233,10 @@ class ClassifierAgent(AgentBase):
                 ],
                 model=self.llm_model,
                 temperature=0.1,    # JSON 안정
-                max_tokens=1024,
+                # 후보 30개를 매칭하면 matched 배열이 길어진다. 1024 는 url__item__
+                # <uuid> 같은 긴 slug 가 많을 때 중간에서 잘려 (truncation) JSON parse
+                # 가 실패했다 (2026-06-02 텔레그램 ingest classifier hook linked=0 원인).
+                max_tokens=2048,
             )
             last_text = llm_resp.text.strip()
             parsed = _try_parse_json(last_text)
@@ -241,6 +244,17 @@ class ClassifierAgent(AgentBase):
                 break
             last_error = f"JSON parse 실패 (attempt {attempt + 1}): {last_text[:200]}"
             logger.warning(last_error)
+
+        # 모든 재시도가 truncation 으로 실패했으면 — 잘린 응답에서 완성된 matched
+        # 요소라도 복구 (max_tokens 를 늘려도 후보가 더 많으면 또 잘릴 수 있으므로
+        # resilience 로 둔다). 복구 실패 시에만 RuntimeError.
+        if parsed is None:
+            parsed = _salvage_truncated_json(last_text)
+            if parsed is not None:
+                logger.warning(
+                    "classifier JSON truncated — salvage 로 matched %d개 복구",
+                    len(parsed.get("matched") or []),
+                )
 
         if parsed is None:
             raise RuntimeError(last_error or "JSON parse 실패")
@@ -480,6 +494,74 @@ def _try_parse_json(s: str) -> dict[str, Any] | None:
         except json.JSONDecodeError:
             pass
     return None
+
+
+def _salvage_truncated_json(s: str) -> dict[str, Any] | None:
+    """max_tokens 초과로 잘린 JSON 에서 완성된 요소까지만 복구.
+
+    classifier 응답이 max_tokens 에 막히면 `matched` 배열 중간에서 끊긴다 (닫는
+    `]}` 없음 → 일반 parse 불가). 여기서는 문자열/이스케이프 상태를 추적하며
+    스캔해서, 배열 안에서 element 하나가 완성된 직후의 '안전한 절단점' 을 찾고
+    그 시점에 열려 있던 컨테이너를 닫아 valid JSON 으로 만든다.
+
+    예) `{"matched": [{...완성...}, {...잘림` → `{"matched": [{...완성...}]}`
+
+    온전히 복구 못 하면 None — 호출 측이 RuntimeError 로 처리.
+    """
+    s = s.strip()
+    # 코드 fence opener 가 있으면 그 다음부터
+    m = re.search(r"```(?:json)?\s*", s)
+    if m and s.startswith("```"):
+        s = s[m.end():]
+    start = s.find("{")
+    if start == -1:
+        return None
+    s = s[start:]
+
+    stack: list[str] = []          # 열린 컨테이너 스택 ('{' / '[')
+    in_str = False
+    esc = False
+    safe_cut = -1                  # 안전하게 자를 위치 (배열 element 완성 직후)
+    safe_stack: list[str] = []     # 그 시점의 컨테이너 스택 스냅샷
+
+    for i, ch in enumerate(s):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+                # 배열 안의 문자열 element 가 완성된 지점
+                if stack and stack[-1] == "[":
+                    safe_cut = i + 1
+                    safe_stack = list(stack)
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "{[":
+            stack.append(ch)
+        elif ch == "}":
+            if stack and stack[-1] == "{":
+                stack.pop()
+            # 객체 element 가 배열 안에서 완성된 지점
+            if stack and stack[-1] == "[":
+                safe_cut = i + 1
+                safe_stack = list(stack)
+        elif ch == "]":
+            if stack and stack[-1] == "[":
+                stack.pop()
+
+    if safe_cut == -1:
+        return None
+
+    closing = "".join("]" if opener == "[" else "}" for opener in reversed(safe_stack))
+    candidate = s[:safe_cut] + closing
+    try:
+        data = json.loads(candidate)
+        return data if isinstance(data, dict) else None
+    except json.JSONDecodeError:
+        return None
 
 
 def _build_classifier_user_msg(

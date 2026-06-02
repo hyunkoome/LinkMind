@@ -19,41 +19,51 @@ interface Props {
   className?: string;
 }
 
-const WIKILINK_RE = /\[\[([^\]]+)\]\]/g;
-const CITATION_RE = /\[(\d+)\]/g;
+// inline 패턴들 — 한 줄 안에서 가장 먼저 나오는 것부터 처리.
+// 순서 주의: mdlink([text](url)) 를 citation([N]) 보다 먼저 검사해야 [1](url) 류가
+// citation 으로 오인되지 않음 (동일 index 일 때 우선순위).
+const WIKILINK_RE = /\[\[([^\]]+)\]\]/;          // [[slug]]
+const MDLINK_RE = /\[([^\]]+)\]\(([^)\s]+)\)/;    // [text](url)
+const BOLD_RE = /\*\*([^*]+)\*\*/;                // **bold**
+const CODE_RE = /`([^`]+)`/;                      // `code`
+const CITATION_RE = /\[(\d+)\]/;                  // [N]
+
+type InlineKind = "wl" | "mdlink" | "bold" | "code" | "cit";
 
 /**
- * 한 줄 안의 inline 처리 — [[slug]] / [N] / **bold** / `code` / link.
- * 가벼운 자체 파서 — 완전성 < 안전성.
+ * 한 줄 안의 inline 처리 — [[slug]] / [text](url) / **bold** / `code` / [N].
+ * 가벼운 자체 파서 — 완전성 < 안전성. 매 iteration 마다 남은 문자열에서 가장
+ * 앞서 나오는 패턴을 골라 처리하고 그 뒤로 이어간다 (react-markdown 미도입).
  */
 function renderInline(text: string, lineKey: string): React.ReactNode[] {
   const nodes: React.ReactNode[] = [];
   let remaining = text;
   let idx = 0;
 
+  // 우선순위 순서 (동일 index 충돌 시 앞쪽이 이김)
+  const patterns: Array<{ kind: InlineKind; re: RegExp }> = [
+    { kind: "wl", re: WIKILINK_RE },
+    { kind: "mdlink", re: MDLINK_RE },
+    { kind: "bold", re: BOLD_RE },
+    { kind: "code", re: CODE_RE },
+    { kind: "cit", re: CITATION_RE },
+  ];
+
   while (remaining.length > 0) {
-    // [[wikilink]]
-    const wlMatch = WIKILINK_RE.exec(remaining);
-    WIKILINK_RE.lastIndex = 0; // reset for repeated calls
-
-    // [N] citation
-    const citMatch = CITATION_RE.exec(remaining);
-    CITATION_RE.lastIndex = 0;
-
-    // 가장 먼저 나오는 패턴 선택
     let nextIdx = remaining.length;
-    let nextType: "wl" | "cit" | null = null;
-    if (wlMatch && wlMatch.index < nextIdx) {
-      nextIdx = wlMatch.index;
-      nextType = "wl";
-    }
-    if (citMatch && citMatch.index < nextIdx) {
-      nextIdx = citMatch.index;
-      nextType = "cit";
+    let nextKind: InlineKind | null = null;
+    let nextMatch: RegExpMatchArray | null = null;
+
+    for (const { kind, re } of patterns) {
+      const m = remaining.match(re);
+      if (m && m.index !== undefined && m.index < nextIdx) {
+        nextIdx = m.index;
+        nextKind = kind;
+        nextMatch = m;
+      }
     }
 
-    if (nextType === null) {
-      // 남은 텍스트 그대로
+    if (nextKind === null || nextMatch === null) {
       if (remaining) nodes.push(<span key={`${lineKey}-t${idx}`}>{remaining}</span>);
       break;
     }
@@ -64,8 +74,9 @@ function renderInline(text: string, lineKey: string): React.ReactNode[] {
       idx += 1;
     }
 
-    if (nextType === "wl" && wlMatch) {
-      const slug = wlMatch[1].trim();
+    const matchLen = nextMatch[0].length;
+    if (nextKind === "wl") {
+      const slug = nextMatch[1].trim();
       nodes.push(
         <Link
           key={`${lineKey}-wl${idx}`}
@@ -75,9 +86,38 @@ function renderInline(text: string, lineKey: string): React.ReactNode[] {
           [[{slug}]]
         </Link>,
       );
-      remaining = remaining.slice(nextIdx + wlMatch[0].length);
-    } else if (nextType === "cit" && citMatch) {
-      const num = citMatch[1];
+    } else if (nextKind === "mdlink") {
+      const label = nextMatch[1];
+      const url = nextMatch[2];
+      nodes.push(
+        <a
+          key={`${lineKey}-md${idx}`}
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-blue-600 dark:text-blue-400 hover:underline"
+        >
+          {label}
+        </a>,
+      );
+    } else if (nextKind === "bold") {
+      nodes.push(
+        <strong key={`${lineKey}-b${idx}`} className="font-semibold text-zinc-900 dark:text-zinc-100">
+          {nextMatch[1]}
+        </strong>,
+      );
+    } else if (nextKind === "code") {
+      nodes.push(
+        <code
+          key={`${lineKey}-c${idx}`}
+          className="px-1 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-[0.85em] font-mono text-pink-600 dark:text-pink-400"
+        >
+          {nextMatch[1]}
+        </code>,
+      );
+    } else {
+      // citation [N]
+      const num = nextMatch[1];
       nodes.push(
         <a
           key={`${lineKey}-cit${idx}`}
@@ -87,11 +127,8 @@ function renderInline(text: string, lineKey: string): React.ReactNode[] {
           [{num}]
         </a>,
       );
-      remaining = remaining.slice(nextIdx + citMatch[0].length);
-    } else {
-      // unreachable
-      break;
     }
+    remaining = remaining.slice(nextIdx + matchLen);
     idx += 1;
   }
   return nodes;
