@@ -76,6 +76,15 @@ export default function Header() {
               🗂 {activeSpace?.name}
             </span>
           ))}
+        {/* 로그인 계정 (조직 이름 옆) */}
+        {user && (
+          <span
+            className="text-[11px] text-zinc-400 hidden md:inline"
+            title={locale === "ko" ? "로그인 계정" : "Signed in as"}
+          >
+            · {user.email}
+          </span>
+        )}
         {user && (
           <button
             type="button"
