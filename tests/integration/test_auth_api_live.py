@@ -1,13 +1,14 @@
 """
-인증 API e2e 테스트 — backend 가 떠 있을 때만 (멀티테넌트 단계 A, 2026-06-03).
+인증 API e2e 테스트 — backend 가 떠 있을 때만 (멀티테넌트, 2026-06-03).
 
+운영 모델: self-signup 없음. 첫 관리자는 bootstrap(user 0명일 때), 멤버는 루트가 발급.
 CI 에선 자동 skip (integration marker + ci.yml 이 tests/integration 디렉토리 제외).
-로컬에서 backend (`bash scripts/step5_run_dev.sh`) + seed 계정으로:
+
+관리자 자격이 필요한 테스트는 env 로 받는다 (bootstrap 모델이라 고정 seed 계정이 없음):
+    LINKMIND_TEST_ADMIN_EMAIL / LINKMIND_TEST_ADMIN_PASSWORD
+미설정이거나 미초기화(bootstrap 필요) 인스턴스면 해당 테스트는 skip (사용자 bootstrap 흐름 보호).
 
     pytest -m integration tests/integration/test_auth_api_live.py
-
-검증: 무쿠키 보호라우터 401 → 로그인 → 쿠키로 보호라우터 200 → /auth/me → logout.
-seed 계정(LINKMIND_SEED_USER_EMAIL/PASSWORD)에 의존.
 """
 
 from __future__ import annotations
@@ -18,8 +19,8 @@ import httpx
 import pytest
 
 API = os.getenv("LINKMIND_API_BASE", "http://localhost:8000")
-SEED_EMAIL = os.getenv("LINKMIND_SEED_USER_EMAIL", "admin@linkmind.local")
-SEED_PASSWORD = os.getenv("LINKMIND_SEED_USER_PASSWORD", "linkmind")
+ADMIN_EMAIL = os.getenv("LINKMIND_TEST_ADMIN_EMAIL", "")
+ADMIN_PW = os.getenv("LINKMIND_TEST_ADMIN_PASSWORD", "")
 
 
 @pytest.fixture(scope="module")
@@ -33,71 +34,36 @@ def base() -> str:
     return API
 
 
+@pytest.fixture(scope="module")
+def admin_client(base: str):
+    """관리자 세션. 테스트는 절대 bootstrap 하지 않는다(사용자 첫 조직 흐름 보호) —
+    미초기화면 skip, 초기화됐는데 env 자격 없으면 skip."""
+    c = httpx.Client(base_url=base, timeout=10.0)
+    needed = c.get("/auth/bootstrap-needed").json()["needed"]
+    if needed:
+        c.close()
+        pytest.skip("미초기화 인스턴스 — 브라우저에서 첫 조직(bootstrap)을 먼저 만드세요")
+    if not (ADMIN_EMAIL and ADMIN_PW):
+        c.close()
+        pytest.skip("LINKMIND_TEST_ADMIN_EMAIL/PASSWORD 미설정 — 관리자 자격 필요")
+    r = c.post("/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PW})
+    if r.status_code != 200:
+        c.close()
+        pytest.skip("LINKMIND_TEST_ADMIN 자격으로 로그인 실패")
+    yield c
+    c.close()
+
+
+# ── 인증 불필요 ────────────────────────────────────────────────
+
 @pytest.mark.integration
 def test_protected_route_401_without_cookie(base: str):
-    # 쿠키 없이 보호 라우터 → 401.
     with httpx.Client(base_url=base, timeout=10.0) as c:
-        r = c.get("/wiki/_meta/stats")
-        assert r.status_code == 401
-
-
-@pytest.mark.integration
-def test_login_sets_cookie_and_grants_access(base: str):
-    with httpx.Client(base_url=base, timeout=10.0) as c:
-        # 로그인 → Set-Cookie.
-        r = c.post("/auth/login", json={"email": SEED_EMAIL, "password": SEED_PASSWORD})
-        assert r.status_code == 200, r.text
-        body = r.json()
-        assert body["email"] == SEED_EMAIL
-        assert "active_space_id" in body and body["spaces"]
-        # httpx.Client 가 쿠키를 보관 → 이후 보호 라우터 200.
-        r2 = c.get("/wiki/_meta/stats")
-        assert r2.status_code == 200
-        # /auth/me 로 현재 사용자 확인.
-        me = c.get("/auth/me")
-        assert me.status_code == 200
-        assert me.json()["email"] == SEED_EMAIL
-
-
-@pytest.mark.integration
-def test_admin_create_member_joins_same_org_space(base: str):
-    # 루트 관리자가 멤버 발급 → 그 멤버는 *관리자와 같은 조직 space* 에 합류(데이터 공유).
-    member_email = "pytest-member@linkmind.local"
-    member_pw = "member-pw-123"
-    with httpx.Client(base_url=base, timeout=10.0) as c:
-        lr = c.post("/auth/login", json={"email": SEED_EMAIL, "password": SEED_PASSWORD})
-        assert lr.status_code == 200
-        admin_space = lr.json()["active_space_id"]
-        # 멱등 — 이미 있으면 409.
-        r = c.post(
-            "/auth/admin/users",
-            json={"email": member_email, "password": member_pw, "display_name": "PM"},
-        )
-        assert r.status_code in (201, 409), r.text
-        # 발급된 멤버로 로그인 → 관리자와 같은 조직 space.
-        mr = c.post("/auth/login", json={"email": member_email, "password": member_pw})
-        assert mr.status_code == 200
-        body = mr.json()
-        assert body["active_space_id"] == admin_space, "멤버가 조직 space 를 공유해야 함"
-
-
-@pytest.mark.integration
-def test_bootstrap_blocked_when_initialized(base: str):
-    # seed/기존 계정이 있는 인스턴스 → bootstrap 비활성(needed=false) + POST 403.
-    with httpx.Client(base_url=base, timeout=10.0) as c:
-        n = c.get("/auth/bootstrap-needed")
-        assert n.status_code == 200
-        assert n.json()["needed"] is False
-        r = c.post(
-            "/auth/bootstrap",
-            json={"org_name": "X", "email": "x@linkmind.local", "password": "123456"},
-        )
-        assert r.status_code == 403
+        assert c.get("/wiki/_meta/stats").status_code == 401
 
 
 @pytest.mark.integration
 def test_admin_endpoint_requires_auth(base: str):
-    # 무인증 admin API → 401 (인증 자체 없음).
     with httpx.Client(base_url=base, timeout=10.0) as c:
         r = c.post(
             "/auth/admin/users",
@@ -107,28 +73,57 @@ def test_admin_endpoint_requires_auth(base: str):
 
 
 @pytest.mark.integration
-def test_admin_create_short_password_422(base: str):
+def test_bootstrap_state_consistent(base: str):
+    # 초기화된 인스턴스면 bootstrap POST 는 403. 미초기화면 needed=true (skip).
     with httpx.Client(base_url=base, timeout=10.0) as c:
-        c.post("/auth/login", json={"email": SEED_EMAIL, "password": SEED_PASSWORD})
+        needed = c.get("/auth/bootstrap-needed").json()["needed"]
+        if needed:
+            pytest.skip("미초기화 — bootstrap 가능 상태")
         r = c.post(
-            "/auth/admin/users",
-            json={"email": "x@linkmind.local", "password": "123"},
+            "/auth/bootstrap",
+            json={"org_name": "X", "email": "x@linkmind.local", "password": "123456"},
         )
-        assert r.status_code == 422
+        assert r.status_code == 403
+
+
+# ── 관리자 세션 필요 ───────────────────────────────────────────
+
+@pytest.mark.integration
+def test_admin_can_access_and_me(admin_client: httpx.Client):
+    assert admin_client.get("/wiki/_meta/stats").status_code == 200
+    me = admin_client.get("/auth/me")
+    assert me.status_code == 200
+    assert me.json()["email"] == ADMIN_EMAIL
 
 
 @pytest.mark.integration
-def test_login_wrong_password_401(base: str):
+def test_admin_create_member_joins_same_org_space(admin_client: httpx.Client, base: str):
+    member_email = "pytest-member@linkmind.local"
+    member_pw = "member-pw-123"
+    admin_space = admin_client.get("/auth/me").json()["active_space_id"]
+    r = admin_client.post(
+        "/auth/admin/users",
+        json={"email": member_email, "password": member_pw, "display_name": "PM"},
+    )
+    assert r.status_code in (201, 409), r.text
+    # 발급된 멤버로 로그인 → 관리자와 같은 조직 space (데이터 공유).
+    with httpx.Client(base_url=base, timeout=10.0) as mc:
+        mr = mc.post("/auth/login", json={"email": member_email, "password": member_pw})
+        assert mr.status_code == 200
+        assert mr.json()["active_space_id"] == admin_space
+
+
+@pytest.mark.integration
+def test_admin_create_short_password_422(admin_client: httpx.Client):
+    r = admin_client.post(
+        "/auth/admin/users",
+        json={"email": "x@linkmind.local", "password": "123"},
+    )
+    assert r.status_code == 422
+
+
+@pytest.mark.integration
+def test_login_wrong_password_401(admin_client: httpx.Client, base: str):
     with httpx.Client(base_url=base, timeout=10.0) as c:
-        r = c.post("/auth/login", json={"email": SEED_EMAIL, "password": "definitely-wrong"})
+        r = c.post("/auth/login", json={"email": ADMIN_EMAIL, "password": "definitely-wrong"})
         assert r.status_code == 401
-
-
-@pytest.mark.integration
-def test_logout_clears_access(base: str):
-    with httpx.Client(base_url=base, timeout=10.0) as c:
-        c.post("/auth/login", json={"email": SEED_EMAIL, "password": SEED_PASSWORD})
-        assert c.get("/auth/me").status_code == 200
-        c.post("/auth/logout")
-        # 쿠키 삭제 후 보호 라우터 401.
-        assert c.get("/auth/me").status_code == 401

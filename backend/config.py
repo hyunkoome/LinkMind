@@ -53,10 +53,8 @@ class Settings(BaseSettings):
     linkmind_cookie_name: str = Field(default="linkmind_token")
     linkmind_cookie_secure: bool = Field(default=False)
     linkmind_cookie_samesite: Literal["lax", "strict", "none"] = Field(default="lax")
-    # 기본 seed 계정 — 첫 부팅 시 없으면 생성. 로컬 self-host 진입점.
-    linkmind_seed_user_email: str = Field(default="admin@linkmind.local")
-    linkmind_seed_user_password: str = Field(default="linkmind")
-    linkmind_seed_space_name: str = Field(default="My Space")
+    # 첫 관리자/조직은 자동 seed 하지 않는다 — 설치 후 user 0명이면 POST /auth/bootstrap
+    # (브라우저 /login '조직 만들기')으로 고객 조직이 직접 만든다 (운영자는 인프라만).
 
     # ─── Database ─────────────────────────────────────────────────
     # 컨테이너에서 돌릴 때는 DATABASE_URL, 로컬에서 돌릴 때는 DATABASE_URL_LOCAL을 우선 사용.

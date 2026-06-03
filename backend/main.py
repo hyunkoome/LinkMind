@@ -33,7 +33,6 @@ from backend.api import (
 )
 from backend.api.deps import get_current_user
 from backend.api.middleware import AuthMiddleware
-from backend.auth.seed import seed_default_user_space
 from backend.config import get_settings
 from backend.db.connection import close_engine, get_engine
 from backend.jobs.analysis_worker import run_analysis_worker
@@ -64,15 +63,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # get_active_prompt 가 seed-fallback 으로 동작.
         logger.error("runtime_settings 적재 실패 — env/코드 시드로 fallback: %s", e)
 
-    # 멀티테넌트 단계 A (2026-06-03) — 기본 user/space seed. users 테이블이 없으면
-    # (migrate_schema 미실행) 경고만 — startup 막지 않음.
-    try:
-        await seed_default_user_space()
-    except Exception as e:  # noqa: BLE001
-        logger.error(
-            "기본 user/space seed 실패 — `python -m backend.jobs.migrate_schema` 로 "
-            "스키마 반영 후 재시작 필요할 수 있음: %s", e
-        )
+    # 멀티테넌트(2026-06-03) — 첫 관리자/조직은 자동 seed 하지 않는다. 설치 후 user 0명이면
+    # POST /auth/bootstrap (브라우저 /login '조직 만들기')으로 고객 조직이 직접 첫 관리자를
+    # 만든다. 운영자는 인프라만 제공 (데이터 접근 X). env seed 자동생성 제거.
 
     # analysis_worker — 백그라운드 task. ingest 시 summarize=False 로 빠르게 들어온
     # item 의 chunks (embedding) + summary (LLM) 를 천천히 채움.
