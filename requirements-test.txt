@@ -36,14 +36,18 @@ markdownify>=0.13.1
 pypdf>=5.1.0
 pymupdf>=1.24.13
 
+# Office 문서 (DOCX/PPTX) — tests/test_document_extract.py 가 실제 파서 사용 (가벼운 순수 파이썬)
+python-docx>=1.1.2
+python-pptx>=1.0.2
+
 # YouTube
 yt-dlp>=2024.10.0
 youtube-transcript-api>=0.6.3
 
-# Embedding smoke (CPU 가능, MiniLM-L6-v2 사용 — bge-m3 같은 무거운 모델은 production 만)
-# torch 는 CPU 빌드만 — CI 에서는 ci.yml 의 --index-url 로 강제 (PyPI 기본은 GPU 시도).
-sentence-transformers>=3.3.0
-torch>=2.5.0
+# NOTE: sentence-transformers / torch 는 일부러 뺐다. CI 는 순수 cpu mock 단위 테스트만
+# 돌리므로 (ci.yml 이 tests/embedding · tests/gpu · tests/integration · tests/llm 을
+# collect 제외) 무거운 ML 의존성(수백 MB torch 다운로드)이 불필요. 임베딩/GPU 회귀는
+# 로컬 scripts/tests/total/run_all_local.sh 가 잡는다 (CLAUDE.md §9).
 
 # Tests
 pytest>=8.3.0
