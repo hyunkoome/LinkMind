@@ -22,6 +22,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend import runtime_settings
 from backend.api.search import search as _do_search
 from backend.db.connection import get_session
+from backend.embedding.factory import get_embedding_provider
+from backend.embedding.wiki_qdrant import search_wiki_pages as qdrant_search_wiki_pages
 from backend.llm.base import ChatMessage, LLMProvider
 from backend.llm.factory import get_llm_provider
 from backend.schemas.models import (
@@ -97,6 +99,56 @@ def _context_block(
     return block
 
 
+# 하이브리드 RAG — 위키 본문 검색. LinkMind 가 자료를 정리해 만든 wiki(linkmind_wiki_pages)
+# 를 답변 context 에 함께 넣는다. 위키는 이미 정리된 지식이라 단편 chunk 보다 답변 품질에
+# 크게 기여. completed(body 합성 완료) 위키만 대상.
+_WIKI_BODY_TOP_K = 3
+_WIKI_BODY_CHARS = 1800
+
+_FETCH_WIKI_BODIES_SQL = text("""
+    SELECT id, slug, title, description, body
+    FROM wiki_pages
+    WHERE id = ANY(:ids) AND body IS NOT NULL AND body <> ''
+""")
+
+
+async def _retrieve_wikis(
+    search_query: str, session: AsyncSession, *, top_k: int = _WIKI_BODY_TOP_K,
+) -> list[dict]:
+    """위키 본문 의미검색 — 정리된 지식(위키)을 RAG context 에 포함.
+
+    위키 검색이 실패해도(임베딩/Qdrant 오류) item 기반 RAG 는 그대로 동작하도록 예외를
+    삼키고 빈 리스트 반환 (위키는 답변을 풍부하게 하는 보강이지 필수가 아님).
+    """
+    try:
+        embedder = get_embedding_provider()
+        emb = await embedder.embed([search_query])
+        qv = emb.vectors[0]
+        points = await qdrant_search_wiki_pages(
+            query_vector=qv, top_k=top_k, status_filter=["completed"],
+        )
+        if not points:
+            return []
+        score_by_id = {str(p.id): float(p.score) for p in points}
+        rows = (await session.execute(
+            _FETCH_WIKI_BODIES_SQL, {"ids": list(score_by_id.keys())},
+        )).mappings().all()
+        out = [{
+            "slug": r["slug"], "title": r["title"], "description": r["description"],
+            "body": r["body"], "score": score_by_id.get(str(r["id"]), 0.0),
+        } for r in rows]
+        out.sort(key=lambda w: w["score"], reverse=True)
+        return out
+    except Exception:
+        return []
+
+
+def _wiki_context_block(idx: int, w: dict) -> str:
+    """RAG context 의 위키 블록 — 위키 본문(정리된 markdown)을 발췌해 넣는다."""
+    body = (w.get("body") or "").strip()[:_WIKI_BODY_CHARS]
+    return f"[{idx}] 📖 위키: {w['title']}\nType: wiki (정리된 지식)\n{body}\n"
+
+
 router = APIRouter()
 
 
@@ -149,10 +201,12 @@ async def _retrieve(
     search_query: str,
     question_for_pins: AskRequest,
     session: AsyncSession,
-) -> tuple[str, list[AskCitation]]:
-    """pinned items + 벡터검색 결과로 context 블록과 citations 를 구성.
+) -> tuple[str, list[AskCitation], list[dict]]:
+    """pinned items + 위키 본문 + item 벡터검색 결과로 context 와 citations 를 구성.
 
+    하이브리드 RAG: 원본 item chunk 뿐 아니라 정리된 위키 본문도 함께 context 에 넣는다.
     search_query 는 (멀티턴이면) 재작성된 독립형 쿼리. pin_item_ids 는 원 요청에서.
+    반환: (context, item citations, 검색된 위키 hits[dict]).
     """
     payload = question_for_pins
     context_blocks: list[str] = []
@@ -182,7 +236,13 @@ async def _retrieve(
             ))
             pinned_ids.add(pid)
 
-    # 1) Retrieval — 재작성된 검색 쿼리로 벡터검색.
+    # 1) 위키 본문 검색 (하이브리드 RAG) — 정리된 지식을 pinned 다음에 우선 배치.
+    #    위키는 자료를 종합·정리한 글이라 단편 chunk 보다 답변에 크게 기여.
+    wiki_hits = await _retrieve_wikis(search_query, session)
+    for w in wiki_hits:
+        context_blocks.append(_wiki_context_block(len(context_blocks) + 1, w))
+
+    # 2) Retrieval — 재작성된 검색 쿼리로 원본 item 벡터검색.
     search_resp = await _do_search(
         SearchRequest(query=search_query, top_k=payload.top_k),
         session=session,
@@ -209,7 +269,7 @@ async def _retrieve(
             snippet=hit.snippet,
         ))
     context = "\n\n".join(context_blocks) if context_blocks else "(검색 결과 없음)"
-    return context, citations
+    return context, citations, wiki_hits
 
 
 def _build_messages(
@@ -254,6 +314,23 @@ async def _fetch_related_wikis(
     ]
 
 
+def _merge_searched_wikis(
+    related: list[AskRelatedWiki], wiki_hits: list[dict],
+) -> list[AskRelatedWiki]:
+    """citations 역추적 위키 + 본문 직접검색된 위키 병합 (slug 중복 제거).
+    하이브리드 RAG 로 직접 검색돼 답변에 쓰인 위키도 우측 패널에 노출."""
+    existing = {w.slug for w in related}
+    for wh in wiki_hits:
+        if wh["slug"] in existing:
+            continue
+        related.append(AskRelatedWiki(
+            slug=wh["slug"], title=wh["title"],
+            description=wh.get("description"), body_status="completed", overlap=0,
+        ))
+        existing.add(wh["slug"])
+    return related
+
+
 @router.post("", response_model=AskResponse)
 async def ask(
     payload: AskRequest,
@@ -266,7 +343,7 @@ async def ask(
     search_query = await _condense_query(
         payload.question, payload.history, provider, payload.llm_model,
     )
-    context, citations = await _retrieve(
+    context, citations, wiki_hits = await _retrieve(
         search_query=search_query, question_for_pins=payload, session=session,
     )
 
@@ -274,7 +351,9 @@ async def ask(
     messages = _build_messages(system_prompt, payload.history, context, payload.question)
     resp = await provider.chat(messages=messages, model=payload.llm_model)
 
-    related_wikis = await _fetch_related_wikis(citations, session)
+    related_wikis = _merge_searched_wikis(
+        await _fetch_related_wikis(citations, session), wiki_hits,
+    )
 
     return AskResponse(
         question=payload.question,
@@ -311,10 +390,12 @@ async def ask_stream(
     search_query = await _condense_query(
         payload.question, payload.history, provider, payload.llm_model,
     )
-    context, citations = await _retrieve(
+    context, citations, wiki_hits = await _retrieve(
         search_query=search_query, question_for_pins=payload, session=session,
     )
-    related_wikis = await _fetch_related_wikis(citations, session)
+    related_wikis = _merge_searched_wikis(
+        await _fetch_related_wikis(citations, session), wiki_hits,
+    )
     _, system_prompt = runtime_settings.get_active_prompt("rag_system")
     messages = _build_messages(system_prompt, payload.history, context, payload.question)
 
