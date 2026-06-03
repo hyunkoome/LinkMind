@@ -53,3 +53,20 @@ def get_current_space_id(request: Request) -> UUID:
         return UUID(str(payload["space"]))
     except (ValueError, TypeError):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="잘못된 토큰")
+
+
+async def require_space_admin(
+    user: dict = Depends(get_current_user),
+    space_id: UUID = Depends(get_current_space_id),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """현재 space 의 루트 관리자(owner/admin)만 통과. 일반 멤버/미인증 → 403/401.
+
+    운영 모델(2026-06-03): self-signup 없음 — 루트 관리자가 멤버 계정을 발급한다.
+    """
+    role = await repository.get_member_role(session, space_id=space_id, user_id=user["id"])
+    if role not in ("owner", "admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="조직 관리자만 가능합니다"
+        )
+    return user

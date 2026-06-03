@@ -1,9 +1,9 @@
 """
-기본 user/space seed (2026-06-03 단계 A).
+기본 루트 관리자 + 조직 space seed (2026-06-03 단계 A).
 
-단일 self-host 라도 로그인을 강제하므로, 첫 부팅 시 기본 계정/space 가 없으면 만든다.
-이메일/비밀번호/space 이름은 config(env) 에서. lifespan 에서 호출 (main.py).
-idempotent — 이미 있으면 아무것도 안 함.
+운영 모델: 1 조직 = 1 space, 멤버 전원이 같은 데이터 공유. self-signup 없음 —
+첫 부팅 시 루트 관리자(owner) 1명 + 조직 space 1개를 만든다. 이후 멤버는 루트가 발급.
+이메일/비밀번호/조직명은 config(env). lifespan 에서 호출 (main.py). idempotent.
 """
 
 from __future__ import annotations
@@ -40,14 +40,15 @@ async def seed_default_user_space() -> UUID | None:
             display_name=None,
         )
         space_id = await repository.create_space(
-            session, name=settings.linkmind_seed_space_name, kind="personal"
+            session, name=settings.linkmind_seed_space_name, kind="org"
         )
         await repository.add_member(
             session, space_id=space_id, user_id=user_id, role="owner"
         )
         await session.commit()
         logger.info(
-            "기본 계정 seed 완료 — email=%s, space=%s (%s). 로그인 후 비밀번호 변경 권장.",
+            "루트 관리자 + 조직 space seed 완료 — email=%s, org=%s (%s). "
+            "로그인 후 비밀번호 변경 + Settings 에서 멤버 발급.",
             settings.linkmind_seed_user_email, settings.linkmind_seed_space_name, space_id,
         )
         return space_id

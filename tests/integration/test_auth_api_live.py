@@ -60,29 +60,58 @@ def test_login_sets_cookie_and_grants_access(base: str):
 
 
 @pytest.mark.integration
-def test_register_creates_user_and_personal_space(base: str):
-    # 멱등 — 첫 실행 201, 재실행 409. 어느 경우든 그 계정으로 로그인 + personal space 보유.
-    email = "pytest-register@linkmind.local"
-    pw = "pytest-pw-123"
+def test_admin_create_member_joins_same_org_space(base: str):
+    # 루트 관리자가 멤버 발급 → 그 멤버는 *관리자와 같은 조직 space* 에 합류(데이터 공유).
+    member_email = "pytest-member@linkmind.local"
+    member_pw = "member-pw-123"
     with httpx.Client(base_url=base, timeout=10.0) as c:
+        lr = c.post("/auth/login", json={"email": SEED_EMAIL, "password": SEED_PASSWORD})
+        assert lr.status_code == 200
+        admin_space = lr.json()["active_space_id"]
+        # 멱등 — 이미 있으면 409.
         r = c.post(
-            "/auth/register",
-            json={"email": email, "password": pw, "display_name": "Pytest"},
+            "/auth/admin/users",
+            json={"email": member_email, "password": member_pw, "display_name": "PM"},
         )
         assert r.status_code in (201, 409), r.text
-        lr = c.post("/auth/login", json={"email": email, "password": pw})
-        assert lr.status_code == 200
-        body = lr.json()
-        assert body["email"] == email
-        assert body["spaces"], "회원가입 시 personal space 가 생겨야 함"
-        assert body["spaces"][0]["kind"] == "personal"
+        # 발급된 멤버로 로그인 → 관리자와 같은 조직 space.
+        mr = c.post("/auth/login", json={"email": member_email, "password": member_pw})
+        assert mr.status_code == 200
+        body = mr.json()
+        assert body["active_space_id"] == admin_space, "멤버가 조직 space 를 공유해야 함"
 
 
 @pytest.mark.integration
-def test_register_short_password_422(base: str):
+def test_bootstrap_blocked_when_initialized(base: str):
+    # seed/기존 계정이 있는 인스턴스 → bootstrap 비활성(needed=false) + POST 403.
+    with httpx.Client(base_url=base, timeout=10.0) as c:
+        n = c.get("/auth/bootstrap-needed")
+        assert n.status_code == 200
+        assert n.json()["needed"] is False
+        r = c.post(
+            "/auth/bootstrap",
+            json={"org_name": "X", "email": "x@linkmind.local", "password": "123456"},
+        )
+        assert r.status_code == 403
+
+
+@pytest.mark.integration
+def test_admin_endpoint_requires_auth(base: str):
+    # 무인증 admin API → 401 (인증 자체 없음).
     with httpx.Client(base_url=base, timeout=10.0) as c:
         r = c.post(
-            "/auth/register",
+            "/auth/admin/users",
+            json={"email": "x@linkmind.local", "password": "123456"},
+        )
+        assert r.status_code == 401
+
+
+@pytest.mark.integration
+def test_admin_create_short_password_422(base: str):
+    with httpx.Client(base_url=base, timeout=10.0) as c:
+        c.post("/auth/login", json={"email": SEED_EMAIL, "password": SEED_PASSWORD})
+        r = c.post(
+            "/auth/admin/users",
             json={"email": "x@linkmind.local", "password": "123"},
         )
         assert r.status_code == 422

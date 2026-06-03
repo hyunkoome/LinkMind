@@ -15,10 +15,10 @@ import {
 
 import {
   type AuthUser,
+  bootstrap as apiBootstrap,
   getMe,
   login as apiLogin,
   logout as apiLogout,
-  register as apiRegister,
   switchSpace as apiSwitchSpace,
 } from "@/lib/api";
 
@@ -26,7 +26,8 @@ interface AuthContextValue {
   user: AuthUser | null;
   loading: boolean; // 초기 /auth/me 확인 중
   login: (email: string, password: string) => Promise<void>;
-  register: (
+  bootstrap: (
+    orgName: string,
     email: string,
     password: string,
     displayName?: string,
@@ -78,9 +79,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(u);
   }, []);
 
-  const register = useCallback(
-    async (email: string, password: string, displayName?: string) => {
-      const u = await apiRegister(email, password, displayName);
+  const bootstrap = useCallback(
+    async (
+      orgName: string,
+      email: string,
+      password: string,
+      displayName?: string,
+    ) => {
+      const u = await apiBootstrap(orgName, email, password, displayName);
       setUser(u);
     },
     [],
@@ -107,7 +113,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ user, loading, login, register, logout, switchSpace, activeSpace }}
+      value={{ user, loading, login, bootstrap, logout, switchSpace, activeSpace }}
     >
       {children}
     </AuthContext.Provider>

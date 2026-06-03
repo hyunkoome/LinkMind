@@ -349,15 +349,28 @@ export async function login(email: string, password: string): Promise<AuthUser> 
   });
 }
 
-// 회원가입 — 새 user + 본인 personal space 자동 생성 + 자동 로그인(쿠키). 중복 이메일은 409 throw.
-export async function register(
+// 현재 세션 사용자. 미인증이면 401 throw (AuthProvider 가 null 처리).
+export async function getMe(): Promise<AuthUser> {
+  return fetchJSON<AuthUser>(`/auth/me`);
+}
+
+// 첫 관리자 등록 필요 여부 (user 0명). 로그인 페이지가 이걸로 분기.
+export async function bootstrapNeeded(): Promise<boolean> {
+  const r = await fetchJSON<{ needed: boolean }>(`/auth/bootstrap-needed`);
+  return r.needed;
+}
+
+// 첫 관리자 + 조직 생성 (user 0명일 때만). 성공 시 자동 로그인(쿠키).
+export async function bootstrap(
+  orgName: string,
   email: string,
   password: string,
   displayName?: string,
 ): Promise<AuthUser> {
-  return fetchJSON<AuthUser>(`/auth/register`, {
+  return fetchJSON<AuthUser>(`/auth/bootstrap`, {
     method: "POST",
     body: JSON.stringify({
+      org_name: orgName,
       email,
       password,
       display_name: displayName?.trim() || null,
@@ -365,9 +378,41 @@ export async function register(
   });
 }
 
-// 현재 세션 사용자. 미인증이면 401 throw (AuthProvider 가 null 처리).
-export async function getMe(): Promise<AuthUser> {
-  return fetchJSON<AuthUser>(`/auth/me`);
+// ── 조직 멤버 관리 (루트 관리자 전용) ──────────────────────────
+// self-signup 없음 — 관리자가 멤버 계정을 발급(현재 조직 space 에 합류).
+
+export interface Member {
+  id: string;
+  email: string;
+  display_name: string | null;
+  role: string;
+}
+
+export async function adminCreateUser(
+  email: string,
+  password: string,
+  displayName?: string,
+  role: "member" | "admin" = "member",
+): Promise<Member> {
+  return fetchJSON<Member>(`/auth/admin/users`, {
+    method: "POST",
+    body: JSON.stringify({
+      email,
+      password,
+      display_name: displayName?.trim() || null,
+      role,
+    }),
+  });
+}
+
+export async function adminListMembers(): Promise<Member[]> {
+  return fetchJSON<Member[]>(`/auth/admin/members`);
+}
+
+export async function adminDeleteUser(
+  userId: string,
+): Promise<{ ok: boolean; deleted_user_id: string }> {
+  return fetchJSON(`/auth/admin/users/${userId}`, { method: "DELETE" });
 }
 
 export async function logout(): Promise<void> {

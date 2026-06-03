@@ -17,20 +17,69 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.api.deps import get_current_space_id, get_current_user
+from uuid import UUID as _UUID
+
+from backend.api.deps import (
+    get_current_space_id,
+    get_current_user,
+    require_space_admin,
+)
 from backend.auth.security import create_access_token, hash_password, verify_password
 from backend.config import get_settings
 from backend.db import repository
 from backend.db.connection import get_session
 from backend.schemas.auth import (
+    AdminCreateUserRequest,
+    BootstrapRequest,
     LoginRequest,
-    RegisterRequest,
+    MemberOut,
     SpaceOut,
     SwitchSpaceRequest,
     UserOut,
 )
 
 router = APIRouter()
+
+
+@router.get("/bootstrap-needed")
+async def bootstrap_needed(session: AsyncSession = Depends(get_session)) -> dict:
+    """첫 관리자 등록이 필요한지 (user 0명). frontend 로그인 페이지가 이걸로 분기."""
+    return {"needed": (await repository.count_users(session)) == 0}
+
+
+@router.post("/bootstrap", response_model=UserOut, status_code=status.HTTP_201_CREATED)
+async def bootstrap(
+    body: BootstrapRequest,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+) -> UserOut:
+    """첫 관리자 + 조직 space 생성 — user 가 0명일 때만. 그 후 self-signup 은 영구 비활성.
+
+    설치 후 브라우저에서 고객 조직이 직접 첫 관리자를 만든다 (운영자는 인프라만).
+    """
+    if (await repository.count_users(session)) != 0:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="이미 초기화된 인스턴스입니다 — 관리자에게 계정 발급을 요청하세요",
+        )
+    email = body.email.strip()
+    user_id = await repository.create_user(
+        session,
+        email=email,
+        password_hash=hash_password(body.password),
+        display_name=body.display_name,
+    )
+    space_id = await repository.create_space(
+        session, name=body.org_name.strip(), kind="org"
+    )
+    await repository.add_member(session, space_id=space_id, user_id=user_id, role="owner")
+    await session.commit()
+
+    token = create_access_token(user_id=user_id, space_id=space_id)
+    _set_auth_cookie(response, token)
+    spaces = await repository.list_user_spaces(session, user_id=user_id)
+    user = {"id": user_id, "email": email, "display_name": body.display_name}
+    return _build_user_out(user, space_id, spaces)
 
 
 def _set_auth_cookie(response: Response, token: str) -> None:
@@ -83,37 +132,66 @@ async def login(
     return _build_user_out(user, active_space_id, spaces)
 
 
-@router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
-async def register(
-    body: RegisterRequest,
-    response: Response,
+@router.post("/admin/users", response_model=MemberOut, status_code=status.HTTP_201_CREATED)
+async def admin_create_user(
+    body: AdminCreateUserRequest,
+    admin: dict = Depends(require_space_admin),
+    space_id: _UUID = Depends(get_current_space_id),
     session: AsyncSession = Depends(get_session),
-) -> UserOut:
-    """회원가입 — 새 user + 본인 personal space 자동 생성 + 자동 로그인(쿠키).
+) -> MemberOut:
+    """루트 관리자가 멤버 계정 발급 — 새 user 를 *관리자의 현재 조직 space* 에 합류.
 
-    멀티테넌트 통합 모델: 가입하면 멤버1 personal space 를 가진다 (조직은 이후 초대로 합류).
+    운영 모델(2026-06-03): self-signup 없음. 멤버는 조직 space 를 공유 → 같은 데이터.
+    새 space 를 만들지 않고 기존 조직 space 에 member(또는 admin) 로 추가한다.
     """
     email = body.email.strip()
     if await repository.get_user_by_email(session, email=email) is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="이미 등록된 이메일입니다"
         )
+    role = body.role if body.role in ("member", "admin") else "member"
     user_id = await repository.create_user(
         session,
         email=email,
         password_hash=hash_password(body.password),
         display_name=body.display_name,
     )
-    space_name = (body.display_name or email.split("@")[0]).strip() + " Space"
-    space_id = await repository.create_space(session, name=space_name, kind="personal")
-    await repository.add_member(session, space_id=space_id, user_id=user_id, role="owner")
+    await repository.add_member(session, space_id=space_id, user_id=user_id, role=role)
     await session.commit()
+    return MemberOut(
+        id=user_id, email=email, display_name=body.display_name, role=role
+    )
 
-    token = create_access_token(user_id=user_id, space_id=space_id)
-    _set_auth_cookie(response, token)
-    spaces = await repository.list_user_spaces(session, user_id=user_id)
-    user = {"id": user_id, "email": email, "display_name": body.display_name}
-    return _build_user_out(user, space_id, spaces)
+
+@router.get("/admin/members", response_model=list[MemberOut])
+async def admin_list_members(
+    admin: dict = Depends(require_space_admin),
+    space_id: _UUID = Depends(get_current_space_id),
+    session: AsyncSession = Depends(get_session),
+) -> list[MemberOut]:
+    members = await repository.list_space_members(session, space_id=space_id)
+    return [
+        MemberOut(
+            id=m["id"], email=m["email"], display_name=m.get("display_name"), role=m["role"]
+        )
+        for m in members
+    ]
+
+
+@router.delete("/admin/users/{user_id}")
+async def admin_delete_user(
+    user_id: _UUID,
+    admin: dict = Depends(require_space_admin),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    # 자기 자신은 삭제 불가 (조직에 관리자 0명 되는 것 방지).
+    if user_id == admin["id"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="자기 자신은 삭제할 수 없습니다"
+        )
+    await repository.delete_user(session, user_id=user_id)
+    await session.commit()
+    return {"ok": True, "deleted_user_id": str(user_id)}
 
 
 @router.post("/logout")
