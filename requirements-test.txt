@@ -19,6 +19,8 @@ orjson>=3.10.12
 loguru>=0.7.2
 tenacity>=9.0.0
 python-dateutil>=2.9.0
+PyYAML>=6.0.0                     # config/*.yaml 로더 — 여러 테스트가 backend/ai_agents 경유 import
+                                 # (전에는 sentence-transformers 가 transitive 로 끌어왔으나 제거됨)
 
 # LLM provider SDK — 모듈 import 단계에서 끌어옴 (호출은 안 함)
 openai>=1.55.0
