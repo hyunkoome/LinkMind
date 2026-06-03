@@ -142,12 +142,9 @@ app = FastAPI(
 # CORS 는 cross-origin(frontend :3001 → backend :8000) 쿠키 전송을 위해 credentials 허용.
 # 운영(SaaS)에선 allow_origins 를 실제 도메인으로 제한 + allow_credentials=True 유지.
 # 주의: credentials 쿠키는 allow_origins=["*"] 와 함께 못 씀(브라우저 정책) → frontend
-# origin 을 명시. 개발 기본은 localhost:3001.
-import os as _os
+# origin 을 명시. config(settings) 경유 — env/dev.env 의 LINKMIND_CORS_ORIGINS 가 제대로 반영됨.
 _frontend_origins = [
-    o.strip() for o in _os.getenv(
-        "LINKMIND_CORS_ORIGINS", "http://localhost:3001,http://127.0.0.1:3001"
-    ).split(",") if o.strip()
+    o.strip() for o in settings.linkmind_cors_origins.split(",") if o.strip()
 ]
 app.add_middleware(AuthMiddleware)
 app.add_middleware(

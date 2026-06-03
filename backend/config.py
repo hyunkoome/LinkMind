@@ -53,6 +53,11 @@ class Settings(BaseSettings):
     linkmind_cookie_name: str = Field(default="linkmind_token")
     linkmind_cookie_secure: bool = Field(default=False)
     linkmind_cookie_samesite: Literal["lax", "strict", "none"] = Field(default="lax")
+    # frontend origin (CORS + credentials 쿠키). 콤마 구분. credentials 쿠키는 '*' 와 못 씀.
+    # 데스크탑 앱/다른 도메인 서버면 그 origin 을 여기에 추가.
+    linkmind_cors_origins: str = Field(
+        default="http://localhost:3001,http://127.0.0.1:3001"
+    )
     # 첫 관리자/조직은 자동 seed 하지 않는다 — 설치 후 user 0명이면 POST /auth/bootstrap
     # (브라우저 /login '조직 만들기')으로 고객 조직이 직접 만든다 (운영자는 인프라만).
 
