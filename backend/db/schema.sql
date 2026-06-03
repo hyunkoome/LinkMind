@@ -511,13 +511,17 @@ CREATE INDEX IF NOT EXISTS idx_wiki_pages_keywords ON wiki_pages USING GIN (keyw
 -- ============================================================================
 
 -- ── users ──────────────────────────────────────────────────────────────
+-- must_change_password: 루트가 발급한 멤버는 초기 비번 → 첫 로그인 시 강제 변경.
+-- (루트 본인은 bootstrap 으로 자기 비번을 직접 정하므로 false.)
 CREATE TABLE IF NOT EXISTS users (
-    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    email         TEXT NOT NULL UNIQUE,
-    password_hash TEXT NOT NULL,                  -- bcrypt
-    display_name  TEXT,
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    email                TEXT NOT NULL UNIQUE,
+    password_hash        TEXT NOT NULL,           -- bcrypt
+    display_name         TEXT,
+    must_change_password BOOLEAN NOT NULL DEFAULT false,
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT false;
 
 -- ── spaces ─────────────────────────────────────────────────────────────
 -- 격리 경계. kind: 'personal'(멤버1) | 'org'(멤버N). 둘은 같은 메커니즘.

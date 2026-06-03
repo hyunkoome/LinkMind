@@ -16,6 +16,7 @@ import {
 import {
   type AuthUser,
   bootstrap as apiBootstrap,
+  changeCredentials as apiChangeCredentials,
   getMe,
   login as apiLogin,
   logout as apiLogout,
@@ -31,6 +32,11 @@ interface AuthContextValue {
     email: string,
     password: string,
     displayName?: string,
+  ) => Promise<void>;
+  changeCredentials: (
+    currentPassword: string,
+    newPassword: string,
+    newEmail?: string,
   ) => Promise<void>;
   logout: () => Promise<void>;
   switchSpace: (spaceId: string) => Promise<void>;
@@ -92,6 +98,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     [],
   );
 
+  const changeCredentials = useCallback(
+    async (currentPassword: string, newPassword: string, newEmail?: string) => {
+      const u = await apiChangeCredentials(currentPassword, newPassword, newEmail);
+      setUser(u);
+    },
+    [],
+  );
+
   const logout = useCallback(async () => {
     try {
       await apiLogout();
@@ -113,7 +127,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ user, loading, login, bootstrap, logout, switchSpace, activeSpace }}
+      value={{ user, loading, login, bootstrap, changeCredentials, logout, switchSpace, activeSpace }}
     >
       {children}
     </AuthContext.Provider>

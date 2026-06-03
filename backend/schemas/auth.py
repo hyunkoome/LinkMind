@@ -31,6 +31,14 @@ class AdminCreateUserRequest(BaseModel):
     role: str = Field(default="member")   # 'member' | 'admin' (조직 내 권한)
 
 
+class ChangeCredentialsRequest(BaseModel):
+    """첫 로그인 강제 변경 — 현재 비번 확인 후 새 비번(필수)/이메일(선택) 설정.
+    루트가 발급한 멤버가 초기 비번을 자기 비번으로 바꾼다."""
+    current_password: str = Field(..., min_length=1)
+    new_password: str = Field(..., min_length=6)
+    new_email: str | None = Field(default=None, min_length=3)
+
+
 class MemberOut(BaseModel):
     """조직 멤버 — 루트 관리자 유저 관리 UI 용."""
     id: UUID
@@ -53,6 +61,7 @@ class UserOut(BaseModel):
     display_name: str | None = None
     active_space_id: UUID
     spaces: list[SpaceOut] = Field(default_factory=list)
+    must_change_password: bool = False   # true 면 frontend 가 강제 변경 화면 표시
 
 
 class SwitchSpaceRequest(BaseModel):

@@ -1289,7 +1289,10 @@ async def get_user_by_email(
 ) -> dict[str, Any] | None:
     """email 로 user 조회 (로그인용 — password_hash 포함)."""
     res = await session.execute(
-        text("SELECT id, email, password_hash, display_name FROM users WHERE email = :e"),
+        text(
+            "SELECT id, email, password_hash, display_name, must_change_password "
+            "FROM users WHERE email = :e"
+        ),
         {"e": email},
     )
     row = res.mappings().one_or_none()
@@ -1300,7 +1303,10 @@ async def get_user_by_id(
     session: AsyncSession, *, user_id: UUID,
 ) -> dict[str, Any] | None:
     res = await session.execute(
-        text("SELECT id, email, display_name FROM users WHERE id = :id"),
+        text(
+            "SELECT id, email, display_name, must_change_password "
+            "FROM users WHERE id = :id"
+        ),
         {"id": user_id},
     )
     row = res.mappings().one_or_none()
@@ -1310,16 +1316,38 @@ async def get_user_by_id(
 async def create_user(
     session: AsyncSession, *,
     email: str, password_hash: str, display_name: str | None = None,
+    must_change_password: bool = False,
 ) -> UUID:
     res = await session.execute(
         text("""
-            INSERT INTO users (email, password_hash, display_name)
-            VALUES (:e, :ph, :dn)
+            INSERT INTO users (email, password_hash, display_name, must_change_password)
+            VALUES (:e, :ph, :dn, :mcp)
             RETURNING id
         """),
-        {"e": email, "ph": password_hash, "dn": display_name},
+        {"e": email, "ph": password_hash, "dn": display_name, "mcp": must_change_password},
     )
     return res.scalar_one()
+
+
+async def update_user_credentials(
+    session: AsyncSession, *,
+    user_id: UUID,
+    new_email: str | None = None,
+    new_password_hash: str | None = None,
+) -> None:
+    """첫 로그인 강제 변경 — 이메일/비번 갱신 + must_change_password=false.
+    new_email/new_password_hash 중 제공된 것만 갱신."""
+    sets = ["must_change_password = false"]
+    params: dict[str, Any] = {"id": user_id}
+    if new_email is not None:
+        sets.append("email = :e")
+        params["e"] = new_email
+    if new_password_hash is not None:
+        sets.append("password_hash = :ph")
+        params["ph"] = new_password_hash
+    await session.execute(
+        text(f"UPDATE users SET {', '.join(sets)} WHERE id = :id"), params
+    )
 
 
 async def create_space(

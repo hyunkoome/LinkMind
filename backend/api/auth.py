@@ -31,6 +31,7 @@ from backend.db.connection import get_session
 from backend.schemas.auth import (
     AdminCreateUserRequest,
     BootstrapRequest,
+    ChangeCredentialsRequest,
     LoginRequest,
     MemberOut,
     SpaceOut,
@@ -105,6 +106,7 @@ def _build_user_out(user: dict, active_space_id: UUID, spaces: list[dict]) -> Us
             SpaceOut(id=s["id"], name=s["name"], kind=s["kind"], role=s.get("role"))
             for s in spaces
         ],
+        must_change_password=bool(user.get("must_change_password", False)),
     )
 
 
@@ -155,6 +157,7 @@ async def admin_create_user(
         email=email,
         password_hash=hash_password(body.password),
         display_name=body.display_name,
+        must_change_password=True,   # 발급된 초기 비번 → 멤버 첫 로그인 시 강제 변경
     )
     await repository.add_member(session, space_id=space_id, user_id=user_id, role=role)
     await session.commit()
@@ -192,6 +195,43 @@ async def admin_delete_user(
     await repository.delete_user(session, user_id=user_id)
     await session.commit()
     return {"ok": True, "deleted_user_id": str(user_id)}
+
+
+@router.post("/change-credentials", response_model=UserOut)
+async def change_credentials(
+    body: ChangeCredentialsRequest,
+    response: Response,
+    user: dict = Depends(get_current_user),
+    active_space_id: UUID = Depends(get_current_space_id),
+    session: AsyncSession = Depends(get_session),
+) -> UserOut:
+    """첫 로그인 강제 변경 — 현재 비번 확인 후 새 비번(필수)/이메일(선택). must_change_password 해제.
+    토큰도 재발급(쿠키 갱신)."""
+    full = await repository.get_user_by_email(session, email=user["email"])
+    if full is None or not verify_password(body.current_password, full["password_hash"]):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="현재 비밀번호가 올바르지 않습니다"
+        )
+    new_email = body.new_email.strip() if body.new_email else None
+    if new_email and new_email != user["email"]:
+        if await repository.get_user_by_email(session, email=new_email) is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail="이미 사용 중인 이메일입니다"
+            )
+    else:
+        new_email = None
+    await repository.update_user_credentials(
+        session,
+        user_id=user["id"],
+        new_email=new_email,
+        new_password_hash=hash_password(body.new_password),
+    )
+    await session.commit()
+    token = create_access_token(user_id=user["id"], space_id=active_space_id)
+    _set_auth_cookie(response, token)
+    updated = await repository.get_user_by_id(session, user_id=user["id"])
+    spaces = await repository.list_user_spaces(session, user_id=user["id"])
+    return _build_user_out(updated or user, active_space_id, spaces)
 
 
 @router.post("/logout")

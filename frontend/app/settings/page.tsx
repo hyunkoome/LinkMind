@@ -4,6 +4,9 @@ import { useCallback, useEffect, useState } from "react";
 
 import {
   activatePromptVersion,
+  adminCreateUser,
+  adminDeleteUser,
+  adminListMembers,
   getKeywordConfig,
   getLLMSettings,
   listModels,
@@ -13,7 +16,9 @@ import {
   updateKeywordConfig,
   updateLLMSettings,
   type KeywordConfig,
+  type Member,
 } from "@/lib/api";
+import { useAuth } from "@/lib/auth/context";
 import { useT } from "@/lib/i18n/context";
 import type {
   LLMSettings,
@@ -26,6 +31,9 @@ type PromptName = (typeof PROMPT_NAMES)[number];
 
 export default function SettingsPage() {
   const { t } = useT();
+  const { activeSpace } = useAuth();
+  // 루트 전용(owner/admin)만 멤버 관리 + 전역 설정 노출.
+  const isAdmin = activeSpace?.role === "owner" || activeSpace?.role === "admin";
   const [settings, setSettings] = useState<LLMSettings | null>(null);
   const [models, setModels] = useState<ModelsListResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -62,6 +70,9 @@ export default function SettingsPage() {
         <div className="mb-4 text-sm text-red-500">{t.common.error}: {error}</div>
       )}
 
+      {/* 멤버 관리 (루트 전용) — 조직에 멤버 발급/삭제 */}
+      {isAdmin && <MemberSection />}
+
       {/* LLM provider/model */}
       <LLMSection
         settings={settings}
@@ -77,6 +88,171 @@ export default function SettingsPage() {
         <PromptSection key={name} name={name} onChanged={() => void reload()} />
       ))}
     </main>
+  );
+}
+
+// 멤버 관리 (루트 전용) — 조직 멤버 발급/삭제. 발급된 멤버는 첫 로그인 시 비번 변경(force-change).
+function MemberSection() {
+  const { user } = useAuth();
+  const { locale } = useT();
+  const ko = locale === "ko";
+  const [members, setMembers] = useState<Member[]>([]);
+  const [email, setEmail] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [password, setPassword] = useState("");
+  const [role, setRole] = useState<"member" | "admin">("member");
+  const [error, setError] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const reload = useCallback(async () => {
+    try {
+      setMembers(await adminListMembers());
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, []);
+
+  useEffect(() => {
+    void reload();
+  }, [reload]);
+
+  const onCreate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setMsg(null);
+    setBusy(true);
+    try {
+      const m = await adminCreateUser(email.trim(), password, displayName, role);
+      setMsg(
+        ko
+          ? `발급 완료: ${m.email} — 첫 로그인 시 비밀번호를 변경합니다`
+          : `Created: ${m.email} — must change password on first login`,
+      );
+      setEmail("");
+      setPassword("");
+      setDisplayName("");
+      setRole("member");
+      await reload();
+    } catch (err) {
+      const t = err instanceof Error ? err.message : "";
+      setError(
+        t.includes("409")
+          ? ko
+            ? "이미 등록된 이메일입니다"
+            : "Email already registered"
+          : ko
+            ? "발급 실패 (이메일 3자+ / 비밀번호 6자+ 확인)"
+            : "Failed (email 3+ / password 6+ chars)",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onDelete = async (id: string, em: string) => {
+    if (!window.confirm(ko ? `${em} 멤버를 삭제할까요?` : `Delete member ${em}?`))
+      return;
+    try {
+      await adminDeleteUser(id);
+      await reload();
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
+  const inputCls =
+    "text-sm px-2 py-1.5 rounded border border-zinc-300 dark:border-zinc-700 bg-transparent text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-orange-400";
+
+  return (
+    <section className="mb-8 rounded-lg border border-zinc-200 dark:border-zinc-800 p-4">
+      <h2 className="text-base font-semibold mb-1">👥 {ko ? "멤버 관리" : "Members"}</h2>
+      <p className="text-xs text-zinc-500 mb-3">
+        {ko
+          ? "조직에 멤버를 발급합니다. 멤버는 조직 데이터를 함께 보고, 발급된 초기 비밀번호는 첫 로그인 시 본인이 변경합니다."
+          : "Issue member accounts. Members share org data; the initial password must be changed on first login."}
+      </p>
+
+      <form onSubmit={onCreate} className="flex flex-wrap items-end gap-2 mb-3">
+        <label className="flex flex-col gap-1 text-[11px] text-zinc-500">
+          {ko ? "이메일" : "Email"}
+          <input
+            type="email"
+            required
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            className={inputCls}
+          />
+        </label>
+        <label className="flex flex-col gap-1 text-[11px] text-zinc-500">
+          {ko ? "이름(선택)" : "Name"}
+          <input
+            type="text"
+            value={displayName}
+            onChange={(e) => setDisplayName(e.target.value)}
+            className={inputCls}
+          />
+        </label>
+        <label className="flex flex-col gap-1 text-[11px] text-zinc-500">
+          {ko ? "초기 비밀번호" : "Initial password"}
+          <input
+            type="text"
+            required
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            className={inputCls}
+          />
+        </label>
+        <label className="flex flex-col gap-1 text-[11px] text-zinc-500">
+          {ko ? "역할" : "Role"}
+          <select
+            value={role}
+            onChange={(e) => setRole(e.target.value as "member" | "admin")}
+            className={inputCls}
+          >
+            <option value="member">member</option>
+            <option value="admin">admin</option>
+          </select>
+        </label>
+        <button
+          type="submit"
+          disabled={busy}
+          className="text-sm font-medium px-3 py-1.5 rounded bg-orange-500 hover:bg-orange-600 text-white disabled:opacity-50"
+        >
+          {ko ? "발급" : "Create"}
+        </button>
+      </form>
+
+      {error && <div className="text-xs text-red-500 mb-2">{error}</div>}
+      {msg && <div className="text-xs text-green-600 dark:text-green-400 mb-2">{msg}</div>}
+
+      <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
+        {members.map((m) => (
+          <div key={m.id} className="flex items-center gap-3 py-2 text-sm">
+            <span className="flex-1 truncate">
+              {m.email}
+              {m.display_name ? (
+                <span className="text-zinc-400"> · {m.display_name}</span>
+              ) : null}
+            </span>
+            <span className="text-[11px] px-2 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-500">
+              {m.role}
+            </span>
+            {m.id !== user?.id ? (
+              <button
+                type="button"
+                onClick={() => onDelete(m.id, m.email)}
+                className="text-[11px] text-red-500 hover:underline"
+              >
+                {ko ? "삭제" : "Delete"}
+              </button>
+            ) : (
+              <span className="text-[11px] text-zinc-400">{ko ? "(나)" : "(you)"}</span>
+            )}
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 

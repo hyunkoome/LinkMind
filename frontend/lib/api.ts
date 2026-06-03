@@ -339,6 +339,7 @@ export interface AuthUser {
   display_name: string | null;
   active_space_id: string;
   spaces: AuthSpace[];
+  must_change_password: boolean;
 }
 
 // 로그인 — 성공 시 backend 가 Set-Cookie. 실패(401)는 throw (폼에서 표시).
@@ -346,6 +347,22 @@ export async function login(email: string, password: string): Promise<AuthUser> 
   return fetchJSON<AuthUser>(`/auth/login`, {
     method: "POST",
     body: JSON.stringify({ email, password }),
+  });
+}
+
+// 첫 로그인 강제 변경 — 현재 비번 확인 후 새 비번(필수)/이메일(선택). must_change_password 해제.
+export async function changeCredentials(
+  currentPassword: string,
+  newPassword: string,
+  newEmail?: string,
+): Promise<AuthUser> {
+  return fetchJSON<AuthUser>(`/auth/change-credentials`, {
+    method: "POST",
+    body: JSON.stringify({
+      current_password: currentPassword,
+      new_password: newPassword,
+      new_email: newEmail?.trim() || null,
+    }),
   });
 }
 
