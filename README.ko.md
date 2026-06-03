@@ -73,7 +73,22 @@ backend · agent · UI 를 한 저장소에서 같이 유지하는 **단일 self
 - 3-패널 UI: 좌측 사이드바(프로젝트 + 최근 대화, localStorage 영속) / 가운데 채팅(citation chips + related_wikis) / 우측 클릭한 wiki detail inline — 경계 드래그 리사이즈.
 - 답변은 **반드시 DB 자료 기반** RAG — 일반 LLM 응답이 아님.
 - **멀티턴 대화**: 이전 턴을 history 로 보내 맥락 유지, 후속 질문을 독립형 검색 쿼리로 재작성(condense), 답변을 SSE 로 토큰 단위 streaming(`POST /ask/stream`). URL 을 붙이면 자동 수집 후 그 자료를 근거로 답변.
-- 다음: 검색 / QA / agentic action 요청 유형 + wiki-body 하이브리드 검색.
+- **하이브리드 RAG (2026-06-03)**: 답변에 **위키 본문**(`linkmind_wiki_pages`) + item chunk + pinned 를 함께 활용 — 정리해둔 위키를 실제 답변에 써먹음(원본 조각만 보는 게 아니라).
+- **대화 프라이버시**: 세션/메시지는 **소유자 본인만**(admin 도 남의 대화 X), 프로젝트는 조직 공유. 계정별 localStorage + 서버 동기화(`PUT /sessions/sync`, `GET /sessions/export` 복원).
+- 다음: **arxiv 외부검색(agentic)** — 로컬 Gemma + 무료 arxiv API(외부 AI 없음); 이후 검색/QA/agentic 요청유형 구분.
+
+</details>
+
+<details>
+<summary><b>🔐 멀티테넌트 / 인증</b></summary>
+
+<br>
+
+- **1조직 = 1space, 데이터 공유**; self-signup 없음(루트 관리자가 멤버 발급, 또는 bootstrap). space = 격리·학습·책임의 단위.
+- **인증**: id/pw 로그인 + JWT httpOnly 쿠키 + 전 데이터 API 보호. **bootstrap**: user 0명이면 브라우저 `/login` 에 '조직 만들기'가 떠 첫 관리자 + 조직 생성.
+- **멤버 발급**: 루트 관리자가 Settings(루트전용 `require_space_admin`)에서 이메일 + 초기 비번으로 발급 → 멤버는 첫 로그인 시 자격 강제 변경(force-change).
+- **대화 프라이버시**: 세션은 소유자 본인만 조회, 학습은 space 전체(보기 권한 ≠ 학습 사용).
+- **배포 모델**: 조직 서버 1대(backend + GPU + DB) + 가벼운 **웹/데스크탑(Tauri)** 클라이언트 — 유저 PC 는 GPU 불필요. per-row RLS 는 의도적으로 폐기(1조직 = 1인스턴스 = 격리 경계).
 
 </details>
 
@@ -274,12 +289,12 @@ python -m backend.jobs.link_photo_captions --dry-run       # 사진 figure 연�
 | **1** | ✅ 완료 | Postgres + Qdrant + URL ingest + Embedding + Semantic Search + RAG |
 | **2** | ✅ 완료 | AI 요약/태깅, Slack export 파서, 임베딩 인프라(vLLM-embed), 카테고리 강화, Topic 그래프, ChannelAgent ABC, Next.js 16 + react-force-graph-3d UI, modality-aware viewer, 3-tier categories, Telegram multi-channel |
 | **3** | ✅ 완료 | **llm_wiki 시스템** — classifier/retriever/writer agent, wiki API + Qdrant body search, wiki 리스트/상세 UI + KeywordsEditor, writer daemon + batch backfill, "1 링크 = 1 위키", 키워드 정규화/클라우드, 사진 figure 연결, 대화형 `/ask`(Step 1) |
-| **4** | 🚧 진행 | 대화형 `/ask` — **멀티턴 ✅ (history + 맥락 유지 + condense 쿼리 재작성 + SSE streaming)**, 검색/agentic action 유형 다음; 멀티테넌트 토대(인증 + space, Phase 7 에서 당겨옴); 실제 채널 확장(Slack/WhatsApp/Discord), OCR/멀티모달, 자가학습(feedback 테이블 → 👍/👎), critic agent |
+| **4** | 🚧 진행 | **멀티테넌트(조직 space/멤버발급/force-change/권한/대화프라이버시) ✅**, 대화형 `/ask` 멀티턴 ✅ + **하이브리드 RAG(위키 본문) ✅**, **arxiv 외부검색(agentic) 다음**; 실제 채널 확장(Slack/WhatsApp/Discord), OCR/멀티모달, 자가학습(feedback → 👍/👎), critic agent |
 | **5** | ⬜ 미시작 | **sVLL LoRA 파인튜닝** (Gemma 4 26B-A4B QLoRA 또는 Qwen2-VL), dataset exporter (raw + summary + feedback → JSONL), vLLM 서빙 |
 | **6** | ⬜ 미시작 | Continuous training loop, 온프레미스 AI 엔진 완성 |
 | **7** | ⬜ 미시작 | OSS(AGPL v3) 공개 → hosted SaaS (Auth.js + Stripe, multi-tenant, BYOK) |
 
-> 다음 우선순위: **멀티테넌트 토대(인증 + space + 대화 영속)** + 대화형 `/ask` 나머지(검색 + agentic action) → **학습 파이프라인(Phase 5)**.
+> 다음 우선순위: **arxiv 외부검색(agentic — 로컬 Gemma + 무료 arxiv API, 외부 AI 없음)** → 검색/QA/agentic 요청유형 구분 → **자가학습(feedback)** → **학습 파이프라인(Phase 5)**. 학습 파이프라인의 *인프라*(dataset exporter, QLoRA 셋업, 데이터셋 품질 검증)는 미리 만들 수 있음 — 자가학습과 병행; 실제 학습은 데이터가 충분히 쌓인 뒤.
 
 ---
 

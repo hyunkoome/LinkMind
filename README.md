@@ -73,7 +73,22 @@ Not plain chunk-RAG, but a **karpathy llm_wiki + multi-agent** pattern.
 - 3-panel UI: left sidebar (projects + recent chats, localStorage-persisted) / center chat (citation chips + related_wikis) / right inline detail of the clicked wiki — drag-resizable borders.
 - Answers are **always grounded in DB material** (RAG) — not a generic LLM response.
 - **Multi-turn conversation**: prior turns are sent as history for context retention, follow-up questions are rewritten into standalone search queries (condense), and answers stream token-by-token over SSE (`POST /ask/stream`). Paste a URL to auto-ingest it and ground the answer in that material.
-- Next: search / QA / agentic-action request types + wiki-body hybrid retrieval.
+- **Hybrid RAG (2026-06-03)**: answers now draw on **wiki bodies** (`linkmind_wiki_pages`) + item chunks + pinned items together — the curated wikis you built are actually used in answers, not just raw chunks.
+- **Conversation privacy**: sessions/messages are visible only to their owner (even admins can't see others'); projects are org-shared. Per-account localStorage + server sync (`PUT /sessions/sync`, restore via `GET /sessions/export`).
+- Next: **arxiv external search (agentic)** — local Gemma + the free arxiv API (no external AI); then a search / QA / agentic-action request-type split.
+
+</details>
+
+<details>
+<summary><b>🔐 Multi-tenant / Auth</b></summary>
+
+<br>
+
+- **1 org = 1 space, shared data**; no self-signup (a root admin issues members, or bootstrap). A space is the unit of isolation, learning, and responsibility.
+- **Auth**: id/pw login + JWT in an httpOnly cookie + every data API protected. **bootstrap**: when there are 0 users, the browser `/login` shows "create organization" to make the first admin + org.
+- **Member issuance**: a root admin issues accounts (email + initial password) in Settings (root-only `require_space_admin`); the member is forced to change credentials on first login (force-change).
+- **Conversation privacy**: a session is visible only to its owner; the whole space is used for training (viewing ≠ training).
+- **Deployment model**: one org server (backend + GPU + DB) + thin **web/desktop (Tauri)** clients — user machines need no GPU. Per-row RLS is intentionally dropped (1 org = 1 instance = the isolation boundary).
 
 </details>
 
@@ -275,12 +290,12 @@ Analysis results (summary, embedding) can be regenerated, but if the raw breaks 
 | **1** | ✅ Done | Postgres + Qdrant + URL ingest + Embedding + Semantic Search + RAG |
 | **2** | ✅ Done | AI summary/tagging, Slack export parser, embedding infra (vLLM-embed), category enrichment, Topic graph, ChannelAgent ABC, Next.js 16 + react-force-graph-3d UI, modality-aware viewer, 3-tier categories, Telegram multi-channel |
 | **3** | ✅ Done | **llm_wiki system** — classifier/retriever/writer agents, wiki API + Qdrant body search, wiki list/detail UI + KeywordsEditor, writer daemon + batch backfill, "1 link = 1 wiki", keyword normalization/cloud, photo-figure linking, conversational `/ask` (Step 1) |
-| **4** | 🚧 In progress | Conversational `/ask` — **multi-turn ✅ (history + context retention + condense query-rewrite + SSE streaming)**, search/agentic-action request types next; multi-tenant foundation (auth + spaces, pulled early from Phase 7); real channel expansion (Slack/WhatsApp/Discord), OCR/multimodal, self-learning (feedback table → 👍/👎), critic agent |
+| **4** | 🚧 In progress | **Multi-tenant (org space / member issuance / force-change / permissions / conversation privacy) ✅**, conversational `/ask` multi-turn ✅ + **hybrid RAG (wiki bodies) ✅**, **arxiv external search (agentic) next**; real channel expansion (Slack/WhatsApp/Discord), OCR/multimodal, self-learning (feedback → 👍/👎), critic agent |
 | **5** | ⬜ Not started | **sVLL LoRA fine-tuning** (Gemma 4 26B-A4B QLoRA or Qwen2-VL), dataset exporter (raw + summary + feedback → JSONL), vLLM serving |
 | **6** | ⬜ Not started | Continuous training loop, complete on-premise AI engine |
 | **7** | ⬜ Not started | OSS (AGPL v3) release → hosted SaaS (Auth.js + Stripe, multi-tenant, BYOK) |
 
-> Next priorities: **multi-tenant foundation (auth + spaces + conversation persistence)** + remaining conversational `/ask` (search + agentic actions) → **training pipeline (Phase 5)**.
+> Next priorities: **arxiv external search (agentic — local Gemma + the free arxiv API, no external AI)** → search/QA/agentic request-type split → **self-learning (feedback)** → **training pipeline (Phase 5)**. The training pipeline's *infrastructure* (dataset exporter, QLoRA setup, dataset quality checks) can be built early — in parallel with self-learning; actual training runs once enough data has accumulated.
 
 ---
 
