@@ -70,9 +70,10 @@ Not plain chunk-RAG, but a **karpathy llm_wiki + multi-agent** pattern.
 <br>
 
 - Home (`/`) redirects to `/ask` — LinkMind's main path.
-- 2-column UI: left (question input + answer + citation chips + related_wikis) / right (inline detail view of the clicked wiki).
+- 3-panel UI: left sidebar (projects + recent chats, localStorage-persisted) / center chat (citation chips + related_wikis) / right inline detail of the clicked wiki — drag-resizable borders.
 - Answers are **always grounded in DB material** (RAG) — not a generic LLM response.
-- Currently 1-shot RAG (Step 1). Next steps: multi-turn + search + agentic actions.
+- **Multi-turn conversation**: prior turns are sent as history for context retention, follow-up questions are rewritten into standalone search queries (condense), and answers stream token-by-token over SSE (`POST /ask/stream`). Paste a URL to auto-ingest it and ground the answer in that material.
+- Next: search / QA / agentic-action request types + wiki-body hybrid retrieval.
 
 </details>
 
@@ -274,12 +275,12 @@ Analysis results (summary, embedding) can be regenerated, but if the raw breaks 
 | **1** | ✅ Done | Postgres + Qdrant + URL ingest + Embedding + Semantic Search + RAG |
 | **2** | ✅ Done | AI summary/tagging, Slack export parser, embedding infra (vLLM-embed), category enrichment, Topic graph, ChannelAgent ABC, Next.js 16 + react-force-graph-3d UI, modality-aware viewer, 3-tier categories, Telegram multi-channel |
 | **3** | ✅ Done | **llm_wiki system** — classifier/retriever/writer agents, wiki API + Qdrant body search, wiki list/detail UI + KeywordsEditor, writer daemon + batch backfill, "1 link = 1 wiki", keyword normalization/cloud, photo-figure linking, conversational `/ask` (Step 1) |
-| **4** | 🚧 In progress | Conversational `/ask` (multi-turn + search + agentic actions), real channel expansion (Slack/WhatsApp/Discord), OCR/multimodal, self-learning (feedback table → 👍/👎), critic agent |
+| **4** | 🚧 In progress | Conversational `/ask` — **multi-turn ✅ (history + context retention + condense query-rewrite + SSE streaming)**, search/agentic-action request types next; multi-tenant foundation (auth + spaces, pulled early from Phase 7); real channel expansion (Slack/WhatsApp/Discord), OCR/multimodal, self-learning (feedback table → 👍/👎), critic agent |
 | **5** | ⬜ Not started | **sVLL LoRA fine-tuning** (Gemma 4 26B-A4B QLoRA or Qwen2-VL), dataset exporter (raw + summary + feedback → JSONL), vLLM serving |
 | **6** | ⬜ Not started | Continuous training loop, complete on-premise AI engine |
 | **7** | ⬜ Not started | OSS (AGPL v3) release → hosted SaaS (Auth.js + Stripe, multi-tenant, BYOK) |
 
-> Next priorities: **conversational `/ask` (multi-turn + search + agentic actions, Phase 4)** → **training pipeline (Phase 5)**.
+> Next priorities: **multi-tenant foundation (auth + spaces + conversation persistence)** + remaining conversational `/ask` (search + agentic actions) → **training pipeline (Phase 5)**.
 
 ---
 
