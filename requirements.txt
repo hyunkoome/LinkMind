@@ -16,6 +16,11 @@ pydantic>=2.9.0
 pydantic-settings>=2.6.0
 python-dotenv>=1.0.1
 
+# ─── Auth (멀티테넌트 — JWT + 비밀번호 해시) ──────────────────────
+# passlib 는 유지보수 중단 + bcrypt 4.x 와 마찰 → bcrypt 직접 사용.
+PyJWT>=2.9.0                      # JWT 발급/검증 (HS256)
+bcrypt>=4.2.0                     # 비밀번호 해시
+
 # ─── Database (Postgres async) ────────────────────────────────────
 sqlalchemy[asyncio]>=2.0.36
 asyncpg>=0.30.0

@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 
-import Header from "@/components/Header";
+import { AuthProvider } from "@/lib/auth/context";
+import { AuthGate } from "@/lib/auth/gate";
 import { LocaleProvider } from "@/lib/i18n/context";
 import "./globals.css";
 
@@ -49,10 +50,11 @@ export default function RootLayout({
       </head>
       <body className="min-h-screen h-screen bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100 flex flex-col">
         <LocaleProvider>
-          <Header />
-          {/* flex flex-col — 페이지가 flex-1/h-full 로 viewport 잔여 높이를 꽉 채우게.
-              block 이면 자식의 flex-1 이 무효라 높이가 collapse 됨 (ask 패널 빈공간 버그). */}
-          <div className="flex-1 min-h-0 flex flex-col">{children}</div>
+          {/* 멀티테넌트 단계 A — AuthProvider 가 세션 복원/가드, AuthGate 가 Header 포함
+              여부 결정 (로그인 페이지는 Header 없이). flex flex-col 구조는 AuthGate 가 유지. */}
+          <AuthProvider>
+            <AuthGate>{children}</AuthGate>
+          </AuthProvider>
         </LocaleProvider>
       </body>
     </html>

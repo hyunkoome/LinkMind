@@ -42,6 +42,22 @@ class Settings(BaseSettings):
     linkmind_log_level: str = Field(default="INFO")
     linkmind_api_key: str = Field(default="")          # 외부 client 인증용 (비어있으면 미사용)
 
+    # ─── Auth / Multitenant (멀티테넌트 — 인증 + space 격리) ──────
+    # JWT 는 httpOnly 쿠키로만 전달 (XSS 안전, 2026-06-03 결정). payload = {sub: user_id,
+    # space: active_space_id, exp}. secret 은 반드시 env 로 (코드에 하드코딩 금지).
+    # 단일 self-host 라도 로그인 강제 — 기본 user/space 를 lifespan 에서 seed.
+    linkmind_jwt_secret: str = Field(default="dev-insecure-change-me")  # 운영은 env 필수
+    linkmind_jwt_algorithm: str = Field(default="HS256")
+    linkmind_jwt_expiration_hours: int = Field(default=720)            # 30일
+    # 쿠키 속성 — self-host(http) 는 secure=False, SaaS(https) 는 env 로 True.
+    linkmind_cookie_name: str = Field(default="linkmind_token")
+    linkmind_cookie_secure: bool = Field(default=False)
+    linkmind_cookie_samesite: Literal["lax", "strict", "none"] = Field(default="lax")
+    # 기본 seed 계정 — 첫 부팅 시 없으면 생성. 로컬 self-host 진입점.
+    linkmind_seed_user_email: str = Field(default="admin@linkmind.local")
+    linkmind_seed_user_password: str = Field(default="linkmind")
+    linkmind_seed_space_name: str = Field(default="My Space")
+
     # ─── Database ─────────────────────────────────────────────────
     # 컨테이너에서 돌릴 때는 DATABASE_URL, 로컬에서 돌릴 때는 DATABASE_URL_LOCAL을 우선 사용.
     # FastAPI를 호스트에서 띄우면 host='postgres'가 해석 안 되므로 LOCAL 우선 정책을 settings에서 처리.

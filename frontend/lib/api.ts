@@ -19,11 +19,23 @@ const API_BASE =
 async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
+    // 멀티테넌트(2026-06-03): JWT 는 httpOnly 쿠키 → 모든 요청에 쿠키 동봉.
+    credentials: "include",
     headers: {
       "Content-Type": "application/json",
       ...(init?.headers || {}),
     },
   });
+  // 세션 만료/미인증 → 로그인 페이지로. 단 /auth/* 호출(로그인 폼·me 확인)은 제외 —
+  // 폼이 직접 에러를 표시하거나 AuthProvider 가 null 처리한다.
+  if (
+    res.status === 401 &&
+    typeof window !== "undefined" &&
+    !path.startsWith("/auth/") &&
+    window.location.pathname !== "/login"
+  ) {
+    window.location.href = "/login";
+  }
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(`${res.status} ${res.statusText}: ${text}`);
@@ -179,7 +191,11 @@ export async function uploadPdf(
   const res = await fetch(`${API_BASE}/ingest/pdf/upload?${params}`, {
     method: "POST",
     body: form,
+    credentials: "include",
   });
+  if (res.status === 401 && typeof window !== "undefined") {
+    window.location.href = "/login";
+  }
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(`${res.status} ${res.statusText}: ${text}`);
@@ -270,7 +286,11 @@ export async function askQuestionStream(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
     signal: h.signal,
+    credentials: "include",
   });
+  if (res.status === 401 && typeof window !== "undefined") {
+    window.location.href = "/login";
+  }
   if (!res.ok || !res.body) {
     const t = await res.text().catch(() => "");
     throw new Error(`${res.status} ${res.statusText}: ${t}`);
@@ -301,6 +321,48 @@ export async function askQuestionStream(
       // "done" — 별도 처리 없이 루프 종료를 기다린다.
     }
   }
+}
+
+// ── Auth / Multitenant (2026-06-03 단계 A) ─────────────────────
+// JWT 는 httpOnly 쿠키 → 토큰을 JS 가 직접 만지지 않는다. 상태는 GET /auth/me 로 복원.
+
+export interface AuthSpace {
+  id: string;
+  name: string;
+  kind: string;
+  role: string | null;
+}
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  display_name: string | null;
+  active_space_id: string;
+  spaces: AuthSpace[];
+}
+
+// 로그인 — 성공 시 backend 가 Set-Cookie. 실패(401)는 throw (폼에서 표시).
+export async function login(email: string, password: string): Promise<AuthUser> {
+  return fetchJSON<AuthUser>(`/auth/login`, {
+    method: "POST",
+    body: JSON.stringify({ email, password }),
+  });
+}
+
+// 현재 세션 사용자. 미인증이면 401 throw (AuthProvider 가 null 처리).
+export async function getMe(): Promise<AuthUser> {
+  return fetchJSON<AuthUser>(`/auth/me`);
+}
+
+export async function logout(): Promise<void> {
+  await fetchJSON<{ ok: boolean }>(`/auth/logout`, { method: "POST" });
+}
+
+export async function switchSpace(spaceId: string): Promise<AuthUser> {
+  return fetchJSON<AuthUser>(`/auth/switch-space`, {
+    method: "POST",
+    body: JSON.stringify({ space_id: spaceId }),
+  });
 }
 
 export { API_BASE };

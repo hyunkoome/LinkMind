@@ -12,7 +12,7 @@ import logging
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 import asyncio
@@ -20,6 +20,7 @@ import asyncio
 from backend import runtime_settings
 from backend.api import (
     ask,
+    auth as auth_api,
     files,
     graph,
     health,
@@ -30,6 +31,9 @@ from backend.api import (
     topics,
     wiki,
 )
+from backend.api.deps import get_current_user
+from backend.api.middleware import AuthMiddleware
+from backend.auth.seed import seed_default_user_space
 from backend.config import get_settings
 from backend.db.connection import close_engine, get_engine
 from backend.jobs.analysis_worker import run_analysis_worker
@@ -59,6 +63,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # DB 가 잠시 불안한 상태일 수도 있으니 startup 자체는 막지 않음. 첫 요청 시
         # get_active_prompt 가 seed-fallback 으로 동작.
         logger.error("runtime_settings 적재 실패 — env/코드 시드로 fallback: %s", e)
+
+    # 멀티테넌트 단계 A (2026-06-03) — 기본 user/space seed. users 테이블이 없으면
+    # (migrate_schema 미실행) 경고만 — startup 막지 않음.
+    try:
+        await seed_default_user_space()
+    except Exception as e:  # noqa: BLE001
+        logger.error(
+            "기본 user/space seed 실패 — `python -m backend.jobs.migrate_schema` 로 "
+            "스키마 반영 후 재시작 필요할 수 있음: %s", e
+        )
 
     # analysis_worker — 백그라운드 task. ingest 시 summarize=False 로 빠르게 들어온
     # item 의 chunks (embedding) + summary (LLM) 를 천천히 채움.
@@ -130,26 +144,47 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# 개발 편의를 위한 CORS — 운영 시 origins 제한 필요
+# 인증 미들웨어 (단계 A) — 쿠키 JWT 를 디코드해 request.state.auth 에 채움.
+# CORS 는 cross-origin(frontend :3001 → backend :8000) 쿠키 전송을 위해 credentials 허용.
+# 운영(SaaS)에선 allow_origins 를 실제 도메인으로 제한 + allow_credentials=True 유지.
+# 주의: credentials 쿠키는 allow_origins=["*"] 와 함께 못 씀(브라우저 정책) → frontend
+# origin 을 명시. 개발 기본은 localhost:3001.
+import os as _os
+_frontend_origins = [
+    o.strip() for o in _os.getenv(
+        "LINKMIND_CORS_ORIGINS", "http://localhost:3001,http://127.0.0.1:3001"
+    ).split(",") if o.strip()
+]
+app.add_middleware(AuthMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_frontend_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # ── Routers ──────────────────────────────────────────────────────
+# 보호 정책 (단계 A): 데이터/기능 라우터는 로그인 필수. 예외:
+#   - health  : 인프라 모니터링 (인증 없이 접근 가능해야)
+#   - auth    : 로그인 자체
+#   - files   : cross-origin <img>/<iframe> inline 표시 (쿠키 자동첨부 안 되는 경우 대비).
+#               단계 C 에서 file_hash → space 소속 확인으로 격리.
+#   - /        : 루트 안내
+_protected = [Depends(get_current_user)]
+
 app.include_router(health.router, tags=["health"])
-app.include_router(ingest.router, prefix="/ingest", tags=["ingest"])
-app.include_router(search.router, prefix="/search", tags=["search"])
-app.include_router(ask.router, prefix="/ask", tags=["ask"])
-app.include_router(settings_api.router, prefix="/settings", tags=["settings"])
+app.include_router(auth_api.router, prefix="/auth", tags=["auth"])
 app.include_router(files.router, prefix="/files", tags=["files"])
-app.include_router(topics.router, prefix="/topics", tags=["topics"])
-app.include_router(items.router, prefix="/items", tags=["items"])
-app.include_router(graph.router, prefix="/graph", tags=["graph"])
-app.include_router(wiki.router, prefix="/wiki", tags=["wiki"])
+
+app.include_router(ingest.router, prefix="/ingest", tags=["ingest"], dependencies=_protected)
+app.include_router(search.router, prefix="/search", tags=["search"], dependencies=_protected)
+app.include_router(ask.router, prefix="/ask", tags=["ask"], dependencies=_protected)
+app.include_router(settings_api.router, prefix="/settings", tags=["settings"], dependencies=_protected)
+app.include_router(topics.router, prefix="/topics", tags=["topics"], dependencies=_protected)
+app.include_router(items.router, prefix="/items", tags=["items"], dependencies=_protected)
+app.include_router(graph.router, prefix="/graph", tags=["graph"], dependencies=_protected)
+app.include_router(wiki.router, prefix="/wiki", tags=["wiki"], dependencies=_protected)
 
 
 @app.get("/")

@@ -1271,3 +1271,108 @@ def _to_json(d: dict[str, Any]) -> str:
     """psycopg/asyncpg에 JSONB로 전달하기 위한 직렬화."""
     import orjson
     return orjson.dumps(d).decode("utf-8")
+
+
+# ──────────────────────────────────────────────────────────────
+# auth / multitenant — users / spaces / space_members (2026-06-03 단계 A)
+# ──────────────────────────────────────────────────────────────
+
+
+async def get_user_by_email(
+    session: AsyncSession, *, email: str,
+) -> dict[str, Any] | None:
+    """email 로 user 조회 (로그인용 — password_hash 포함)."""
+    res = await session.execute(
+        text("SELECT id, email, password_hash, display_name FROM users WHERE email = :e"),
+        {"e": email},
+    )
+    row = res.mappings().one_or_none()
+    return dict(row) if row else None
+
+
+async def get_user_by_id(
+    session: AsyncSession, *, user_id: UUID,
+) -> dict[str, Any] | None:
+    res = await session.execute(
+        text("SELECT id, email, display_name FROM users WHERE id = :id"),
+        {"id": user_id},
+    )
+    row = res.mappings().one_or_none()
+    return dict(row) if row else None
+
+
+async def create_user(
+    session: AsyncSession, *,
+    email: str, password_hash: str, display_name: str | None = None,
+) -> UUID:
+    res = await session.execute(
+        text("""
+            INSERT INTO users (email, password_hash, display_name)
+            VALUES (:e, :ph, :dn)
+            RETURNING id
+        """),
+        {"e": email, "ph": password_hash, "dn": display_name},
+    )
+    return res.scalar_one()
+
+
+async def create_space(
+    session: AsyncSession, *, name: str, kind: str = "personal",
+) -> UUID:
+    res = await session.execute(
+        text("INSERT INTO spaces (name, kind) VALUES (:n, :k) RETURNING id"),
+        {"n": name, "k": kind},
+    )
+    return res.scalar_one()
+
+
+async def get_space(
+    session: AsyncSession, *, space_id: UUID,
+) -> dict[str, Any] | None:
+    res = await session.execute(
+        text("SELECT id, name, kind FROM spaces WHERE id = :id"),
+        {"id": space_id},
+    )
+    row = res.mappings().one_or_none()
+    return dict(row) if row else None
+
+
+async def add_member(
+    session: AsyncSession, *,
+    space_id: UUID, user_id: UUID, role: str = "owner",
+) -> None:
+    await session.execute(
+        text("""
+            INSERT INTO space_members (space_id, user_id, role)
+            VALUES (:s, :u, :r)
+            ON CONFLICT (space_id, user_id) DO NOTHING
+        """),
+        {"s": space_id, "u": user_id, "r": role},
+    )
+
+
+async def is_space_member(
+    session: AsyncSession, *, space_id: UUID, user_id: UUID,
+) -> bool:
+    res = await session.execute(
+        text("SELECT 1 FROM space_members WHERE space_id = :s AND user_id = :u"),
+        {"s": space_id, "u": user_id},
+    )
+    return res.scalar_one_or_none() is not None
+
+
+async def list_user_spaces(
+    session: AsyncSession, *, user_id: UUID,
+) -> list[dict[str, Any]]:
+    """user 가 속한 space 목록 (가입순). 첫 항목이 기본 활성 space 후보."""
+    res = await session.execute(
+        text("""
+            SELECT s.id, s.name, s.kind, m.role
+            FROM space_members m
+            JOIN spaces s ON s.id = m.space_id
+            WHERE m.user_id = :u
+            ORDER BY m.created_at ASC
+        """),
+        {"u": user_id},
+    )
+    return [dict(r) for r in res.mappings().all()]

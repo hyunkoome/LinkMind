@@ -22,6 +22,10 @@ python-dateutil>=2.9.0
 PyYAML>=6.0.0                     # config/*.yaml 로더 — 여러 테스트가 backend/ai_agents 경유 import
                                  # (전에는 sentence-transformers 가 transitive 로 끌어왔으나 제거됨)
 
+# Auth (멀티테넌트) — test_auth_security.py 가 bcrypt/jwt import
+PyJWT>=2.9.0
+bcrypt>=4.2.0
+
 # LLM provider SDK — 모듈 import 단계에서 끌어옴 (호출은 안 함)
 openai>=1.55.0
 anthropic>=0.40.0

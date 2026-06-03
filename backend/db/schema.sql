@@ -498,3 +498,44 @@ CREATE INDEX IF NOT EXISTS idx_agent_runs_created   ON agent_runs(created_at DES
 -- ============================================================================
 ALTER TABLE wiki_pages ADD COLUMN IF NOT EXISTS keywords TEXT[] DEFAULT '{}';
 CREATE INDEX IF NOT EXISTS idx_wiki_pages_keywords ON wiki_pages USING GIN (keywords);
+
+
+-- ============================================================================
+-- 2026-06-03 — 멀티테넌트 단계 A: 인증 + space 토대
+-- ----------------------------------------------------------------------------
+-- 통합 모델 (docs/multitenant_design.md §1):
+--   - space  = 데이터 소유 = 격리(권한) 경계. 로컬=멤버1 space, SaaS=멤버N space (동일 코드).
+--   - member = space 접근권. 멤버는 그 space 데이터 전부 공유 (per-row ACL 없음).
+--   - group  = space 내부 분류 (단계 D, 권한 아님).
+-- 단계 A 는 인증 골격만 — 기존 데이터 테이블 space_id 컬럼/RLS 는 단계 C 에서 추가.
+-- ============================================================================
+
+-- ── users ──────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS users (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    email         TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,                  -- bcrypt
+    display_name  TEXT,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- ── spaces ─────────────────────────────────────────────────────────────
+-- 격리 경계. kind: 'personal'(멤버1) | 'org'(멤버N). 둘은 같은 메커니즘.
+CREATE TABLE IF NOT EXISTS spaces (
+    id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name       TEXT NOT NULL,
+    kind       TEXT NOT NULL DEFAULT 'personal',  -- 'personal' | 'org'
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- ── space_members ──────────────────────────────────────────────────────
+-- 한 유저가 여러 space 소속 가능. 활성 space 는 JWT/UI 가 결정.
+CREATE TABLE IF NOT EXISTS space_members (
+    space_id   UUID NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
+    user_id    UUID NOT NULL REFERENCES users(id)  ON DELETE CASCADE,
+    role       TEXT NOT NULL DEFAULT 'owner',      -- 'owner' | 'admin' | 'member'
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (space_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_space_members_user ON space_members(user_id);
