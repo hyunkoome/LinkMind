@@ -60,6 +60,35 @@ def test_login_sets_cookie_and_grants_access(base: str):
 
 
 @pytest.mark.integration
+def test_register_creates_user_and_personal_space(base: str):
+    # 멱등 — 첫 실행 201, 재실행 409. 어느 경우든 그 계정으로 로그인 + personal space 보유.
+    email = "pytest-register@linkmind.local"
+    pw = "pytest-pw-123"
+    with httpx.Client(base_url=base, timeout=10.0) as c:
+        r = c.post(
+            "/auth/register",
+            json={"email": email, "password": pw, "display_name": "Pytest"},
+        )
+        assert r.status_code in (201, 409), r.text
+        lr = c.post("/auth/login", json={"email": email, "password": pw})
+        assert lr.status_code == 200
+        body = lr.json()
+        assert body["email"] == email
+        assert body["spaces"], "회원가입 시 personal space 가 생겨야 함"
+        assert body["spaces"][0]["kind"] == "personal"
+
+
+@pytest.mark.integration
+def test_register_short_password_422(base: str):
+    with httpx.Client(base_url=base, timeout=10.0) as c:
+        r = c.post(
+            "/auth/register",
+            json={"email": "x@linkmind.local", "password": "123"},
+        )
+        assert r.status_code == 422
+
+
+@pytest.mark.integration
 def test_login_wrong_password_401(base: str):
     with httpx.Client(base_url=base, timeout=10.0) as c:
         r = c.post("/auth/login", json={"email": SEED_EMAIL, "password": "definitely-wrong"})

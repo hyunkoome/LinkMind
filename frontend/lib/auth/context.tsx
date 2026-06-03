@@ -18,6 +18,7 @@ import {
   getMe,
   login as apiLogin,
   logout as apiLogout,
+  register as apiRegister,
   switchSpace as apiSwitchSpace,
 } from "@/lib/api";
 
@@ -25,6 +26,11 @@ interface AuthContextValue {
   user: AuthUser | null;
   loading: boolean; // 초기 /auth/me 확인 중
   login: (email: string, password: string) => Promise<void>;
+  register: (
+    email: string,
+    password: string,
+    displayName?: string,
+  ) => Promise<void>;
   logout: () => Promise<void>;
   switchSpace: (spaceId: string) => Promise<void>;
   activeSpace: AuthUser["spaces"][number] | null;
@@ -72,6 +78,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(u);
   }, []);
 
+  const register = useCallback(
+    async (email: string, password: string, displayName?: string) => {
+      const u = await apiRegister(email, password, displayName);
+      setUser(u);
+    },
+    [],
+  );
+
   const logout = useCallback(async () => {
     try {
       await apiLogout();
@@ -93,7 +107,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ user, loading, login, logout, switchSpace, activeSpace }}
+      value={{ user, loading, login, register, logout, switchSpace, activeSpace }}
     >
       {children}
     </AuthContext.Provider>

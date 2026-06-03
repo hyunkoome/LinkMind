@@ -349,6 +349,22 @@ export async function login(email: string, password: string): Promise<AuthUser> 
   });
 }
 
+// 회원가입 — 새 user + 본인 personal space 자동 생성 + 자동 로그인(쿠키). 중복 이메일은 409 throw.
+export async function register(
+  email: string,
+  password: string,
+  displayName?: string,
+): Promise<AuthUser> {
+  return fetchJSON<AuthUser>(`/auth/register`, {
+    method: "POST",
+    body: JSON.stringify({
+      email,
+      password,
+      display_name: displayName?.trim() || null,
+    }),
+  });
+}
+
 // 현재 세션 사용자. 미인증이면 401 throw (AuthProvider 가 null 처리).
 export async function getMe(): Promise<AuthUser> {
   return fetchJSON<AuthUser>(`/auth/me`);

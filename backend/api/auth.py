@@ -18,11 +18,17 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_current_space_id, get_current_user
-from backend.auth.security import create_access_token, verify_password
+from backend.auth.security import create_access_token, hash_password, verify_password
 from backend.config import get_settings
 from backend.db import repository
 from backend.db.connection import get_session
-from backend.schemas.auth import LoginRequest, SpaceOut, SwitchSpaceRequest, UserOut
+from backend.schemas.auth import (
+    LoginRequest,
+    RegisterRequest,
+    SpaceOut,
+    SwitchSpaceRequest,
+    UserOut,
+)
 
 router = APIRouter()
 
@@ -75,6 +81,39 @@ async def login(
     token = create_access_token(user_id=user["id"], space_id=active_space_id)
     _set_auth_cookie(response, token)
     return _build_user_out(user, active_space_id, spaces)
+
+
+@router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
+async def register(
+    body: RegisterRequest,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+) -> UserOut:
+    """회원가입 — 새 user + 본인 personal space 자동 생성 + 자동 로그인(쿠키).
+
+    멀티테넌트 통합 모델: 가입하면 멤버1 personal space 를 가진다 (조직은 이후 초대로 합류).
+    """
+    email = body.email.strip()
+    if await repository.get_user_by_email(session, email=email) is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="이미 등록된 이메일입니다"
+        )
+    user_id = await repository.create_user(
+        session,
+        email=email,
+        password_hash=hash_password(body.password),
+        display_name=body.display_name,
+    )
+    space_name = (body.display_name or email.split("@")[0]).strip() + " Space"
+    space_id = await repository.create_space(session, name=space_name, kind="personal")
+    await repository.add_member(session, space_id=space_id, user_id=user_id, role="owner")
+    await session.commit()
+
+    token = create_access_token(user_id=user_id, space_id=space_id)
+    _set_auth_cookie(response, token)
+    spaces = await repository.list_user_spaces(session, user_id=user_id)
+    user = {"id": user_id, "email": email, "display_name": body.display_name}
+    return _build_user_out(user, space_id, spaces)
 
 
 @router.post("/logout")
