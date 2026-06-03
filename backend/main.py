@@ -27,6 +27,7 @@ from backend.api import (
     ingest,
     items,
     search,
+    sessions as sessions_api,
     settings as settings_api,
     topics,
     wiki,
@@ -178,6 +179,7 @@ app.include_router(topics.router, prefix="/topics", tags=["topics"], dependencie
 app.include_router(items.router, prefix="/items", tags=["items"], dependencies=_protected)
 app.include_router(graph.router, prefix="/graph", tags=["graph"], dependencies=_protected)
 app.include_router(wiki.router, prefix="/wiki", tags=["wiki"], dependencies=_protected)
+app.include_router(sessions_api.router, prefix="/sessions", tags=["sessions"], dependencies=_protected)
 
 
 @app.get("/")

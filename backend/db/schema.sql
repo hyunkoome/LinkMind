@@ -543,3 +543,48 @@ CREATE TABLE IF NOT EXISTS space_members (
 );
 
 CREATE INDEX IF NOT EXISTS idx_space_members_user ON space_members(user_id);
+
+
+-- ============================================================================
+-- 2026-06-03 — 단계 B: ask 대화 세션 DB화 + 대화 프라이버시
+-- ----------------------------------------------------------------------------
+-- 프라이버시 모델 (사용자 확정):
+--   - 프로젝트(대화 묶음) = 조직 공유 (space 전체가 봄). user_id = 생성자(참고).
+--   - 세션/메시지 = 소유자(user_id) 본인만 조회 (admin 도 남의 대화 못 봄).
+--   - 학습 export = space 전체 (모든 멤버 대화로 조직 모델 학습 — 보기 권한과 학습 사용 분리).
+-- id 는 클라 genId('s_'/'p_') 문자열 PK 보존. frontend write-through 미러(PUT /sessions/sync).
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS ask_projects (
+    id            TEXT PRIMARY KEY,                  -- 클라 genId('p_..')
+    user_id       UUID NOT NULL REFERENCES users(id)  ON DELETE CASCADE,  -- 생성자
+    space_id      UUID NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,  -- 조직(공유 범위)
+    name          TEXT NOT NULL,
+    created_at_ms BIGINT
+);
+CREATE INDEX IF NOT EXISTS idx_ask_projects_space ON ask_projects(space_id);
+
+CREATE TABLE IF NOT EXISTS ask_sessions (
+    id            TEXT PRIMARY KEY,                  -- 클라 genId('s_..')
+    user_id       UUID NOT NULL REFERENCES users(id)  ON DELETE CASCADE,  -- 소유자(본인만 조회)
+    space_id      UUID NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,  -- 학습 범위
+    title         TEXT,
+    project_id    TEXT REFERENCES ask_projects(id) ON DELETE SET NULL,
+    created_at_ms BIGINT,
+    updated_at_ms BIGINT
+);
+CREATE INDEX IF NOT EXISTS idx_ask_sessions_owner ON ask_sessions(user_id, updated_at_ms DESC);
+CREATE INDEX IF NOT EXISTS idx_ask_sessions_space ON ask_sessions(space_id);  -- 학습 export
+
+CREATE TABLE IF NOT EXISTS ask_messages (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id    TEXT NOT NULL REFERENCES ask_sessions(id) ON DELETE CASCADE,
+    ord           INTEGER NOT NULL,                  -- 세션 내 순서 (0-based)
+    role          TEXT NOT NULL,                     -- 'user' | 'assistant'
+    content       TEXT NOT NULL,
+    ts            TEXT,                              -- 클라 ISO 문자열
+    llm_model     TEXT,
+    citations     JSONB DEFAULT '[]'::jsonb,
+    related_wikis JSONB DEFAULT '[]'::jsonb,
+    ingested      JSONB DEFAULT '[]'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_ask_messages_session ON ask_messages(session_id, ord);

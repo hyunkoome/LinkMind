@@ -29,9 +29,11 @@ import {
   type AskStreamMeta,
   type WikiPageDetail,
 } from "@/lib/api";
+import { useAuth } from "@/lib/auth/context";
 import {
   genId,
   loadStore,
+  loadStoreFromServer,
   saveStore,
   sessionTitle,
   type AskMessage,
@@ -100,7 +102,9 @@ export default function AskPage() {
   const pollTokenRef = useRef(0); // 새 질문/새 대화 시 이전 폴링 취소용
   const sessionsRef = useRef<AskSession[]>([]); // 폴링 클로저에서 최신 sessions 참조
 
-  // ─── 영속 상태 (localStorage) ───
+  const { user } = useAuth(); // 계정별 대화 (프라이버시 + 서버 동기화)
+
+  // ─── 영속 상태 (서버가 진실 소스 + 계정별 localStorage 캐시) ───
   const [hydrated, setHydrated] = useState(false);
   const [sessions, setSessions] = useState<AskSession[]>([]);
   const [projects, setProjects] = useState<AskProject[]>([]);
@@ -120,24 +124,35 @@ export default function AskPage() {
   const [leftW, setLeftW] = useState(LEFT_DEFAULT);
   const [rightW, setRightW] = useState(RIGHT_DEFAULT);
 
-  // ─── mount: localStorage 복원 ───
+  // ─── 로그인/계정 변경 시: 서버에서 본인 대화 로드 (계정별 + 멀티브라우저 동기화) ───
+  // 서버가 진실 소스 → 다른 브라우저/다른 계정에서도 정확히 본인 대화만. 서버 실패 시 캐시 fallback.
   useEffect(() => {
-    const d = loadStore();
-    setSessions(d.sessions);
-    setProjects(d.projects);
-    setActiveId(d.activeSessionId);
+    if (!user) return;
+    setHydrated(false); // 로드 끝나기 전 저장 막아 이전 계정 데이터 덮어쓰기 방지
+    let cancelled = false;
+    void (async () => {
+      const d = await loadStoreFromServer(user.id);
+      if (cancelled) return;
+      setSessions(d.sessions);
+      setProjects(d.projects);
+      setActiveId(d.activeSessionId);
+      setHydrated(true);
+    })();
+    // 패널 너비는 계정 무관 로컬 UI 상태.
     const l = Number(localStorage.getItem(LS_LEFT));
     const r = Number(localStorage.getItem(LS_RIGHT));
     if (l) setLeftW(clamp(l, LEFT_MIN, LEFT_MAX));
     if (r) setRightW(clamp(r, RIGHT_MIN, RIGHT_MAX));
-    setHydrated(true);
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
 
   // ─── 변경 → 저장 (hydrate 완료 후에만; 첫 commit 의 빈 상태로 덮어쓰기 방지) ───
   useEffect(() => {
-    if (!hydrated) return;
-    saveStore({ sessions, projects, activeSessionId: activeId });
-  }, [hydrated, sessions, projects, activeId]);
+    if (!hydrated || !user) return;
+    saveStore(user.id, { sessions, projects, activeSessionId: activeId });
+  }, [hydrated, user?.id, sessions, projects, activeId]);
   useEffect(() => {
     if (hydrated) localStorage.setItem(LS_LEFT, String(leftW));
   }, [hydrated, leftW]);

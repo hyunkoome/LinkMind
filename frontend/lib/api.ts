@@ -443,6 +443,30 @@ export async function switchSpace(spaceId: string): Promise<AuthUser> {
   });
 }
 
+// ── ask 세션 서버 동기화 (단계 B) ──────────────────────────────
+// 세션/메시지는 소유자 본인만(서버가 강제), 프로젝트는 조직 공유. write-through 미러.
+
+export interface AskStoreExport {
+  projects: unknown[];
+  sessions: unknown[];
+}
+
+// 현재 계정의 전체 대화 store 를 서버에 덮어쓴다 (fire-and-forget 미러).
+export async function syncAskStore(
+  projects: unknown[],
+  sessions: unknown[],
+): Promise<{ ok: boolean }> {
+  return fetchJSON(`/sessions/sync`, {
+    method: "PUT",
+    body: JSON.stringify({ projects, sessions }),
+  });
+}
+
+// 로그인 시 본인 세션(+조직 공유 프로젝트)을 서버에서 받아 localStorage 복원.
+export async function exportAskStore(): Promise<AskStoreExport> {
+  return fetchJSON<AskStoreExport>(`/sessions/export`);
+}
+
 export { API_BASE };
 
 

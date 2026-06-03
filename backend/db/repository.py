@@ -1443,3 +1443,140 @@ async def list_user_spaces(
         {"u": user_id},
     )
     return [dict(r) for r in res.mappings().all()]
+
+
+# ──────────────────────────────────────────────────────────────
+# ask 대화 세션 (2026-06-03 단계 B) — write-through 미러 + 본인 조회
+# ──────────────────────────────────────────────────────────────
+
+
+async def sync_user_ask_store(
+    session: AsyncSession, *,
+    user_id: UUID, space_id: UUID,
+    projects: list[dict[str, Any]], sessions: list[dict[str, Any]],
+) -> None:
+    """이 user 의 기존 세션/프로젝트 전부 삭제 후 재삽입 (full replace, messages 는 CASCADE).
+
+    프라이버시: 세션은 소유자(user_id)에 묶이고, space_id 는 학습 범위로 기록한다.
+    """
+    await session.execute(text("DELETE FROM ask_sessions WHERE user_id = :u"), {"u": user_id})
+    await session.execute(text("DELETE FROM ask_projects WHERE user_id = :u"), {"u": user_id})
+
+    for p in projects:
+        await session.execute(
+            text("""
+                INSERT INTO ask_projects (id, user_id, space_id, name, created_at_ms)
+                VALUES (:id, :u, :s, :n, :c)
+            """),
+            {"id": p["id"], "u": user_id, "s": space_id, "n": p["name"], "c": p.get("createdAt")},
+        )
+
+    for sess in sessions:
+        await session.execute(
+            text("""
+                INSERT INTO ask_sessions
+                    (id, user_id, space_id, title, project_id, created_at_ms, updated_at_ms)
+                VALUES (:id, :u, :s, :t, :pid, :c, :upd)
+            """),
+            {"id": sess["id"], "u": user_id, "s": space_id, "t": sess.get("title"),
+             "pid": sess.get("projectId"), "c": sess.get("createdAt"), "upd": sess.get("updatedAt")},
+        )
+        for i, m in enumerate(sess.get("messages", [])):
+            await session.execute(
+                text("""
+                    INSERT INTO ask_messages
+                        (session_id, ord, role, content, ts, llm_model, citations, related_wikis, ingested)
+                    VALUES (:sid, :ord, :role, :content, :ts, :model,
+                            CAST(:cit AS JSONB), CAST(:rw AS JSONB), CAST(:ing AS JSONB))
+                """),
+                {"sid": sess["id"], "ord": i, "role": m["role"], "content": m["content"],
+                 "ts": m.get("ts"), "model": m.get("llm_model"),
+                 "cit": _to_json(m.get("citations") or []),
+                 "rw": _to_json(m.get("related_wikis") or []),
+                 "ing": _to_json(m.get("ingested") or [])},
+            )
+
+
+async def list_user_ask_sessions(
+    session: AsyncSession, *, user_id: UUID,
+) -> list[dict[str, Any]]:
+    """본인 세션 목록 (메시지 제외). admin 도 본인 것만 — 프라이버시."""
+    res = await session.execute(
+        text("""
+            SELECT s.id, s.title, s.project_id, s.created_at_ms, s.updated_at_ms,
+                   (SELECT COUNT(*) FROM ask_messages m WHERE m.session_id = s.id) AS message_count
+            FROM ask_sessions s
+            WHERE s.user_id = :u
+            ORDER BY s.updated_at_ms DESC NULLS LAST
+        """),
+        {"u": user_id},
+    )
+    return [dict(r) for r in res.mappings().all()]
+
+
+async def get_user_ask_session(
+    session: AsyncSession, *, user_id: UUID, session_id: str,
+) -> dict[str, Any] | None:
+    """본인 세션 상세 (메시지 포함). 남의 세션이면 None — 프라이버시 강제."""
+    sres = await session.execute(
+        text("""
+            SELECT id, title, project_id, created_at_ms, updated_at_ms
+            FROM ask_sessions WHERE id = :id AND user_id = :u
+        """),
+        {"id": session_id, "u": user_id},
+    )
+    srow = sres.mappings().one_or_none()
+    if srow is None:
+        return None
+    d = dict(srow)
+    mres = await session.execute(
+        text("""
+            SELECT ord, role, content, ts, llm_model, citations, related_wikis, ingested
+            FROM ask_messages WHERE session_id = :id ORDER BY ord
+        """),
+        {"id": session_id},
+    )
+    d["messages"] = [dict(r) for r in mres.mappings().all()]
+    return d
+
+
+async def list_space_ask_projects(
+    session: AsyncSession, *, space_id: UUID,
+) -> list[dict[str, Any]]:
+    """조직 공유 프로젝트 목록 (space 전체가 봄)."""
+    res = await session.execute(
+        text("""
+            SELECT id, name, created_at_ms, user_id
+            FROM ask_projects WHERE space_id = :s
+            ORDER BY created_at_ms ASC NULLS LAST
+        """),
+        {"s": space_id},
+    )
+    return [dict(r) for r in res.mappings().all()]
+
+
+async def get_user_ask_store_full(
+    session: AsyncSession, *, user_id: UUID,
+) -> list[dict[str, Any]]:
+    """본인 모든 세션 + 메시지 (frontend localStorage 복원용). 개인 규모라 N+1 허용."""
+    sres = await session.execute(
+        text("""
+            SELECT id, title, project_id, created_at_ms, updated_at_ms
+            FROM ask_sessions WHERE user_id = :u
+            ORDER BY updated_at_ms DESC NULLS LAST
+        """),
+        {"u": user_id},
+    )
+    out: list[dict[str, Any]] = []
+    for srow in sres.mappings().all():
+        s = dict(srow)
+        mres = await session.execute(
+            text("""
+                SELECT ord, role, content, ts, llm_model, citations, related_wikis, ingested
+                FROM ask_messages WHERE session_id = :id ORDER BY ord
+            """),
+            {"id": s["id"]},
+        )
+        s["messages"] = [dict(r) for r in mres.mappings().all()]
+        out.append(s)
+    return out

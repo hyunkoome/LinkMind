@@ -110,6 +110,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       await apiLogout();
     } finally {
+      // ask 대화 캐시 정리 (프라이버시 — 같은 브라우저의 다음 사용자에게 안 남게).
+      if (typeof window !== "undefined") {
+        try {
+          Object.keys(localStorage)
+            .filter((k) => k.startsWith("linkmind:ask:store:v1"))
+            .forEach((k) => localStorage.removeItem(k));
+        } catch {
+          /* ignore */
+        }
+      }
       setUser(null);
       router.replace("/login");
     }
