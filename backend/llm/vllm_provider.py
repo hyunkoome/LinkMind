@@ -16,6 +16,8 @@ LinkMind 의 LLMProvider abstraction 덕분에 Ollama ↔ vLLM swap 은 Settings
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+
 from openai import AsyncOpenAI
 
 from backend.llm.base import ChatMessage, LLMProvider, LLMResponse
@@ -65,3 +67,33 @@ class VLLMProvider(LLMProvider):
             provider="vllm",
             usage=usage,
         )
+
+    async def stream_chat(
+        self,
+        messages: list[ChatMessage],
+        model: str | None = None,
+        temperature: float = 0.2,
+        max_tokens: int | None = None,
+    ) -> AsyncIterator[str]:
+        """OpenAI 호환 streaming — chat.completions(stream=True) 의 델타를 그대로 yield.
+
+        vLLM 은 continuous batching 으로 첫 토큰 지연이 짧아 멀티턴 대화의 체감
+        반응성이 좋다. 빈 델타(role-only 첫 chunk 등)는 건너뛴다.
+        """
+        model_id = model or self._default_model
+        kwargs: dict = {
+            "model": model_id,
+            "messages": [{"role": m.role, "content": m.content} for m in messages],
+            "temperature": temperature,
+            "stream": True,
+        }
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max_tokens
+
+        stream = await self._client.chat.completions.create(**kwargs)
+        async for chunk in stream:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta.content
+            if delta:
+                yield delta

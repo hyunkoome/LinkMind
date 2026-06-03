@@ -11,6 +11,7 @@ OpenClaw는 LLM provider가 아니라 client(에이전트)이므로 여기엔 �
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
 
@@ -43,6 +44,22 @@ class LLMProvider(ABC):
     ) -> LLMResponse:
         """대화형 응답 생성."""
         raise NotImplementedError
+
+    async def stream_chat(
+        self,
+        messages: list[ChatMessage],
+        model: str | None = None,
+        temperature: float = 0.2,
+        max_tokens: int | None = None,
+    ) -> AsyncIterator[str]:
+        """대화형 응답을 토큰(델타) 단위로 stream.
+
+        기본 구현은 streaming 미지원 provider 를 위한 fallback — chat() 으로 전체
+        응답을 받은 뒤 한 덩어리로 yield 한다. 실제 token-by-token streaming 이
+        필요한 provider(vLLM/OpenAI/Claude/Ollama)는 이 메서드를 override 한다.
+        """
+        resp = await self.chat(messages, model=model, temperature=temperature, max_tokens=max_tokens)
+        yield resp.text
 
     async def summarize(self, text: str, instruction: str | None = None) -> str:
         """편의 메서드 — 요약. 모든 provider에서 동일하게 사용."""

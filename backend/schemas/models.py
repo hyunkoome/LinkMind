@@ -83,6 +83,14 @@ class SearchResponse(BaseModel):
 # ──────────────────────────────────────────────────────────────
 
 
+class AskTurn(BaseModel):
+    """멀티턴 대화의 한 턴 — 클라이언트(localStorage)가 보관하는 history 를 그대로
+    실어 보낸다. 백엔드는 stateless: 세션 저장은 멀티테넌트 단계에서 DB 로 이전.
+    """
+    role: Literal["user", "assistant"]
+    content: str
+
+
 class AskRequest(BaseModel):
     question: str = Field(..., min_length=1)
     top_k: int = Field(default=8, ge=1, le=30)
@@ -92,6 +100,9 @@ class AskRequest(BaseModel):
     # 최상단에 강제 포함 (agentic action: URL-paste-ingest, 2026-06-02). 임베딩 인덱싱
     # 타이밍 race / 순위 누락을 피하기 위해 명시 pin.
     pin_item_ids: list[UUID] | None = None
+    # 멀티턴 대화 history — 현재 질문 이전의 user/assistant 턴들 (오래된 → 최신 순서).
+    # 맥락 유지(이전 답변 참고) + 후속 질문 쿼리 재작성(condense)에 사용. 첫 턴이면 비움.
+    history: list[AskTurn] = Field(default_factory=list)
 
 
 class AskCitation(BaseModel):

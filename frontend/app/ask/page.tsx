@@ -21,12 +21,12 @@ import ModelLabel from "@/components/ModelLabel";
 import KeywordsEditor from "@/components/wiki/KeywordsEditor";
 import WikiBody from "@/components/wiki/WikiBody";
 import {
-  askQuestion,
+  askQuestionStream,
   getWikiByItem,
   getWikiPage,
   getWikiStatuses,
   ingestAuto,
-  type AskResponse,
+  type AskStreamMeta,
   type WikiPageDetail,
 } from "@/lib/api";
 import {
@@ -93,6 +93,10 @@ export default function AskPage() {
   // URL-paste 후 그 자료의 위키 생성/합성 진행 표시 (pending → completed 폴링)
   const [wikiStatus, setWikiStatus] = useState<{ title: string; slug: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // streaming 중인 답변 텍스트 (완료 전까지 별도 버블로 live 표시 — 매 토큰 sessions 를
+  // 갱신해 localStorage 저장이 폭주하는 걸 피하려고 완료 시에만 메시지로 commit).
+  const [streamingText, setStreamingText] = useState("");
+  const streamAbortRef = useRef<AbortController | null>(null); // 진행 중 stream 취소
   const pollTokenRef = useRef(0); // 새 질문/새 대화 시 이전 폴링 취소용
   const sessionsRef = useRef<AskSession[]>([]); // 폴링 클로저에서 최신 sessions 참조
 
@@ -174,7 +178,12 @@ export default function AskPage() {
   const chatEndRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [activeId, messages.length, pending]);
+  }, [activeId, messages.length, pending, streamingText]);
+
+  // 언마운트 시 진행 중 stream 취소 (메모리 누수/상태 갱신 경고 방지)
+  useEffect(() => {
+    return () => streamAbortRef.current?.abort();
+  }, []);
 
   // selectedSlug 변경 → wiki detail fetch
   useEffect(() => {
@@ -310,10 +319,17 @@ export default function AskPage() {
       );
     }
 
+    // 멀티턴 history — userMsg 추가 전 현재 세션의 메시지(클로저 캡처). role/content 만,
+    // 최근 12개로 제한(백엔드도 8턴으로 다시 자름). 첫 질문이면 빈 배열.
+    const history = messages
+      .slice(-12)
+      .map((m) => ({ role: m.role, content: m.content }));
+
     setInput("");
     setPending(true);
     setError(null);
     setWikiStatus(null);
+    setStreamingText("");
     pollTokenRef.current++; // 이전 폴링 취소
 
     try {
@@ -345,18 +361,55 @@ export default function AskPage() {
       // 수집한 자료의 위키 생성/합성 폴링 시작 (답변 생성과 동시 진행)
       if (pinIds.length) void pollWikiForItem(pinIds[0]);
 
-      const r: AskResponse = await askQuestion({
-        question: q,
-        top_k: 5,
-        pin_item_ids: pinIds.length ? pinIds : undefined,
-      });
+      // ── 멀티턴 streaming RAG ──
+      // meta(검색 결과)가 먼저 오면 우측 위키/관련 배지를 답변보다 앞서 표시하고,
+      // 이어 토큰을 streamingText 에 누적해 live 렌더한다. acc 로컬 변수에 전체 답변을
+      // 모아 완료 시 한 번만 메시지로 commit (state 클로저 stale 회피).
+      streamAbortRef.current?.abort();
+      const ac = new AbortController();
+      streamAbortRef.current = ac;
+      let acc = "";
+      // 객체 holder — onMeta 콜백 안에서 할당하면 TS control-flow 가 meta 를 never 로
+      // 좁히므로(콜백 추적 못함) ref 형태로 둔다.
+      const metaHolder: { current: AskStreamMeta | null } = { current: null };
+
+      await askQuestionStream(
+        {
+          question: q,
+          top_k: 5,
+          pin_item_ids: pinIds.length ? pinIds : undefined,
+          history,
+        },
+        {
+          signal: ac.signal,
+          onMeta: (m) => {
+            metaHolder.current = m;
+            // URL 을 붙인 경우엔 그 자료의 "자기 위키"(pollWikiForItem)가 우측을 맡으므로
+            // 자동 표시 안 함. 순수 질문일 때만 가장 관련도 높은 위키를 미리 띄운다.
+            if (pinIds.length === 0 && m.related_wikis.length > 0 && !selectedSlug) {
+              setSelectedSlug(m.related_wikis[0].slug);
+            }
+            if (m.related_wikis.length > 0) {
+              void pollRelatedStatuses(m.related_wikis.map((w) => w.slug));
+            }
+          },
+          onToken: (t) => {
+            acc += t;
+            setStreamingText(acc);
+          },
+          onError: (msg) => setError(msg),
+        },
+      );
+
+      // 완료 — streamingText 를 정식 메시지로 commit.
+      const meta = metaHolder.current;
       const assistantMsg: AskMessage = {
         role: "assistant",
-        content: r.answer,
+        content: acc,
         ts: new Date().toLocaleTimeString("ko-KR"),
-        citations: r.citations,
-        related_wikis: r.related_wikis,
-        llm_model: `${r.llm_provider}/${r.llm_model}`,
+        citations: meta?.citations,
+        related_wikis: meta?.related_wikis,
+        llm_model: meta ? `${meta.llm_provider}/${meta.llm_model}` : undefined,
         ingested: ingested.length ? ingested : undefined,
       };
       setSessions((prev) =>
@@ -371,17 +424,10 @@ export default function AskPage() {
             : s,
         ),
       );
-      // URL 을 붙인 경우엔 유사 위키를 미리 보여주지 않는다 — 그 자료의 "자기 위키" 가
-      // 합성 완료되면 pollWikiForItem 이 우측에 띄운다 (그 전엔 placeholder 유지).
-      // URL 없이 순수 질문일 때만 가장 관련도 높은 위키를 자동 표시.
-      if (pinIds.length === 0 && r.related_wikis.length > 0 && !selectedSlug) {
-        setSelectedSlug(r.related_wikis[0].slug);
-      }
-      // 모든 관련 위키 배지를 live 상태로 갱신 (pending → completed 자동 반영)
-      if (r.related_wikis.length > 0) {
-        void pollRelatedStatuses(r.related_wikis.map((w) => w.slug));
-      }
+      setStreamingText("");
     } catch (e) {
+      // 세션 전환/언마운트로 인한 취소는 조용히 무시 (사용자 의도).
+      if ((e as Error).name === "AbortError") return;
       setError((e as Error).message);
     } finally {
       setPending(false);
@@ -391,6 +437,8 @@ export default function AskPage() {
 
   // ─── 세션 / 프로젝트 조작 ───
   const newChat = () => {
+    streamAbortRef.current?.abort(); // 진행 중 답변 stream 취소
+    setStreamingText("");
     setActiveId(null);
     setInput("");
     setError(null);
@@ -400,6 +448,8 @@ export default function AskPage() {
   };
 
   const selectSession = (id: string) => {
+    streamAbortRef.current?.abort(); // 다른 세션으로 가면 현재 stream 버림
+    setStreamingText("");
     setActiveId(id);
     setMenuFor(null);
     setError(null);
@@ -817,12 +867,26 @@ export default function AskPage() {
             </article>
           ))}
 
-          {pending && (
+          {/* 검색/첫 토큰 대기 — streamingText 가 비었을 때만 */}
+          {pending && !streamingText && (
             <div className="text-xs text-zinc-500 italic">
               {ingestStatus
                 ? ingestStatus
-                : "🤖 LinkMind 가 자체 DB 검색 중… (vLLM ~30-60초)"}
+                : "🤖 LinkMind 가 자체 DB 검색 중… (vLLM 첫 토큰까지 잠시)"}
             </div>
+          )}
+
+          {/* streaming 중인 답변 — 완료되면 messages 에 commit 되며 이 버블은 사라짐 */}
+          {pending && streamingText && (
+            <article className="text-xs rounded p-3 bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 max-w-3xl">
+              <div className="flex items-center justify-between mb-1">
+                <span className="font-medium text-zinc-700 dark:text-zinc-300">
+                  🤖 LinkMind
+                </span>
+                <span className="text-[10px] text-zinc-400 animate-pulse">생성 중…</span>
+              </div>
+              <WikiBody body={streamingText} className="text-zinc-800 dark:text-zinc-200" />
+            </article>
           )}
 
           {/* URL-paste 한 자료의 위키 생성/합성 진행 — 완성되면 우측 패널에 자동 표시 */}

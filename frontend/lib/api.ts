@@ -189,6 +189,11 @@ export async function uploadPdf(
 
 // ── Ask (대화형 RAG, 2026-05-27) ───────────────────────────────
 
+export interface AskTurn {
+  role: "user" | "assistant";
+  content: string;
+}
+
 export interface AskRequest {
   question: string;
   top_k?: number;
@@ -196,6 +201,8 @@ export interface AskRequest {
   llm_model?: string;
   // ask 에서 URL 붙여 방금 ingest 한 item — context 최상단 강제 포함 (URL-paste-ingest)
   pin_item_ids?: string[];
+  // 멀티턴 — 현재 질문 이전의 user/assistant 턴 (오래된→최신). 맥락 유지 + 후속질문 재작성.
+  history?: AskTurn[];
 }
 
 export interface AskCitation {
@@ -227,6 +234,73 @@ export async function askQuestion(body: AskRequest): Promise<AskResponse> {
     method: "POST",
     body: JSON.stringify(body),
   });
+}
+
+// ── Ask streaming (멀티턴, SSE) ────────────────────────────────
+// POST /ask/stream 은 검색이 끝나는 즉시 meta(citations/related_wikis)를 1회 보내고,
+// 이어 답변을 token 델타로 흘려보낸다. 우측 위키 패널을 답변보다 먼저 띄울 수 있다.
+
+export interface AskStreamMeta {
+  question: string;
+  search_query: string;
+  citations: AskCitation[];
+  related_wikis: AskRelatedWiki[];
+  llm_provider: string;
+  llm_model: string;
+}
+
+export interface AskStreamHandlers {
+  onMeta?: (meta: AskStreamMeta) => void;
+  onToken?: (text: string) => void;
+  onError?: (message: string) => void;
+  signal?: AbortSignal; // 진행 중 취소 (세션 전환/언마운트)
+}
+
+/**
+ * /ask/stream 을 호출해 SSE 프레임을 파싱하며 콜백을 호출한다.
+ * 프레임 구분은 "\n\n", 각 프레임의 "data: {json}" 한 줄을 파싱.
+ * 네트워크/HTTP 오류는 throw, LLM 생성 중 오류는 onError 로 전달된다.
+ */
+export async function askQuestionStream(
+  body: AskRequest,
+  h: AskStreamHandlers,
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/ask/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal: h.signal,
+  });
+  if (!res.ok || !res.body) {
+    const t = await res.text().catch(() => "");
+    throw new Error(`${res.status} ${res.statusText}: ${t}`);
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let idx: number;
+    while ((idx = buf.indexOf("\n\n")) !== -1) {
+      const frame = buf.slice(0, idx);
+      buf = buf.slice(idx + 2);
+      const line = frame.split("\n").find((l) => l.startsWith("data: "));
+      if (!line) continue;
+      let evt: { type: string; text?: string; message?: string } & Partial<AskStreamMeta>;
+      try {
+        evt = JSON.parse(line.slice(6));
+      } catch {
+        continue;
+      }
+      if (evt.type === "meta") h.onMeta?.(evt as unknown as AskStreamMeta);
+      else if (evt.type === "token") h.onToken?.(evt.text || "");
+      else if (evt.type === "error") h.onError?.(evt.message || "unknown error");
+      // "done" — 별도 처리 없이 루프 종료를 기다린다.
+    }
+  }
 }
 
 export { API_BASE };
