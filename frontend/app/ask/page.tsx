@@ -113,6 +113,7 @@ export default function AskPage() {
   // 사이드바 UI 상태
   const [menuFor, setMenuFor] = useState<string | null>(null); // ⋯ 메뉴 열린 세션 id
   const [newProjInput, setNewProjInput] = useState<string | null>(null); // 프로젝트 인라인 입력
+  const [pendingProjectId, setPendingProjectId] = useState<string | null>(null); // 새 대화가 속할 프로젝트
   const [openProjects, setOpenProjects] = useState<Record<string, boolean>>({});
 
   // 우측 panel — 선택한 wiki
@@ -317,13 +318,16 @@ export default function AskPage() {
       const s: AskSession = {
         id: sid,
         title: q.slice(0, 60),
-        projectId: null,
+        projectId: pendingProjectId, // newChat(projectId) 로 지정된 프로젝트(없으면 null)
         createdAt: Date.now(),
         updatedAt: Date.now(),
         messages: [userMsg],
       };
       setSessions((prev) => [s, ...prev]);
       setActiveId(sid);
+      if (pendingProjectId)
+        setOpenProjects((prev) => ({ ...prev, [pendingProjectId]: true }));
+      setPendingProjectId(null);
     } else {
       setSessions((prev) =>
         prev.map((s) =>
@@ -451,10 +455,12 @@ export default function AskPage() {
   };
 
   // ─── 세션 / 프로젝트 조작 ───
-  const newChat = () => {
+  // projectId 를 주면 다음 첫 질문으로 만들어질 대화가 그 프로젝트에 속한다.
+  const newChat = (projectId: string | null = null) => {
     streamAbortRef.current?.abort(); // 진행 중 답변 stream 취소
     setStreamingText("");
     setActiveId(null);
+    setPendingProjectId(projectId);
     setInput("");
     setError(null);
     setMenuFor(null);
@@ -630,7 +636,7 @@ export default function AskPage() {
 
         {/* 액션 */}
         <nav className="shrink-0 px-2 space-y-0.5">
-          <button type="button" onClick={newChat} className={SIDEBAR_ITEM}>
+          <button type="button" onClick={() => newChat()} className={SIDEBAR_ITEM}>
             <span className="w-4 text-center">＋</span> 새 대화
           </button>
           <Link href="/wiki" className={SIDEBAR_ITEM}>
@@ -695,6 +701,14 @@ export default function AskPage() {
                       </button>
                       <button
                         type="button"
+                        onClick={() => newChat(p.id)}
+                        title="이 프로젝트에 새 대화"
+                        className="shrink-0 px-1 text-zinc-400 hover:text-orange-500 opacity-0 group-hover/proj:opacity-100 text-[13px]"
+                      >
+                        ＋
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => renameProject(p.id)}
                         title="이름 변경"
                         className="shrink-0 px-1 text-zinc-400 hover:text-zinc-700 opacity-0 group-hover/proj:opacity-100 text-[11px]"
@@ -713,7 +727,13 @@ export default function AskPage() {
                     {open && (
                       <div className="ml-3 pl-1 border-l border-zinc-200 dark:border-zinc-800">
                         {ps.length === 0 ? (
-                          <div className="px-2 py-1 text-[10px] text-zinc-400">(비어 있음)</div>
+                          <button
+                            type="button"
+                            onClick={() => newChat(p.id)}
+                            className="w-full text-left px-2 py-1 text-[11px] text-zinc-400 hover:text-orange-500"
+                          >
+                            ＋ 새 대화
+                          </button>
                         ) : (
                           ps.map(renderSessionRow)
                         )}
