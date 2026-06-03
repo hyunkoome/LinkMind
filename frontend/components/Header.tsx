@@ -20,6 +20,8 @@ export default function Header() {
   const pathname = usePathname();
   const { locale, setLocale, t } = useT();
   const { user, activeSpace, switchSpace, logout } = useAuth();
+  // 설정은 루트 전용 — member 에겐 nav 에서 숨김.
+  const isAdmin = activeSpace?.role === "owner" || activeSpace?.role === "admin";
 
   return (
     <header className="shrink-0 h-12 border-b border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 flex items-center px-4 gap-1">
@@ -30,7 +32,7 @@ export default function Header() {
         {t.app.title}
       </Link>
       <nav className="flex gap-1">
-        {NAV_HREFS.map((item) => {
+        {NAV_HREFS.filter((item) => item.key !== "settings" || isAdmin).map((item) => {
           const active =
             item.href === "/"
               ? pathname === "/"

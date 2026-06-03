@@ -30,9 +30,9 @@ const PROMPT_NAMES = ["summary_system", "rag_system"] as const;
 type PromptName = (typeof PROMPT_NAMES)[number];
 
 export default function SettingsPage() {
-  const { t } = useT();
+  const { t, locale } = useT();
   const { activeSpace } = useAuth();
-  // 루트 전용(owner/admin)만 멤버 관리 + 전역 설정 노출.
+  // 루트 전용(owner/admin)만 — LLM/프롬프트/키워드/멤버 모두 조직 전역 영향이라 member 차단.
   const isAdmin = activeSpace?.role === "owner" || activeSpace?.role === "admin";
   const [settings, setSettings] = useState<LLMSettings | null>(null);
   const [models, setModels] = useState<ModelsListResponse | null>(null);
@@ -56,6 +56,20 @@ export default function SettingsPage() {
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  // member 차단 — 설정은 조직 전역(LLM/프롬프트/키워드/멤버)이라 루트 전용.
+  if (!isAdmin) {
+    return (
+      <main className="h-full overflow-y-auto p-6 max-w-4xl mx-auto w-full">
+        <h1 className="text-xl font-semibold mb-1">{t.settings.pageTitle}</h1>
+        <div className="text-sm text-zinc-500 mt-4">
+          {locale === "ko"
+            ? "이 페이지는 조직 관리자(owner/admin)만 접근할 수 있습니다."
+            : "This page is for organization admins only."}
+        </div>
+      </main>
+    );
+  }
 
   if (loading && !settings) {
     return <main className="p-6 text-sm text-zinc-500">{t.common.loading}</main>;
