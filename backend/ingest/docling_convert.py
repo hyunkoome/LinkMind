@@ -145,3 +145,39 @@ async def convert_document(
         _convert_sync, str(source),
         device=device, do_ocr=do_ocr, images_scale=images_scale,
     )
+
+
+async def save_docling_figures(session, *, item_id, figures: list[DoclingFigure]) -> int:
+    """Docling 이 추출한 figure 들을 storage 저장 + attachments(role='figure') INSERT.
+
+    pdf 모듈의 _save_pdf_figures 와 동일 패턴 (save_bytes SHA-256 dedup → insert_attachment)
+    이되 caption 이 Docling 이 figure 에 연결한 실제 캡션("Figure 1: ...")이다 — 2단계
+    figure 설명(VLM)의 입력. 반환: 새로 저장된 figure 수 (중복은 ON CONFLICT 로 skip).
+    """
+    from backend.db.repository import insert_attachment
+    from backend.storage.local import save_bytes
+
+    saved = 0
+    for idx, fig in enumerate(figures):
+        if not fig.image_bytes:
+            continue
+        try:
+            fp, fh, fsize = save_bytes(fig.image_bytes)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("docling figure %d storage 저장 실패: %s", idx, e)
+            continue
+        att_id = await insert_attachment(
+            session,
+            item_id=item_id,
+            file_path=fp,
+            file_hash=fh,
+            file_size=fsize,
+            mime_type=f"image/{fig.ext}",
+            role="figure",
+            width=fig.width,
+            height=fig.height,
+            caption=fig.caption,
+        )
+        if att_id is not None:
+            saved += 1
+    return saved

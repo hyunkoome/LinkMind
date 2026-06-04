@@ -26,8 +26,10 @@ from uuid import UUID
 import httpx
 from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
 
+from backend.config import get_settings
 from backend.db.connection import get_engine
 from backend.db.repository import find_item_by_hash, insert_attachment, insert_item
+from backend.ingest.docling_convert import convert_document, save_docling_figures
 from backend.ingest.url import (
     ExtractedDoc,
     _embed_and_index,
@@ -380,7 +382,32 @@ async def ingest_pdf(
     # 외부 URL 이 있으면 그대로 (출처 추적), 없으면 우리 files endpoint 로 — 브라우저에서
     # 클릭하면 inline PDF viewer 가 뜸. path-only 로 저장하면 UI 가 API_BASE 와 결합.
     source_url = external_url or f"/files/{file_hash}"
-    body, pdf_meta = _extract_pdf_text(data)
+
+    # Docling 변환 (플래그 on) — 풍부한 markdown + figure + caption. 한 번 변환으로
+    # 본문과 figure 를 모두 얻어 아래 figure 저장에서 재사용 (pymupdf 재추출 안 함).
+    # 실패하거나 플래그 off 면 기존 pypdf/pymupdf 경로로 fallback (동작 보존).
+    settings = get_settings()
+    docling_doc = None
+    if settings.docling_ingest_enabled:
+        try:
+            docling_doc = await convert_document(
+                file_path, device=settings.docling_device, do_ocr=settings.docling_do_ocr,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Docling PDF 변환 실패 (%s) — pypdf fallback: %s", src, e)
+            docling_doc = None
+
+    if docling_doc is not None and docling_doc.markdown.strip():
+        body = docling_doc.markdown
+        pdf_meta = {
+            "extractor": "docling",
+            "info": {},                          # Docling 은 PDF info dict 미제공
+            "num_pages": docling_doc.num_pages,
+            "num_tables": docling_doc.num_tables,
+            "num_figures": len(docling_doc.figures),
+        }
+    else:
+        body, pdf_meta = _extract_pdf_text(data)
     if not body or len(body.strip()) < 50:
         raise ValueError(f"PDF 텍스트 추출 실패 또는 본문이 너무 짧습니다: {src}")
 
@@ -415,9 +442,14 @@ async def ingest_pdf(
             # 일 때만 (단순 dedup hit 에서 figure 추출 비용을 강요하지 않음).
             figures_saved_existing = 0
             if force and analyze_now:
-                figures_saved_existing = await _save_pdf_figures(
-                    session, item_id=existing, data=data,
-                )
+                if docling_doc is not None:
+                    figures_saved_existing = await save_docling_figures(
+                        session, item_id=existing, figures=docling_doc.figures,
+                    )
+                else:
+                    figures_saved_existing = await _save_pdf_figures(
+                        session, item_id=existing, data=data,
+                    )
             # 새 caption 이면 user_notes append (dedup 에서도 사용자 메모 보존)
             if caption and caption.strip():
                 from backend.db.repository import append_item_user_notes
@@ -502,9 +534,15 @@ async def ingest_pdf(
         if analyze_now:
             chunks_indexed = await _embed_and_index(session, item_id=item_id, text=body)
             # figure 추출은 summary 보다 빠르므로 chunks 다음 / summary 이전에 배치.
-            figures_saved = await _save_pdf_figures(
-                session, item_id=item_id, data=data,
-            )
+            # Docling 변환했으면 그때 뽑은 figure(+ 실제 caption) 재사용, 아니면 pymupdf.
+            if docling_doc is not None:
+                figures_saved = await save_docling_figures(
+                    session, item_id=item_id, figures=docling_doc.figures,
+                )
+            else:
+                figures_saved = await _save_pdf_figures(
+                    session, item_id=item_id, data=data,
+                )
             await session.commit()
             summary_text, tags = await _generate_and_save_summary(
                 session, item_id=item_id, doc=doc,

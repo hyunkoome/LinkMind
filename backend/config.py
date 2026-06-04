@@ -93,6 +93,15 @@ class Settings(BaseSettings):
     # 를 setdefault 로 export 해야 sentence-transformers/huggingface_hub 가 효과 봄.
     hf_hub_offline: bool = Field(default=False)
 
+    # ─── Docling (문서 → 구조화 markdown + figure, Phase 4) ──────────
+    # 켜면 PDF/DOCX/PPTX ingest 가 Docling 으로 변환 (풍부한 markdown + figure +
+    # caption). 끄면 기존 pypdf/pymupdf 경로. 점진 도입 위해 기본 off — 검증 후 on.
+    docling_ingest_enabled: bool = Field(default=False)
+    # Docling 실행 device. GPU 는 vLLM 전용이라 기본 cpu (논문 1편 ~48s). figure '설명'
+    # (VLM)은 별도 GPU 단계. 스캔 PDF 가 많으면 docling_do_ocr=True (느려짐).
+    docling_device: Literal["cpu", "cuda"] = Field(default="cpu")
+    docling_do_ocr: bool = Field(default=False)
+
     # ─── LLM Providers ────────────────────────────────────────────
     # 정책:
     #   - 인프라 위치 (ollama_base_url) / 시크릿 (*_api_key) 만 env 에서 읽음.
