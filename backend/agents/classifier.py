@@ -268,6 +268,11 @@ class ClassifierAgent(AgentBase):
         skipped_low_conf: list[dict[str, Any]] = []
 
         # 1) matched (기존 페이지) — threshold 이상만 link
+        # linked_to_concept: 이 item 이 self(url__item__) 가 아닌 '진짜' wiki(개념 kebab
+        # 또는 외부 yt__/github__/arxiv__)에 연결됐는지. True 면 아래 3)에서 중복 self_wiki
+        # 생성을 건너뛴다 (중복 위키 예방, 2026-06-04). 같은 논문이 개념 위키 + self_wiki
+        # 로 쪼개지던 문제 차단 — item 은 이미 개념 위키에 살아있으니 self 는 불필요.
+        linked_to_concept = False
         slug_to_id: dict[str, str] = {c["slug"]: c["id"] for c in candidates}
         for m in matched:
             slug = m.get("wiki_slug")
@@ -286,6 +291,9 @@ class ClassifierAgent(AgentBase):
                 "role": role,
             })
             linked_page_ids.append(page_id)
+            # 개념/외부 wiki(= self 아닌 것)에 매칭됐으면 self_wiki 불필요로 표시.
+            if not slug.startswith("url__item__"):
+                linked_to_concept = True
 
         # 2) new_pages — 신규 wiki_pages INSERT + link (confidence=1.0)
         created_pages: list[dict[str, Any]] = []
@@ -311,6 +319,10 @@ class ClassifierAgent(AgentBase):
             })
             linked_page_ids.append(new_pid)
             created_pages.append({"id": new_pid, "slug": new_slug, "title": title})
+            # new_pages 는 LLM 이 제안한 개념(kebab) wiki — 이 item 의 정체성 home.
+            # self_wiki 가 별도로 또 생기지 않도록 표시 (중복 예방).
+            if not str(new_slug).startswith("url__item__"):
+                linked_to_concept = True
 
         # 3) item 의 topics → wiki_pages 보장 (2026-05-27 D11, 사용자 mental model).
         #    YouTube/GitHub/arxiv 등 external_id 가 있는 URL 은 그 external_id 가
@@ -372,10 +384,18 @@ class ClassifierAgent(AgentBase):
                     photo_figure_linked = True
 
         self_wiki_created = False
+        self_wiki_skipped_concept = False
         for t in topics_to_wiki:
             is_self_fallback = t["slug"].startswith("url:item:")
             # 사진을 caption URL 위키에 figure 로 연결했으면 self_wiki 안 만듦.
             if is_self_fallback and photo_figure_linked:
+                continue
+            # 중복 예방 (2026-06-04): 이미 개념/외부 wiki 에 연결됐으면 self_wiki 스킵.
+            # 같은 논문이 'cosmos-3-...'(개념) + 'url__item__<uuid>'(self) 로 쪼개지던
+            # 문제 차단. item 은 개념 wiki 에 살아있으니 self 는 군더더기 — 안 만든다.
+            # (개념 매칭이 전혀 없을 때만 self_wiki 가 그 item 의 유일한 home 으로 생성.)
+            if is_self_fallback and linked_to_concept:
+                self_wiki_skipped_concept = True
                 continue
             wiki_slug = sanitize_wiki_slug(t["slug"])
             wiki_title = t["title"] or item.get("title") or wiki_slug
@@ -410,6 +430,7 @@ class ClassifierAgent(AgentBase):
             "matched_count": len(matched),
             "new_pages_count": len(created_pages),
             "self_wiki_created": self_wiki_created,
+            "self_wiki_skipped_concept": self_wiki_skipped_concept,
             "linked_page_ids": linked_page_ids,
             "created_pages": created_pages,
             "skipped_low_conf": skipped_low_conf,

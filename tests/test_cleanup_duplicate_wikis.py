@@ -9,9 +9,12 @@ DB/네트워크 없는 pure 함수 → tests/ 직접 (cpu 마커 없음, §9 결
 
 from __future__ import annotations
 
+from collections import defaultdict
+
 from backend.jobs.cleanup_duplicate_wikis import (
     _detect_t1,
     _detect_t2,
+    _detect_t4,
     _orphan_identity,
     _pick_t1_target,
 )
@@ -33,8 +36,12 @@ def _maps(*, wikis: dict[str, dict], item_native: dict[str, set[str]],
     natively_owned: set[str] = set()
     for s in item_native.values():
         natively_owned |= s
-    # item_wikis 값(slug)을 wiki_id 로 변환
+    # item_wikis 값(slug)을 wiki_id 로 변환 + 역방향 wiki_items 구성
     iw = {iid: {f"wid-{slug}" for slug in slugs} for iid, slugs in item_wikis.items()}
+    wiki_items: dict[str, set[str]] = defaultdict(set)
+    for iid, wids in iw.items():
+        for wid in wids:
+            wiki_items[wid].add(iid)
     return {
         "slug_to_wiki": slug_to_wiki,
         "wiki_by_id": wiki_by_id,
@@ -42,6 +49,7 @@ def _maps(*, wikis: dict[str, dict], item_native: dict[str, set[str]],
         "item_source_type": item_source,
         "natively_owned": natively_owned,
         "item_wikis": iw,
+        "wiki_items": wiki_items,
     }
 
 
@@ -144,6 +152,77 @@ def test_t2_keeps_natively_owned():
         item_wikis={"i": {"github__o-r"}},
     )
     assert _detect_t2(maps) == []
+
+
+# ──────────────── T4 — self_wiki → 개념 wiki merge 탐지 (2026-06-04) ────────────────
+
+def test_t4_merges_self_subset_of_concept():
+    """★ cosmos 케이스 ★ 일반 URL 논문: self_wiki + 개념 wiki, self items ⊆ 개념 items
+    → merge. pdf(aaaa)·url(bbbb) 둘 다 self 와 개념에 link (동일 자료 집합)."""
+    self_slug = "url__item__aaaa"
+    concept = "cosmos-3-omni"
+    maps = _maps(
+        wikis={self_slug: {}, concept: {}},
+        item_native={"aaaa": set(), "bbbb": set()},   # 일반 URL → native 없음
+        item_source={"aaaa": "pdf", "bbbb": "url"},
+        item_wikis={"aaaa": {self_slug, concept}, "bbbb": {self_slug, concept}},
+    )
+    plan = _detect_t4(maps)
+    assert len(plan) == 1
+    assert plan[0]["self_wiki"] == "wid-url__item__aaaa"
+    assert plan[0]["target"] == "wid-cosmos-3-omni"
+
+
+def test_t4_skips_when_self_not_subset():
+    """self_wiki 에만 있는 자료(extra)가 개념 wiki 엔 없으면 → 자동 merge 위험, skip."""
+    self_slug = "url__item__aaaa"
+    concept = "some-concept"
+    maps = _maps(
+        wikis={self_slug: {}, concept: {}},
+        item_native={"aaaa": set(), "extra": set()},
+        item_source={"aaaa": "pdf", "extra": "url"},
+        # extra 는 self 에만 link → self items={aaaa,extra} ⊄ concept items={aaaa}
+        item_wikis={"aaaa": {self_slug, concept}, "extra": {self_slug}},
+    )
+    assert _detect_t4(maps) == []
+
+
+def test_t4_skips_when_has_native_external():
+    """외부ID native wiki 가 있으면 T1 담당 → T4 는 건드리지 않음 (이중 처리 방지)."""
+    self_slug = "url__item__aaaa"
+    maps = _maps(
+        wikis={self_slug: {}, "yt__v": {}, "some-concept": {}},
+        item_native={"aaaa": {"yt__v"}},              # native 외부 wiki 보유
+        item_source={"aaaa": "youtube"},
+        item_wikis={"aaaa": {self_slug, "yt__v", "some-concept"}},
+    )
+    assert _detect_t4(maps) == []
+
+
+def test_t4_skips_self_only_no_concept():
+    """개념 wiki 가 없으면 self_wiki 는 그 자료의 유일한 home → 보존."""
+    self_slug = "url__item__aaaa"
+    maps = _maps(
+        wikis={self_slug: {}},
+        item_native={"aaaa": set()},
+        item_source={"aaaa": "url"},
+        item_wikis={"aaaa": {self_slug}},
+    )
+    assert _detect_t4(maps) == []
+
+
+def test_t4_ignores_external_target_as_concept():
+    """외부ID wiki(yt__/github__)는 개념(kebab) 으로 안 침 — concept target 후보 아님.
+    (외부ID 보유는 위에서 이미 제외되지만, concept 판정 자체도 외부 prefix 배제 확인.)"""
+    self_slug = "url__item__aaaa"
+    # native 는 없지만 link 에 외부 prefix wiki 만 있는 비정상 케이스 → concept 없음 → skip
+    maps = _maps(
+        wikis={self_slug: {}, "github__o-r": {}},
+        item_native={"aaaa": set()},
+        item_source={"aaaa": "url"},
+        item_wikis={"aaaa": {self_slug, "github__o-r"}},
+    )
+    assert _detect_t4(maps) == []
 
 
 def test_t2_ignores_self_wiki_prefix():

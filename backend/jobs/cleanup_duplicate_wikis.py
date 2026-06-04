@@ -187,12 +187,15 @@ async def _build_maps(session: AsyncSession) -> dict[str, Any]:
         item_native_slugs[iid] = nslugs
         natively_owned |= nslugs
 
-    # item → linked wiki ids
+    # item → linked wiki ids + 역방향 wiki → item ids (T4 subset 판정용)
     item_wikis: dict[str, set[str]] = defaultdict(set)
+    wiki_items: dict[str, set[str]] = defaultdict(set)
     for r in (await session.execute(text(
-        "SELECT item_id, wiki_page_id FROM wiki_page_items"
+        "SELECT item_id, wiki_page_id FROM wiki_page_items "
+        "WHERE user_action IS NULL OR user_action <> 'removed'"
     ))).mappings().all():
         item_wikis[str(r["item_id"])].add(str(r["wiki_page_id"]))
+        wiki_items[str(r["wiki_page_id"])].add(str(r["item_id"]))
 
     return {
         "slug_to_wiki": slug_to_wiki,
@@ -201,6 +204,7 @@ async def _build_maps(session: AsyncSession) -> dict[str, Any]:
         "item_source_type": item_source_type,
         "natively_owned": natively_owned,
         "item_wikis": item_wikis,
+        "wiki_items": wiki_items,
     }
 
 
@@ -251,6 +255,61 @@ def _detect_t2(maps: dict) -> list[str]:
             continue  # 누군가 자기 URL 로 직접 ingest → 진짜 자료
         out.append(wid)
     return out
+
+
+def _is_concept_slug(slug: str) -> bool:
+    """개념(kebab) wiki slug 인가 — self(url__item__)·외부ID(yt__/github__/…) 가 아닌 것.
+
+    LLM new_pages 가 만든 'cosmos-3-omnimodal-world-models' 같은 주제 wiki.
+    """
+    return (
+        not slug.startswith(_SELF_WIKI_PREFIX)
+        and not slug.startswith(_EXTERNAL_PREFIXES)
+    )
+
+
+def _detect_t4(maps: dict) -> list[dict[str, Any]]:
+    """T4 — 일반 URL 논문의 self_wiki 를 개념(kebab) wiki 로 merge (2026-06-04).
+
+    T1 은 self_wiki + 외부ID(yt/github/arxiv) wiki 동시 보유만 다룬다. 일반 URL
+    (research.nvidia.com 등 external_id 없는) 논문은 self_wiki + **개념 wiki**
+    (LLM 이 만든 kebab, 예: cosmos-3-omnimodal-world-models) 로 쪼개진다 — 같은 논문이
+    2~3개 위키로 보이는 주 원인. 이걸 정리한다.
+
+    안전(high precision) 조건:
+      - self_wiki(url__item__X) 가 존재하고 그 item 에 연결돼 있다.
+      - 그 item 이 **외부ID native wiki 를 갖지 않는다** (있으면 T1 담당).
+      - self_wiki 의 item 집합이 어떤 개념 wiki 의 item 집합의 **부분집합**이다
+        (= 순수 중복. 개념 wiki 가 self 의 모든 자료를 이미 포함 → merge 해도 정보 손실 0).
+        부분집합 개념 wiki 가 여러 개면 slug 사전순 첫 번째 (결정적).
+      - 부분집합 개념 wiki 가 없으면 skip (자료 구성이 달라 자동 merge 위험 → 보존).
+    """
+    plan = []
+    for item_id, linked in maps["item_wikis"].items():
+        self_slug = sanitize_wiki_slug(f"url:item:{item_id}")
+        self_wiki = maps["slug_to_wiki"].get(self_slug)
+        if not self_wiki or self_wiki not in linked:
+            continue
+        # 외부ID native wiki 보유 → T1 담당, T4 제외 (중복 처리 방지)
+        native_ids = [
+            maps["slug_to_wiki"][s] for s in maps["item_native_slugs"].get(item_id, set())
+            if s in maps["slug_to_wiki"] and maps["slug_to_wiki"][s] in linked
+        ]
+        if native_ids:
+            continue
+        self_items = maps["wiki_items"].get(self_wiki, set())
+        # 부분집합인 개념 wiki 후보 (self 자신 제외)
+        concept_targets = [
+            w for w in linked
+            if w != self_wiki
+            and _is_concept_slug(maps["wiki_by_id"][w]["slug"])
+            and self_items <= maps["wiki_items"].get(w, set())
+        ]
+        if not concept_targets:
+            continue
+        target = sorted(concept_targets, key=lambda w: maps["wiki_by_id"][w]["slug"])[0]
+        plan.append({"item_id": item_id, "self_wiki": self_wiki, "target": target})
+    return plan
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -362,11 +421,11 @@ async def _run_rehome(Session, dry_run: bool, limit: int | None) -> None:
           f"({time.monotonic() - start:.0f}s). daemon 이 자동 합성.", flush=True)
 
 
-async def main(dry_run: bool, do_t1: bool, do_t2: bool, do_rehome: bool,
+async def main(dry_run: bool, do_t1: bool, do_t2: bool, do_t4: bool, do_rehome: bool,
                limit: int | None) -> None:
     Session = get_session_factory()
     print("=" * 72, flush=True)
-    print(f"cleanup_duplicate_wikis — dry_run={dry_run} t1={do_t1} t2={do_t2} "
+    print(f"cleanup_duplicate_wikis — dry_run={dry_run} t1={do_t1} t2={do_t2} t4={do_t4} "
           f"rehome={do_rehome} limit={limit or '전체'}", flush=True)
     print("=" * 72, flush=True)
 
@@ -380,13 +439,15 @@ async def main(dry_run: bool, do_t1: bool, do_t2: bool, do_rehome: bool,
 
     t1_plan = _detect_t1(maps) if do_t1 else []
     t2_plan = _detect_t2(maps) if do_t2 else []
+    t4_plan = _detect_t4(maps) if do_t4 else []
     if limit:
-        t1_plan, t2_plan = t1_plan[:limit], t2_plan[:limit]
+        t1_plan, t2_plan, t4_plan = t1_plan[:limit], t2_plan[:limit], t4_plan[:limit]
 
     print(f"\n총 wiki={len(maps['wiki_by_id'])}  "
           f"native-owned slug={len(maps['natively_owned'])}", flush=True)
-    print(f"T1 (self_wiki merge): {len(t1_plan)}", flush=True)
-    print(f"T2 (phantom 삭제)    : {len(t2_plan)}", flush=True)
+    print(f"T1 (self_wiki → 외부ID wiki merge): {len(t1_plan)}", flush=True)
+    print(f"T2 (phantom 삭제)               : {len(t2_plan)}", flush=True)
+    print(f"T4 (self_wiki → 개념 wiki merge) : {len(t4_plan)}", flush=True)
 
     # 샘플 출력 (항상 — dry-run 이든 실제든)
     if t1_plan:
@@ -399,13 +460,18 @@ async def main(dry_run: bool, do_t1: bool, do_t2: bool, do_rehome: bool,
         for wid in t2_plan[:8]:
             w = maps["wiki_by_id"][wid]
             print(f"    {w['slug'][:55]}  (body_status={w['body_status']})", flush=True)
+    if t4_plan:
+        print("\n  [T4 샘플 10]", flush=True)
+        for p in t4_plan[:10]:
+            print(f"    {maps['wiki_by_id'][p['self_wiki']]['slug'][:48]}"
+                  f"  →  {maps['wiki_by_id'][p['target']]['slug']}", flush=True)
 
     if dry_run:
         print("\n✅ DRY RUN — 변경 없음. 실제 실행: --dry-run 빼고 재호출", flush=True)
         return
 
     start = time.monotonic()
-    stats = {"t1_merged": 0, "t2_deleted": 0, "errors": 0}
+    stats = {"t1_merged": 0, "t2_deleted": 0, "t4_merged": 0, "errors": 0}
 
     # T1 실행
     for p in tqdm(t1_plan, desc="🔗 T1 self_wiki merge", unit="wiki",
@@ -420,6 +486,20 @@ async def main(dry_run: bool, do_t1: bool, do_t2: bool, do_rehome: bool,
                 await session.rollback()
                 stats["errors"] += 1
                 tqdm.write(f"⚠ T1 실패 (self={p['self_wiki']}): {exc}")
+
+    # T4 실행 (self_wiki → 개념 wiki, T1 과 동일 merge 메커니즘 재사용)
+    for p in tqdm(t4_plan, desc="🔗 T4 self→개념 merge", unit="wiki",
+                  mininterval=0.5, disable=not t4_plan):
+        async with Session() as session:
+            try:
+                await _merge_self_into_target(
+                    session, self_wiki=p["self_wiki"], target=p["target"], maps=maps)
+                await session.commit()
+                stats["t4_merged"] += 1
+            except Exception as exc:  # noqa: BLE001
+                await session.rollback()
+                stats["errors"] += 1
+                tqdm.write(f"⚠ T4 실패 (self={p['self_wiki']}): {exc}")
 
     # T2 실행
     for wid in tqdm(t2_plan, desc="🗑 T2 phantom 삭제", unit="wiki",
@@ -437,13 +517,14 @@ async def main(dry_run: bool, do_t1: bool, do_t2: bool, do_rehome: bool,
     elapsed = time.monotonic() - start
     print("\n" + "=" * 72, flush=True)
     print(f"✅ 완료 — T1 merged={stats['t1_merged']}, T2 deleted={stats['t2_deleted']}, "
-          f"errors={stats['errors']}  ({elapsed:.0f}s)", flush=True)
+          f"T4 merged={stats['t4_merged']}, errors={stats['errors']}  ({elapsed:.0f}s)",
+          flush=True)
 
 
-async def _entry(dry_run: bool, do_t1: bool, do_t2: bool, do_rehome: bool,
+async def _entry(dry_run: bool, do_t1: bool, do_t2: bool, do_t4: bool, do_rehome: bool,
                  limit: int | None) -> None:
     try:
-        await main(dry_run, do_t1, do_t2, do_rehome, limit)
+        await main(dry_run, do_t1, do_t2, do_t4, do_rehome, limit)
     finally:
         await close_engine()
 
@@ -451,14 +532,18 @@ async def _entry(dry_run: bool, do_t1: bool, do_t2: bool, do_rehome: bool,
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="native-identity 기준 wiki 중복 정리")
     parser.add_argument("--dry-run", action="store_true", help="수치+샘플만, 변경 X")
-    parser.add_argument("--t1-only", action="store_true", help="self_wiki merge 만")
+    parser.add_argument("--t1-only", action="store_true", help="self_wiki → 외부ID wiki merge 만")
     parser.add_argument("--t2-only", action="store_true", help="phantom 삭제만")
+    parser.add_argument("--t4-only", action="store_true", help="self_wiki → 개념 wiki merge 만")
     parser.add_argument("--rehome-orphans", action="store_true",
                         help="wiki 0개 orphan item 에 정체성 wiki 생성 (additive, 단독 모드)")
     parser.add_argument("--limit", type=int, default=None, help="각 단계 N건만 (디버깅)")
     args = parser.parse_args()
 
-    do_t1 = not args.t2_only
-    do_t2 = not args.t1_only
-    asyncio.run(_entry(args.dry_run, do_t1, do_t2, args.rehome_orphans, args.limit))
+    # *-only 플래그가 하나라도 있으면 그것만, 없으면 T1+T2+T4 전부.
+    only = args.t1_only or args.t2_only or args.t4_only
+    do_t1 = args.t1_only or not only
+    do_t2 = args.t2_only or not only
+    do_t4 = args.t4_only or not only
+    asyncio.run(_entry(args.dry_run, do_t1, do_t2, do_t4, args.rehome_orphans, args.limit))
     sys.stdout.flush()

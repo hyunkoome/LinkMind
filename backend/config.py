@@ -133,14 +133,19 @@ class Settings(BaseSettings):
     # docker compose 의 vllm service (profile: vllm) 가 떠 있어야 동작.
     vllm_base_url: str = Field(default="http://vllm:8000/v1")
     vllm_base_url_local: str = Field(default="http://localhost:8001/v1")
-    vllm_model: str = Field(default="Qwen/Qwen2.5-7B-Instruct")
+    # 기본 모델 = Gemma (2026-05-30 Qwen 에서 교체 — 중국어 native bias 근본 제거).
+    # 운영 진실은 DB(app_settings.vllm_model)지만, DB 미로드 경로(standalone 스크립트/
+    # 첫 설치 시드 전)의 fallback 도 실제 구동 모델과 일치해야 한다. 옛 Qwen fallback 은
+    # DB 안 읽는 스크립트에서 404(모델 없음)를 유발했음 — Gemma 로 통일.
+    vllm_model: str = Field(default="cyankiwi/gemma-4-26B-A4B-it-AWQ-4bit")
     # vLLM 컨테이너 구동 파라미터 — env 는 시드/fallback, DB(app_settings) override 가 우선.
     # 변경 시 vLLM 재구동 필요 (scripts/vllm_restart.sh 가 DB 값 읽어 주입).
-    vllm_dtype: str = Field(default="auto")
+    # default 도 Gemma 운영값(DB)과 일치 — fp8 KV + 16384 context (DB 미로드 fallback 정합).
+    vllm_dtype: str = Field(default="float16")
     vllm_gpu_mem_util: float = Field(default=0.85)
-    vllm_max_model_len: int = Field(default=8192)
+    vllm_max_model_len: int = Field(default=16384)
     vllm_max_batched_tokens: int = Field(default=16384)
-    vllm_kv_cache_dtype: str = Field(default="auto")
+    vllm_kv_cache_dtype: str = Field(default="fp8")
 
     # Hugging Face token — gated 모델 (Llama 3 등) 받을 때 필요. 공개 모델 (Qwen 등) 만이면 빈.
     hf_token: str = Field(default="")

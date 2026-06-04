@@ -35,8 +35,11 @@ def test_append_figures_basic():
         {"file_hash": "abc123", "caption": "Figure 2. Overview of architecture"},
     ])
     assert "## 그림" in out
-    assert "![Figure 2. Overview of architecture](/files/abc123)" in out
+    # alt 는 짧은 라벨만 ("Figure 2") — 전체 캡션은 italic 줄로만 (깨진 이미지 시 캡션 2번 방지)
+    assert "![Figure 2](/files/abc123)" in out
     assert "*Figure 2. Overview of architecture*" in out
+    # 전체 캡션이 alt 에 들어가면 안 됨 (중복 노출 방지)
+    assert "![Figure 2. Overview of architecture]" not in out
     assert out.startswith("# 제목")           # 본문 보존
 
 
