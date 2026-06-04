@@ -846,17 +846,48 @@ ingest going-forward fix 까지 확장. 모두 사용자 검증 완료.
 - 신규: `backend/utils/lang.py`(외국어 감지), `regenerate_foreign_wikis`, `backfill_description_from_tldr`,
   `vllm_restart`, `run_summary_backfill --only-foreign`, `ModelLabel.tsx`. 테스트 `test_lang_foreign` 8개.
 
+## ✅ 2026-06-04 — 논문 writer 재설계 + 중복 위키 정리·예방 + 그림 캡션 fix (완료)
+
+> 멀티테넌트·멀티턴·하이브리드 RAG 이후. 위키 본문 품질 + 중복 문제 집중.
+
+**writer 재설계 — 문서타입별 (논문 = arxiv/pdf)**
+- doc_type 분기: primary 가 논문류면 `writer_paper_v1.yaml`(개요/핵심 기여/방법/실험·결과/결론).
+- **Docling raw markdown 발췌 기반** — summary 가 아닌 실제 본문. retriever `_build_raw_excerpt`
+  (head 20k + 뒤쪽 표 보존, 26k cap), `max_tokens` 7168. "원문 없이 이해되게 충실하게".
+- **inline 그림** — LLM 이 `[FIGN]` placeholder 를 본문 맥락(개요=전체개요그림/방법=아키텍처/실험=결과)에
+  두면 코드(`_insert_inline_figures`)가 실제 이미지로 치환. file_hash 로 URL 결정론적, 안 쓴 건 끝 보충.
+- **표 inline**(셀 영어 보존+캡션 한글) + figure 캡션 한글 1문장 요약(번호 유지, `_koreanize_figure_captions`).
+- **제목 = 논문 원제**(slug 아님).
+
+**중복 위키 정리 + 예방 + de-clone**
+- 예방(classifier): item 이 개념/외부ID 위키에 연결되면 중복 `url__item__` self_wiki 생성 스킵.
+- 정리(`cleanup_duplicate_wikis` **T4** 신규): 일반 URL 논문 self_wiki → 개념(kebab) 위키 merge,
+  self item 집합이 개념 위키 부분집합일 때만(손실 0). `--t4-only`. 실행 73건 merge.
+- de-clone(retriever): self-wiki 는 정체성 item(`url__item__<uuid>`) 기준 — 제목/본문(deep 인용)/
+  그림 모두 정체성 item 만, cross-link 논문은 '관련 자료' listing 으로만. 블로그 self-wiki 가 cross-link
+  논문 제목·구조·그림에 납치되던 문제 해결.
+
+**그림 캡션 버그**
+- 캡션 2번 노출: `WikiBody` 이미지 alt 고정(깨진 이미지 alt=전체캡션 노출 방지) + writer alt 짧은 라벨 +
+  `[FIGN]` 중복 삽입 방지. "번호 다른데 캡션 같음": retriever 같은 캡션 figure dedup(Docling multi-panel).
+
+**부수**
+- `WikiBody` react-markdown 전환 (remark-gfm 표 + remark-math/rehype-katex LaTeX, [[slug]]/[N]/이미지 보존).
+- vLLM 기본 모델 fallback Qwen→Gemma 통일 (`backend/config.py`, DB 미로드 경로 404 방지).
+- Docling 그림: pypdf 추출 논문은 캡션이 'page N' 쓰레기 → Docling 재처리해야 진짜 figure caption.
+
+신규/변경: `writer_paper_v1.yaml`, `tests/test_writer_paper.py`(신규), classifier/retriever/writer/
+cleanup_duplicate_wikis/config/WikiBody 수정. cpu 593 PASS.
+
 ## 🎯 다음 세션 — 여기부터 (간단명료)
 
-> Gemma 전환·tags 폐기·vLLM DB화 끝. 홈 = `/ask`. 이제:
+> 멀티테넌트 ✅, 멀티턴 /ask ✅, 하이브리드 RAG ✅, 논문 writer 재설계·중복 위키 정리 ✅ (위 2026-06-04).
+> 홈 = `/ask`. **다음 1순위 = arxiv 외부검색 (agentic)**. 이제:
 
-**1순위 — 대화형 /ask (멀티턴 + 검색 + agentic action)**
-- 현재 `frontend/app/ask/page.tsx` 는 1-shot RAG (Step 1). → **멀티턴 대화 UI** + 세 요청 유형:
-  · 검색("OO 자료 찾아줘") · QA("OO 할 땐 어떻게 해?") · **agentic action**("위키 링크 관계를 로컬
-    데이터로 업데이트해줘" → 도구 호출 실행, 사용자 지시 기반).
-- 대화 history + streaming + citation/related_wikis + 우측 wiki inline (`WikiDetailView` 재사용).
-- 같이: **ask·검색을 wiki body 기반으로** (item.summary 의존 줄이기). `search_wiki_pages`(wiki_qdrant)
-  + `POST /wiki/search` 이미 구현 → 재사용.
+**1순위 — agentic: arxiv 외부검색** (대화형 /ask 멀티턴·하이브리드 RAG 는 완료)
+- "논문 찾아줘" 의도 감지 → arxiv API 검색 → 결과 제시 → (확장) 자동수집 `/ingest/auto` → 위키.
+- **로컬 Gemma + 무료 arxiv API** (외부 AI 불필요, §14 privacy). `backend/ingest/arxiv` 재사용.
+- 남은 것: 검색/QA/agentic 세 요청 유형 명시 구분, rerank.
 
 **2순위 — 자가학습 (auto-skills) + 학습 파이프라인 (Phase 5)**
 - **자가학습**: feedback(👍/👎) 누적 → prompt/ingester 자동 개선 (사용자 명령 없이, 자동).

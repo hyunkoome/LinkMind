@@ -54,13 +54,15 @@ But LinkMind itself is a **means to an end**. The real goal is to use the data y
 
 Not plain chunk-RAG, but a **karpathy llm_wiki + multi-agent** pattern.
 
-- **4 agents**: `classifier` (material → wiki mapping) / `retriever` / `writer` (5-section markdown synthesis) / `critic` (stub).
+- **4 agents**: `classifier` (material → wiki mapping) / `retriever` / `writer` (doc-type-aware markdown synthesis) / `critic` (stub).
 - **Automatic flow**: new ingest → `analysis_worker` (summary) → `classifier` (mapping + pending) → `wiki_writer_worker` daemon (auto synthesis).
-- **1 link = 1 wiki**: only a self-identity topic with confidence ≥ 0.9 becomes a primary wiki, guaranteed by `native_identity_external_id`. Cross-modal clues (0.7) only create links.
+- **Doc-type-aware writer**: papers (arxiv/pdf) get a **paper structure** (overview / contributions / method / experiments·results / conclusion) synthesized from the **Docling raw markdown** (not just the summary) so the wiki is rich enough to grasp without the original. Figures are placed **inline in context** (system-overview figure → overview, architecture → method, results → experiments) via `[FIGN]` placeholders the code resolves to real images; tables are kept inline (English cells + Korean caption); figure captions are summarized to one Korean line (number preserved). Other material keeps the concept-style structure.
+- **1 link = 1 wiki**: only a self-identity topic with confidence ≥ 0.9 becomes a primary wiki, guaranteed by `native_identity_external_id`. Cross-modal clues (0.7) only create links. The classifier also **skips a redundant self-wiki** when the item already maps to a concept/external wiki (de-dup prevention), and a self-wiki's title/body/figures stay focused on **its own identity item** (cross-linked papers stay related-only, not cloned).
 - **Keywords**: normalization (English only + camelCase + acronyms/aliases, e.g. `LiDAR→lidar`, `3D Gaussian Splatting→3dgs`) + a cloud sidebar (frequency-sorted + ⭐ + multi-AND filter). Editable in Settings + DB.
 - **Photos**: "photo + URL" becomes an in-body figure link, standalone photo wikis are cleaned up (raw preserved). A photo-only message is not ingested.
 - **3 statuses**: `issues` (leftover/failed) / `pending` (processing queue) / `completed` (clickable). A sub-state `body_processing_started_at` distinguishes generating vs queuing.
-- **Tools**: backfill (concurrency 4) + cleanup jobs (`cleanup_duplicate_wikis` / `normalize_keywords` / `link_photo_captions`).
+- **Rendering**: wiki bodies render via react-markdown — GFM **tables** + **LaTeX** (KaTeX) + `[[slug]]` wikilinks + `[N]` citations + backend-served figures.
+- **Tools**: backfill (concurrency 4) + cleanup jobs (`cleanup_duplicate_wikis` with T1 self→external / T2 phantom / **T4 self→concept** merge / `normalize_keywords` / `link_photo_captions`).
 
 </details>
 
@@ -262,7 +264,7 @@ curl -s http://localhost:8000/wiki/_meta/stats | jq      # completed / pending /
 ```bash
 bash scripts/run_wiki_backfill.sh                          # bulk-synthesize wiki bodies for old pages (concurrency 4)
 bash scripts/run_wiki_backfill.sh --status                 # progress summary
-python -m backend.jobs.cleanup_duplicate_wikis --dry-run   # preview duplicate-wiki cleanup
+python -m backend.jobs.cleanup_duplicate_wikis --dry-run   # preview duplicate-wiki cleanup (T1 self→external / T2 phantom / T4 self→concept)
 python -m backend.jobs.normalize_keywords --dry-run        # preview keyword normalization
 python -m backend.jobs.link_photo_captions --dry-run       # preview photo-figure linking
 ```
@@ -290,7 +292,7 @@ Analysis results (summary, embedding) can be regenerated, but if the raw breaks 
 | **1** | ✅ Done | Postgres + Qdrant + URL ingest + Embedding + Semantic Search + RAG |
 | **2** | ✅ Done | AI summary/tagging, Slack export parser, embedding infra (vLLM-embed), category enrichment, Topic graph, ChannelAgent ABC, Next.js 16 + react-force-graph-3d UI, modality-aware viewer, 3-tier categories, Telegram multi-channel |
 | **3** | ✅ Done | **llm_wiki system** — classifier/retriever/writer agents, wiki API + Qdrant body search, wiki list/detail UI + KeywordsEditor, writer daemon + batch backfill, "1 link = 1 wiki", keyword normalization/cloud, photo-figure linking, conversational `/ask` (Step 1) |
-| **4** | 🚧 In progress | **Multi-tenant (org space / member issuance / force-change / permissions / conversation privacy) ✅**, conversational `/ask` multi-turn ✅ + **hybrid RAG (wiki bodies) ✅**, **arxiv external search (agentic) next**; real channel expansion (Slack/WhatsApp/Discord), OCR/multimodal, self-learning (feedback → 👍/👎), critic agent |
+| **4** | 🚧 In progress | **Multi-tenant (org space / member issuance / force-change / permissions / conversation privacy) ✅**, conversational `/ask` multi-turn ✅ + **hybrid RAG (wiki bodies) ✅**, **paper-aware writer redesign ✅** (Docling raw → paper structure + inline figures/tables + Korean captions) + **duplicate-wiki cleanup (T4) & prevention + de-clone ✅** + wiki rendering (GFM tables / LaTeX), **arxiv external search (agentic) next**; real channel expansion (Slack/WhatsApp/Discord), OCR/multimodal, self-learning (feedback → 👍/👎), critic agent |
 | **5** | ⬜ Not started | **sVLL LoRA fine-tuning** (Gemma 4 26B-A4B QLoRA or Qwen2-VL), dataset exporter (raw + summary + feedback → JSONL), vLLM serving |
 | **6** | ⬜ Not started | Continuous training loop, complete on-premise AI engine |
 | **7** | ⬜ Not started | OSS (AGPL v3) release → hosted SaaS (Auth.js + Stripe, multi-tenant, BYOK) |
