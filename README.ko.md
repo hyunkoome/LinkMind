@@ -289,10 +289,11 @@ python -m backend.jobs.link_photo_captions --dry-run       # 사진 figure 연�
 | **1** | ✅ 완료 | Postgres + Qdrant + URL ingest + Embedding + Semantic Search + RAG |
 | **2** | ✅ 완료 | AI 요약/태깅, Slack export 파서, 임베딩 인프라(vLLM-embed), 카테고리 강화, Topic 그래프, ChannelAgent ABC, Next.js 16 + react-force-graph-3d UI, modality-aware viewer, 3-tier categories, Telegram multi-channel |
 | **3** | ✅ 완료 | **llm_wiki 시스템** — classifier/retriever/writer agent, wiki API + Qdrant body search, wiki 리스트/상세 UI + KeywordsEditor, writer daemon + batch backfill, "1 링크 = 1 위키", 키워드 정규화/클라우드, 사진 figure 연결, 대화형 `/ask`(Step 1) |
-| **4** | 🚧 진행 | **멀티테넌트(조직 space/멤버발급/force-change/권한/대화프라이버시) ✅**, 대화형 `/ask` 멀티턴 ✅ + **하이브리드 RAG(위키 본문) ✅**, **arxiv 외부검색(agentic) 다음**; 실제 채널 확장(Slack/WhatsApp/Discord), OCR/멀티모달, 자가학습(feedback → 👍/👎), critic agent |
-| **5** | ⬜ 미시작 | **sVLL LoRA 파인튜닝** (Gemma 4 26B-A4B QLoRA 또는 Qwen2-VL), dataset exporter (raw + summary + feedback → JSONL), vLLM 서빙 |
+| **4** | 🚧 진행 | **멀티테넌트(조직 space/멤버발급/force-change/권한/대화프라이버시) ✅**, 대화형 `/ask` 멀티턴 ✅ + **하이브리드 RAG(위키 본문) ✅**, **논문 writer 재설계 ✅**(Docling raw→논문구조+inline 그림·표+한글 캡션) + **중복 위키 정리(T4)·예방·de-clone ✅** + 위키 렌더(GFM 표/LaTeX), **키워드 기반 arxiv 수집→위키(admin) 다음**; 실제 채널 확장(Slack/WhatsApp/Discord), 자가학습(**암묵 feedback** — 답변에 대한 다음 턴 뉘앙스·행동을 신호로 + 명시 교정; 👍/👎 버튼 아님), critic agent |
+| **5** | ⬜ 미시작 | **sVLL LoRA 파인튜닝** (Gemma 4 26B-A4B QLoRA 또는 12B dense), dataset exporter (raw + summary + feedback → JSONL), vLLM/Ollama 서빙 |
 | **6** | ⬜ 미시작 | Continuous training loop, 온프레미스 AI 엔진 완성 |
 | **7** | ⬜ 미시작 | OSS(AGPL v3) 공개 → hosted SaaS (Auth.js + Stripe, multi-tenant, BYOK) |
+| **8** | **T.B.D** | **멀티모달 VLM** — figure 이미지 자체를 모델이 **보고** 이해·설명 (caption 없는 그림 / 그림 Q&A / OCR). Gemma 4 12B 네이티브 멀티모달 또는 SmolVLM2. 원본 이미지는 이미 무손실 보존(§2)이라 언제든 착수 가능 — 필요성 확인 후 결정. |
 
 > 다음 우선순위: **arxiv 외부검색(agentic — 로컬 Gemma + 무료 arxiv API, 외부 AI 없음)** → 검색/QA/agentic 요청유형 구분 → **자가학습(feedback)** → **학습 파이프라인(Phase 5)**. 학습 파이프라인의 *인프라*(dataset exporter, QLoRA 셋업, 데이터셋 품질 검증)는 미리 만들 수 있음 — 자가학습과 병행; 실제 학습은 데이터가 충분히 쌓인 뒤.
 
