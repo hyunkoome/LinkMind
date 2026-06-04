@@ -32,7 +32,13 @@ qdrant-client>=1.12.0
 # ─── Embedding (local backend) ────────────────────────────────────
 # bge-m3 등 sentence-transformers 호환 모델을 GPU에서 로드.
 sentence-transformers>=3.3.0
-torch>=2.5.0                      # CUDA 빌드는 환경에 맞게 별도 설치 권장
+# torch/torchvision 은 정확히 핀한다 (>= 가 아니라 ==). 이유: docling 같은 패키지를
+# 나중에 설치하면 pip 이 PyPI 기본 인덱스에서 최신 torch(예: 2.12.0, cu124 아님)를
+# 끌어와 cu124 빌드를 덮어써 CUDA 가 깨진다 (2026-06-04 실제 발생). step1 이 cu124
+# wheel 을 별도 인덱스로 먼저 설치하고, 이 핀이 그 버전을 그대로 보존하게 한다.
+# (torch 2.6.0 == cu124 인덱스의 최신. docling 은 torch>=2.2.2 라 충돌 없음.)
+torch==2.6.0                      # cu124 빌드는 step1 이 --index-url 로 설치
+torchvision==0.21.0               # torch 2.6.0 매칭. docling 의존 — 핀 안 하면 torch 까지 끌려 올라감
 transformers>=4.46.0
 
 # ─── LLM Providers ────────────────────────────────────────────────
@@ -48,6 +54,10 @@ pypdf>=5.1.0                      # PDF (기본)
 pymupdf>=1.24.13                  # PDF (이미지/figure 추출 강력)
 python-docx>=1.1.2                # DOCX 텍스트 추출 (Phase 2.5)
 python-pptx>=1.0.2                # PPTX 텍스트 추출 (Phase 2.5)
+# Docling — PDF/DOCX/PPTX/HTML → 구조화 markdown + figure 이미지 + table (Phase 4,
+# 고품질 논문/문서 위키화). layout/table 모델은 첫 실행 시 HF 에서 다운로드.
+# ⚠️ torch 핀(위 torch==2.6.0) 보다 반드시 뒤에 와야 pip 이 torch 를 안 덮어쓴다.
+docling==2.97.0
 charset-normalizer>=3.4.0         # TXT/MD 인코딩 자동 감지 (Phase 2.5)
 trafilatura>=2.0.0                # 웹 본문 추출 (블로그/뉴스)
 readability-lxml>=0.8.4           # trafilatura fallback (일부 블로그는 trafilatura 가 실패)

@@ -117,15 +117,21 @@ echo "⬆️  pip / wheel / setuptools 업그레이드"
 
 # ----------------------------------------------------------------------------
 # 4. torch 먼저 설치 (CPU 빌드를 받았다가 폐기하는 낭비 방지)
+#    버전을 정확히 핀(==)한다. requirements.txt 의 docling 등이 PyPI 기본 인덱스에서
+#    최신 torch(cu124 아님)를 끌어와 이 cu124 wheel 을 덮어쓰면 CUDA 가 깨지기 때문
+#    (2026-06-04 실제 발생). torch 2.6.0 == cu124 인덱스 최신, torchvision 0.21.0 매칭.
 # ----------------------------------------------------------------------------
+TORCH_VER="2.6.0"
+TORCHVISION_VER="0.21.0"
 echo ""
 if [ "$USE_CPU" -eq 1 ]; then
-    echo "🧠 torch CPU 빌드 설치 (PyPI default)"
-    "$VENV_PIP" install --force-reinstall torch
+    echo "🧠 torch CPU 빌드 설치 (PyPI default, torch==${TORCH_VER})"
+    "$VENV_PIP" install --force-reinstall "torch==${TORCH_VER}" "torchvision==${TORCHVISION_VER}"
 else
     INDEX_URL="https://download.pytorch.org/whl/cu${CUDA_VER}"
-    echo "🚀 torch CUDA wheel 설치 (${INDEX_URL})"
-    "$VENV_PIP" install --force-reinstall --index-url "$INDEX_URL" torch
+    echo "🚀 torch CUDA wheel 설치 (${INDEX_URL}, torch==${TORCH_VER})"
+    "$VENV_PIP" install --force-reinstall --index-url "$INDEX_URL" \
+        "torch==${TORCH_VER}" "torchvision==${TORCHVISION_VER}"
 fi
 
 # ----------------------------------------------------------------------------
