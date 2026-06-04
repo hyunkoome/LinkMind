@@ -26,6 +26,12 @@ logger = logging.getLogger("linkmind.embedding.wiki_qdrant")
 
 WIKI_COLLECTION = "linkmind_wiki_pages"
 
+# wiki body 합성 완료 상태 — Postgres wiki_pages.body_status, Qdrant payload.body_status,
+# ask.py 의 _retrieve_wikis(status_filter=[...]) 가 반드시 같은 값을 써야 한다. 옛날에
+# writer 가 Qdrant 에만 'ready' 로 넣어 ask 필터('completed')와 어긋나 하이브리드 RAG
+# 위키 검색이 항상 0건이었다 (2026-06-04 fix). 단일 상수로 묶어 재발 방지.
+WIKI_STATUS_COMPLETED = "completed"
+
 
 async def ensure_wiki_collection(dim: int) -> None:
     """wiki_pages 컬렉션 생성 (없으면). 있으면 dim 검증만."""

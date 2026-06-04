@@ -12,6 +12,8 @@ POST /ask/stream — 동일 RAG 흐름 + 답변을 SSE(token) 로 stream.
 from __future__ import annotations
 
 import json
+import logging
+import re
 from collections.abc import AsyncIterator
 
 from fastapi import APIRouter, Depends
@@ -23,10 +25,13 @@ from backend import runtime_settings
 from backend.api.search import search as _do_search
 from backend.db.connection import get_session
 from backend.embedding.factory import get_embedding_provider
+from backend.embedding.wiki_qdrant import WIKI_STATUS_COMPLETED
 from backend.embedding.wiki_qdrant import search_wiki_pages as qdrant_search_wiki_pages
+from backend.ingest.arxiv import search_arxiv
 from backend.llm.base import ChatMessage, LLMProvider
 from backend.llm.factory import get_llm_provider
 from backend.schemas.models import (
+    AskArxivResult,
     AskCitation,
     AskRelatedWiki,
     AskRequest,
@@ -34,6 +39,8 @@ from backend.schemas.models import (
     AskTurn,
     SearchRequest,
 )
+
+logger = logging.getLogger("linkmind.api.ask")
 
 
 # 맥락 유지에 포함할 최근 대화 턴 수 (user+assistant 합산). 너무 길면 context 토큰이
@@ -125,7 +132,7 @@ async def _retrieve_wikis(
         emb = await embedder.embed([search_query])
         qv = emb.vectors[0]
         points = await qdrant_search_wiki_pages(
-            query_vector=qv, top_k=top_k, status_filter=["completed"],
+            query_vector=qv, top_k=top_k, status_filter=[WIKI_STATUS_COMPLETED],
         )
         if not points:
             return []
@@ -194,6 +201,116 @@ async def _condense_query(
         return text_out.splitlines()[0].strip() or question
     except Exception:
         return question
+
+
+# ──────────────────────────────────────────────────────────────
+# Agentic — arxiv 외부 검색 intent (Phase 4)
+# ──────────────────────────────────────────────────────────────
+# 로컬 Gemma + 무료 arxiv API 만 사용 (외부 AI 불필요, §14 privacy). 사용자가 "논문
+# 찾아줘" 류 의도를 보이면 자료(RAG) 대신 arxiv 를 검색해 외부 논문을 제시한다. 외부
+# 검색이라 raw 저장 없음 — "수집" 버튼으로 /ingest/auto 를 탈 때만 §2(raw-first) 흐름.
+
+# 검색할 논문 수 (카드로 보여줄 만큼만 — 너무 많으면 context/UI 가 산만).
+_ARXIV_MAX_RESULTS = 6
+
+# intent 판정 + 검색어 추출용 system prompt. 결정적(temperature=0)·JSON 1줄.
+# arxiv 는 영어 논문 코퍼스라 검색어는 영어 키워드로 뽑게 한다.
+_INTENT_SYSTEM = (
+    "너는 대화형 연구 비서의 라우터다. 사용자의 질문이 'arxiv/논문/학술 문헌을 새로 "
+    "검색·탐색해 달라'는 의도인지 판정한다. 새 논문을 찾아달라거나 특정 주제의 최신 "
+    "연구를 찾는 의도면 intent='arxiv_search', 그 외(이미 가진 자료에 대한 질문·일반 "
+    "대화·설명 요청)는 intent='rag'. arxiv_search 면 arxiv 검색에 쓸 영어 키워드 쿼리를 "
+    "arxiv_query 에 담는다(논문 검색이 아니면 빈 문자열). 반드시 JSON 한 줄만 출력: "
+    '{"intent": "arxiv_search"|"rag", "arxiv_query": "..."}'
+)
+
+# arxiv 검색 결과를 사용자에게 제시할 때의 답변 생성 system prompt.
+_ARXIV_ANSWER_SYSTEM = (
+    "너는 연구 비서다. 아래 [arxiv 검색 결과] 목록을 바탕으로 사용자 질문에 한국어로 "
+    "답한다. 각 논문을 번호 [n] 으로 가리키며 제목·핵심 기여를 1~2문장으로 요약하고, "
+    "사용자 질문과의 관련성을 짚어준다. 결과가 없으면 솔직히 없다고 말한다. 목록에 없는 "
+    "논문을 지어내지 않는다."
+)
+
+_INTENT_JSON_RE = re.compile(r"\{.*?\}", re.DOTALL)
+
+
+async def _detect_intent(
+    question: str,
+    history: list[AskTurn],
+    provider: LLMProvider,
+    model: str | None,
+) -> tuple[str, str]:
+    """질문을 'arxiv_search' 또는 'rag' 로 라우팅 + arxiv 검색어 추출.
+
+    반환: (intent, arxiv_query). 판정/파싱 실패는 치명적이지 않으므로 ('rag', '') 로
+    fallback — 기본 RAG 흐름으로 안전하게 진행. 직전 맥락도 참고('더 찾아줘' 류).
+    """
+    recent = history[-_CONDENSE_HISTORY_TURNS:]
+    convo = "\n".join(
+        f"{'사용자' if t.role == 'user' else '비서'}: {t.content}" for t in recent
+    )
+    user_msg = (f"[대화 맥락]\n{convo}\n\n[질문]\n{question}" if convo else question)
+    try:
+        resp = await provider.chat(
+            messages=[
+                ChatMessage(role="system", content=_INTENT_SYSTEM),
+                ChatMessage(role="user", content=user_msg),
+            ],
+            model=model,
+            temperature=0.0,
+            max_tokens=128,
+        )
+        raw = (resp.text or "").strip()
+        m = _INTENT_JSON_RE.search(raw)
+        if not m:
+            return "rag", ""
+        data = json.loads(m.group(0))
+        intent = data.get("intent") or "rag"
+        if intent != "arxiv_search":
+            return "rag", ""
+        arxiv_query = (data.get("arxiv_query") or "").strip()
+        # 검색어를 못 뽑았으면 외부 검색이 무의미 — 원 질문으로 fallback 검색.
+        return "arxiv_search", (arxiv_query or question.strip())
+    except Exception:
+        return "rag", ""
+
+
+def _arxiv_context(papers: list[dict]) -> str:
+    """arxiv 검색 결과를 답변 생성용 context 블록으로 — 번호[n] + 제목/저자/초록 발췌."""
+    if not papers:
+        return "[arxiv 검색 결과]\n(검색 결과 없음)"
+    blocks = ["[arxiv 검색 결과]"]
+    for i, p in enumerate(papers, start=1):
+        authors = ", ".join((p.get("authors") or [])[:4])
+        if len(p.get("authors") or []) > 4:
+            authors += " 외"
+        summary = (p.get("summary") or "").strip()[:600]
+        blocks.append(
+            f"[{i}] {p.get('title') or '(제목 없음)'}\n"
+            f"저자: {authors}\n출판: {p.get('published') or ''}\n"
+            f"URL: {p.get('abs_url') or ''}\n초록: {summary}"
+        )
+    return "\n\n".join(blocks)
+
+
+async def _retrieve_arxiv(
+    arxiv_query: str,
+) -> tuple[str, list[AskArxivResult], list[dict]]:
+    """arxiv 검색 실행 → (context, arxiv_results 스키마 목록, 원본 dict 목록).
+
+    검색이 비어도 graceful — '결과 없음' context 로 답변 생성이 정상 진행된다.
+    """
+    papers = await search_arxiv(arxiv_query, max_results=_ARXIV_MAX_RESULTS)
+    results = [
+        AskArxivResult(
+            arxiv_id=p["arxiv_id"], title=p["title"], summary=p.get("summary"),
+            authors=p.get("authors") or [], published=p.get("published"),
+            abs_url=p.get("abs_url") or "", pdf_url=p.get("pdf_url"),
+        )
+        for p in papers if p.get("title")
+    ]
+    return _arxiv_context(papers), results, papers
 
 
 async def _retrieve(
@@ -339,6 +456,28 @@ async def ask(
     provider_name = payload.llm_provider or runtime_settings.get_effective_llm_provider()
     provider = get_llm_provider(provider_name)
 
+    # agentic 라우팅 — '논문 찾아줘' 류면 arxiv 외부 검색, 그 외는 자료 기반 RAG.
+    intent, arxiv_query = await _detect_intent(
+        payload.question, payload.history, provider, payload.llm_model,
+    )
+
+    if intent == "arxiv_search":
+        context, arxiv_results, _ = await _retrieve_arxiv(arxiv_query)
+        messages = _build_messages(
+            _ARXIV_ANSWER_SYSTEM, payload.history, context, payload.question,
+        )
+        resp = await provider.chat(messages=messages, model=payload.llm_model)
+        return AskResponse(
+            question=payload.question,
+            answer=resp.text,
+            citations=[],
+            related_wikis=[],
+            intent="arxiv_search",
+            arxiv_results=arxiv_results,
+            llm_provider=resp.provider,
+            llm_model=resp.model,
+        )
+
     # 후속 질문이면 독립형 검색 쿼리로 재작성 (첫 턴이면 원 질문 그대로).
     search_query = await _condense_query(
         payload.question, payload.history, provider, payload.llm_model,
@@ -360,6 +499,8 @@ async def ask(
         answer=resp.text,
         citations=citations,
         related_wikis=related_wikis,
+        intent="rag",
+        arxiv_results=[],
         llm_provider=resp.provider,
         llm_model=resp.model,
     )
@@ -387,16 +528,31 @@ async def ask_stream(
     provider_name = payload.llm_provider or runtime_settings.get_effective_llm_provider()
     provider = get_llm_provider(provider_name)
 
-    search_query = await _condense_query(
+    # agentic 라우팅 — arxiv 외부 검색 vs 자료 기반 RAG. stream 시작 전 동기로 결정.
+    intent, arxiv_query = await _detect_intent(
         payload.question, payload.history, provider, payload.llm_model,
     )
-    context, citations, wiki_hits = await _retrieve(
-        search_query=search_query, question_for_pins=payload, session=session,
-    )
-    related_wikis = _merge_searched_wikis(
-        await _fetch_related_wikis(citations, session), wiki_hits,
-    )
-    _, system_prompt = runtime_settings.get_active_prompt("rag_system")
+
+    if intent == "arxiv_search":
+        context, arxiv_results, _ = await _retrieve_arxiv(arxiv_query)
+        system_prompt = _ARXIV_ANSWER_SYSTEM
+        search_query = arxiv_query
+        citations: list[AskCitation] = []
+        related_wikis: list[AskRelatedWiki] = []
+    else:
+        intent = "rag"
+        arxiv_results = []
+        search_query = await _condense_query(
+            payload.question, payload.history, provider, payload.llm_model,
+        )
+        context, citations, wiki_hits = await _retrieve(
+            search_query=search_query, question_for_pins=payload, session=session,
+        )
+        related_wikis = _merge_searched_wikis(
+            await _fetch_related_wikis(citations, session), wiki_hits,
+        )
+        _, system_prompt = runtime_settings.get_active_prompt("rag_system")
+
     messages = _build_messages(system_prompt, payload.history, context, payload.question)
 
     # stream 에선 응답 객체가 없어 정확한 model id 를 모름 — payload 명시값 또는 provider
@@ -408,8 +564,10 @@ async def ask_stream(
             "type": "meta",
             "question": payload.question,
             "search_query": search_query,
+            "intent": intent,
             "citations": [c.model_dump(mode="json") for c in citations],
             "related_wikis": [w.model_dump() for w in related_wikis],
+            "arxiv_results": [a.model_dump(mode="json") for a in arxiv_results],
             "llm_provider": provider.name,
             "llm_model": model_name,
         })

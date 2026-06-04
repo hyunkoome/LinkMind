@@ -31,7 +31,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.agents.base import AgentBase, AgentContext, load_prompt
 from backend.agents.retriever import RetrieverAgent
 from backend.embedding.factory import get_embedding_provider
-from backend.embedding.wiki_qdrant import ensure_wiki_collection, upsert_wiki_page
+from backend.embedding.wiki_qdrant import (
+    WIKI_STATUS_COMPLETED,
+    ensure_wiki_collection,
+    upsert_wiki_page,
+)
 from backend.llm.base import ChatMessage
 from backend.llm.factory import get_llm_provider
 from backend.utils.keywords import normalize_keywords
@@ -335,7 +339,11 @@ class WriterAgent(AgentBase):
                     "title": wiki_context["page"]["title"],
                     "description": wiki_context["page"].get("description"),
                     "source_count": len(wiki_context["sources"]),
-                    "body_status": "ready",
+                    # Postgres wiki_pages.body_status (위 _UPDATE_BODY_SQL = 'completed')
+                    # 와 반드시 동일. 옛날엔 'ready' 로 잘못 넣어 ask.py 의 _retrieve_wikis
+                    # (status_filter) 가 항상 0건 → 하이브리드 RAG 위키 본문이 빠졌었음
+                    # (2026-06-04 fix). 단일 상수로 통일.
+                    "body_status": WIKI_STATUS_COMPLETED,
                     "is_pinned": bool(wiki_context["page"].get("is_pinned", False)),
                     "version_number": new_version,
                 },

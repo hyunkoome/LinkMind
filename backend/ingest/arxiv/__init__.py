@@ -70,8 +70,49 @@ def is_arxiv_url(url: str) -> bool:
     return parse_arxiv_id(url) is not None
 
 
+def _parse_entry(entry: ET.Element) -> dict[str, Any] | None:
+    """Atom <entry> → {arxiv_id, title, summary, authors, published, abs_url, pdf_url}.
+
+    fetch_arxiv_metadata (id_list) 와 search_arxiv (search_query) 가 공유. title 이
+    없으면 None (불완전 entry skip).
+    """
+    title_el = entry.find("atom:title", _ATOM_NS)
+    sum_el = entry.find("atom:summary", _ATOM_NS)
+    pub_el = entry.find("atom:published", _ATOM_NS)
+    id_el = entry.find("atom:id", _ATOM_NS)
+    authors = [
+        (a.find("atom:name", _ATOM_NS).text or "")
+        for a in entry.findall("atom:author", _ATOM_NS)
+        if a.find("atom:name", _ATOM_NS) is not None
+    ]
+    title = (title_el.text or "").strip().replace("\n", " ") if title_el is not None else None
+    summary = (sum_el.text or "").strip().replace("\n", " ") if sum_el is not None else None
+    published = (pub_el.text or "").strip() if pub_el is not None else None
+
+    if not title:
+        return None
+
+    # <id> 는 abs URL (예: http://arxiv.org/abs/2003.02014v1). 여기서 arxiv_id 추출.
+    abs_url = (id_el.text or "").strip() if id_el is not None else ""
+    arxiv_id = parse_arxiv_id(abs_url) or ""
+    # https 정규화 + pdf URL 합성 (수집 버튼이 /ingest/auto 로 넘길 때 abs 가 좋음).
+    if abs_url.startswith("http://"):
+        abs_url = "https://" + abs_url[len("http://"):]
+    pdf_url = f"https://arxiv.org/pdf/{arxiv_id}" if arxiv_id else ""
+
+    return {
+        "arxiv_id": arxiv_id,
+        "title": title,
+        "summary": summary,
+        "authors": authors,
+        "published": published,
+        "abs_url": abs_url,
+        "pdf_url": pdf_url,
+    }
+
+
 async def fetch_arxiv_metadata(arxiv_id: str, *, timeout: float = 15.0) -> dict[str, Any] | None:
-    """arxiv API 호출. id → {title, summary, authors, published, doi}.
+    """arxiv API 호출. id → {title, summary, authors, published, abs_url, pdf_url}.
 
     실패 (rate limit / 네트워크 / 매칭 없음) 시 None — caller 가 HTML title fallback.
     """
@@ -96,27 +137,59 @@ async def fetch_arxiv_metadata(arxiv_id: str, *, timeout: float = 15.0) -> dict[
     entries = root.findall("atom:entry", _ATOM_NS)
     if not entries:
         return None
-    entry = entries[0]
-
-    title_el = entry.find("atom:title", _ATOM_NS)
-    sum_el = entry.find("atom:summary", _ATOM_NS)
-    pub_el = entry.find("atom:published", _ATOM_NS)
-    authors = [
-        (a.find("atom:name", _ATOM_NS).text or "")
-        for a in entry.findall("atom:author", _ATOM_NS)
-        if a.find("atom:name", _ATOM_NS) is not None
-    ]
-    title = (title_el.text or "").strip().replace("\n", " ") if title_el is not None else None
-    summary = (sum_el.text or "").strip().replace("\n", " ") if sum_el is not None else None
-    published = (pub_el.text or "").strip() if pub_el is not None else None
-
-    if not title:
+    parsed = _parse_entry(entries[0])
+    if parsed is None:
         return None
+    # id_list 조회는 입력 id 를 권위값으로 — search 와 달리 호출자가 이미 알고 있는 id.
+    parsed["arxiv_id"] = parsed["arxiv_id"] or arxiv_id
+    return parsed
 
-    return {
-        "arxiv_id": arxiv_id,
-        "title": title,
-        "summary": summary,
-        "authors": authors,
-        "published": published,
+
+# arxiv API 는 ~3 req/sec rate limit (모듈 docstring). 검색은 한 질문당 1회 호출이고
+# 결과 몇 개만 보여주므로 무관. 외부 검색이라 raw 저장 없음 — 사용자가 "수집" 을 눌러
+# /ingest/auto 로 넘길 때만 §2(raw-first) 흐름을 탄다.
+async def search_arxiv(
+    query: str,
+    *,
+    max_results: int = 5,
+    sort_by: str = "relevance",
+    timeout: float = 15.0,
+) -> list[dict[str, Any]]:
+    """arxiv 검색 (search_query API). 키워드 → 논문 목록 (수집 전 외부 검색).
+
+    sort_by: 'relevance' | 'lastUpdatedDate' | 'submittedDate' (arxiv API 값).
+    실패 (네트워크 / parse / 빈 query) 시 빈 리스트 — agentic 흐름이 "결과 없음" 으로
+    graceful 진행 (ask 답변이 죽지 않게).
+    """
+    query = (query or "").strip()
+    if not query:
+        return []
+    max_results = max(1, min(max_results, 20))
+    params = {
+        "search_query": query,
+        "start": "0",
+        "max_results": str(max_results),
+        "sortBy": sort_by,
+        "sortOrder": "descending",
     }
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            r = await client.get(_ARXIV_API, params=params)
+            r.raise_for_status()
+            text_body = r.text
+    except (httpx.HTTPError, httpx.TimeoutException) as e:
+        logger.info("arxiv 검색 실패 (query=%r, %s) — 빈 결과", query, e)
+        return []
+
+    try:
+        root = ET.fromstring(text_body)
+    except ET.ParseError as e:
+        logger.warning("arxiv 검색 XML parse 실패 (query=%r): %s", query, e)
+        return []
+
+    out: list[dict[str, Any]] = []
+    for entry in root.findall("atom:entry", _ATOM_NS):
+        parsed = _parse_entry(entry)
+        if parsed is not None:
+            out.append(parsed)
+    return out

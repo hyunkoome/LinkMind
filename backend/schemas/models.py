@@ -123,11 +123,30 @@ class AskRelatedWiki(BaseModel):
     overlap: int           # 이 wiki 와 link 된 citation item 수 (관련도 신호)
 
 
+class AskArxivResult(BaseModel):
+    """agentic arxiv 외부 검색 결과 한 건 — 아직 수집(ingest) 전인 외부 논문.
+
+    프론트가 카드로 표시하고 "이 논문 수집" 버튼으로 abs_url 을 /ingest/auto 에 넘긴다.
+    raw 저장은 그때 일어남 (외부 검색 자체는 §2 raw-first 흐름 밖).
+    """
+    arxiv_id: str
+    title: str
+    summary: str | None = None
+    authors: list[str] = Field(default_factory=list)
+    published: str | None = None
+    abs_url: str
+    pdf_url: str | None = None
+
+
 class AskResponse(BaseModel):
     question: str
     answer: str
     citations: list[AskCitation] = Field(default_factory=list)
     related_wikis: list[AskRelatedWiki] = Field(default_factory=list)
+    # agentic intent — "rag"(기본 자료 기반 답변) 또는 "arxiv_search"(외부 논문 검색).
+    intent: Literal["rag", "arxiv_search"] = "rag"
+    # intent="arxiv_search" 일 때만 채워짐. 검색된 외부 논문 목록(수집 전).
+    arxiv_results: list[AskArxivResult] = Field(default_factory=list)
     llm_provider: str
     llm_model: str
 
