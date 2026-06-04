@@ -100,6 +100,15 @@ export function fileUrl(fileHash: string): string {
   return `${API_BASE}/files/${fileHash}`;
 }
 
+// markdown 본문 안의 상대경로 자산(/files/{hash} 등)을 backend 절대 URL 로 변환.
+// 위키 body 의 figure 이미지가 '/files/...' 상대경로면 frontend(3001) 로 가서 404 나므로
+// API_BASE(8000) 를 붙여준다. 이미 절대 URL(http) 이면 그대로.
+export function resolveAssetUrl(url: string): string {
+  if (!url) return url;
+  if (url.startsWith("/files/")) return `${API_BASE}${url}`;
+  return url;
+}
+
 // ── Settings ────────────────────────────────────────────────────
 
 export async function getLLMSettings(): Promise<LLMSettings> {

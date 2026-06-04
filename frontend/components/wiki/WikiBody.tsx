@@ -14,6 +14,8 @@
 import Link from "next/link";
 import React from "react";
 
+import { resolveAssetUrl } from "@/lib/api";
+
 interface Props {
   body: string;
   className?: string;
@@ -242,6 +244,38 @@ export default function WikiBody({ body, className = "" }: Props) {
         <blockquote key={k} className="border-l-4 border-orange-300 dark:border-orange-700 pl-3 my-2 italic text-zinc-600 dark:text-zinc-400">
           {renderInline(line.slice(2), k)}
         </blockquote>,
+      );
+      continue;
+    }
+
+    // 이미지 (figure) — ![alt](url) 단독 줄 → <img>. body 의 figure 가 '/files/{hash}'
+    // 상대경로면 backend(API_BASE)로 절대화 (frontend 로 가면 404).
+    const imgMatch = line.match(/^!\[([^\]]*)\]\(([^)\s]+)\)\s*$/);
+    if (imgMatch) {
+      flushList();
+      const k = nextKey();
+      blocks.push(
+        // eslint-disable-next-line @next/next/no-img-element — 동적 외부(backend) 이미지
+        <img
+          key={k}
+          src={resolveAssetUrl(imgMatch[2])}
+          alt={imgMatch[1] || "figure"}
+          className="my-3 max-w-full rounded border border-zinc-200 dark:border-zinc-700"
+          loading="lazy"
+        />,
+      );
+      continue;
+    }
+
+    // figure caption — *text* 단독 줄 (단일 별표 italic) → 작은 회색 캡션.
+    const capMatch = line.match(/^\*([^*]+)\*\s*$/);
+    if (capMatch) {
+      flushList();
+      const k = nextKey();
+      blocks.push(
+        <p key={k} className="text-xs text-zinc-500 dark:text-zinc-400 italic -mt-2 mb-4 text-center">
+          {capMatch[1]}
+        </p>,
       );
       continue;
     }
