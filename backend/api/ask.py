@@ -224,14 +224,6 @@ _INTENT_SYSTEM = (
     '{"intent": "arxiv_search"|"rag", "arxiv_query": "..."}'
 )
 
-# arxiv 검색 결과를 사용자에게 제시할 때의 답변 생성 system prompt.
-_ARXIV_ANSWER_SYSTEM = (
-    "너는 연구 비서다. 아래 [arxiv 검색 결과] 목록을 바탕으로 사용자 질문에 한국어로 "
-    "답한다. 각 논문을 번호 [n] 으로 가리키며 제목·핵심 기여를 1~2문장으로 요약하고, "
-    "사용자 질문과의 관련성을 짚어준다. 결과가 없으면 솔직히 없다고 말한다. 목록에 없는 "
-    "논문을 지어내지 않는다."
-)
-
 _INTENT_JSON_RE = re.compile(r"\{.*?\}", re.DOTALL)
 
 
@@ -456,27 +448,13 @@ async def ask(
     provider_name = payload.llm_provider or runtime_settings.get_effective_llm_provider()
     provider = get_llm_provider(provider_name)
 
-    # agentic 라우팅 — '논문 찾아줘' 류면 arxiv 외부 검색, 그 외는 자료 기반 RAG.
+    # agentic 라우팅 — arxiv 의도 감지. 단 arxiv 가 RAG 를 *대체*하지 않는다(2026-06-04
+    # 회귀 수정): 자료 기반 RAG 는 항상 수행하고, arxiv 의도일 때만 외부 논문을 추가로
+    # 병합한다. 그래야 '논문 알려줘' 같은 질문이 arxiv 로 오분류돼도 내 위키/자료가
+    # 누락되지 않는다 (RAG 가 핵심, arxiv 는 보강).
     intent, arxiv_query = await _detect_intent(
         payload.question, payload.history, provider, payload.llm_model,
     )
-
-    if intent == "arxiv_search":
-        context, arxiv_results, _ = await _retrieve_arxiv(arxiv_query)
-        messages = _build_messages(
-            _ARXIV_ANSWER_SYSTEM, payload.history, context, payload.question,
-        )
-        resp = await provider.chat(messages=messages, model=payload.llm_model)
-        return AskResponse(
-            question=payload.question,
-            answer=resp.text,
-            citations=[],
-            related_wikis=[],
-            intent="arxiv_search",
-            arxiv_results=arxiv_results,
-            llm_provider=resp.provider,
-            llm_model=resp.model,
-        )
 
     # 후속 질문이면 독립형 검색 쿼리로 재작성 (첫 턴이면 원 질문 그대로).
     search_query = await _condense_query(
@@ -485,6 +463,12 @@ async def ask(
     context, citations, wiki_hits = await _retrieve(
         search_query=search_query, question_for_pins=payload, session=session,
     )
+
+    # arxiv 의도면 외부 논문 검색 결과를 context 에 추가 (RAG 자료 다음에 보강).
+    arxiv_results: list[AskArxivResult] = []
+    if intent == "arxiv_search":
+        arxiv_ctx, arxiv_results, _ = await _retrieve_arxiv(arxiv_query)
+        context = f"{context}\n\n{arxiv_ctx}"
 
     _, system_prompt = runtime_settings.get_active_prompt("rag_system")
     messages = _build_messages(system_prompt, payload.history, context, payload.question)
@@ -499,8 +483,8 @@ async def ask(
         answer=resp.text,
         citations=citations,
         related_wikis=related_wikis,
-        intent="rag",
-        arxiv_results=[],
+        intent=intent,
+        arxiv_results=arxiv_results,
         llm_provider=resp.provider,
         llm_model=resp.model,
     )
@@ -528,31 +512,27 @@ async def ask_stream(
     provider_name = payload.llm_provider or runtime_settings.get_effective_llm_provider()
     provider = get_llm_provider(provider_name)
 
-    # agentic 라우팅 — arxiv 외부 검색 vs 자료 기반 RAG. stream 시작 전 동기로 결정.
+    # agentic 라우팅 — arxiv 는 RAG 를 대체하지 않고 보강한다 (2026-06-04 회귀 수정,
+    # ask() 와 동일). RAG 는 항상 수행, arxiv 의도일 때만 외부 논문을 context 에 추가.
     intent, arxiv_query = await _detect_intent(
         payload.question, payload.history, provider, payload.llm_model,
     )
+    search_query = await _condense_query(
+        payload.question, payload.history, provider, payload.llm_model,
+    )
+    context, citations, wiki_hits = await _retrieve(
+        search_query=search_query, question_for_pins=payload, session=session,
+    )
+    related_wikis = _merge_searched_wikis(
+        await _fetch_related_wikis(citations, session), wiki_hits,
+    )
 
+    arxiv_results: list[AskArxivResult] = []
     if intent == "arxiv_search":
-        context, arxiv_results, _ = await _retrieve_arxiv(arxiv_query)
-        system_prompt = _ARXIV_ANSWER_SYSTEM
-        search_query = arxiv_query
-        citations: list[AskCitation] = []
-        related_wikis: list[AskRelatedWiki] = []
-    else:
-        intent = "rag"
-        arxiv_results = []
-        search_query = await _condense_query(
-            payload.question, payload.history, provider, payload.llm_model,
-        )
-        context, citations, wiki_hits = await _retrieve(
-            search_query=search_query, question_for_pins=payload, session=session,
-        )
-        related_wikis = _merge_searched_wikis(
-            await _fetch_related_wikis(citations, session), wiki_hits,
-        )
-        _, system_prompt = runtime_settings.get_active_prompt("rag_system")
+        arxiv_ctx, arxiv_results, _ = await _retrieve_arxiv(arxiv_query)
+        context = f"{context}\n\n{arxiv_ctx}"
 
+    _, system_prompt = runtime_settings.get_active_prompt("rag_system")
     messages = _build_messages(system_prompt, payload.history, context, payload.question)
 
     # stream 에선 응답 객체가 없어 정확한 model id 를 모름 — payload 명시값 또는 provider
