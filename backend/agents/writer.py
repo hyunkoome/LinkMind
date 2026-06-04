@@ -291,6 +291,12 @@ class WriterAgent(AgentBase):
         clean_title = _extract_title(body)
         tldr = _extract_tldr(body)
 
+        # 위키 본문에 figure 삽입 (사용자 명시 2026-06-04: 모델/시스템 아키텍처 + 결과
+        # 그림 필수). retriever 가 모은 Docling figure(caption + file_hash, 우선순위 정렬)
+        # 를 markdown 이미지로 본문 끝 ## 그림 섹션에 결정론적으로 추가 — LLM 이 URL 을
+        # 지어내지 않게 코드가 직접. title/tldr 추출 뒤라 제목/요약엔 영향 없음.
+        body = _append_figures(body, wiki_context.get("figures") or [])
+
         # version+1 결정 (latest_version 은 retriever 가 가져옴)
         latest = int(wiki_context["page"]["latest_version"] or 0)
         new_version = latest + 1
@@ -465,6 +471,34 @@ def _strip_metadata_sections(body: str) -> str:
     if first_idx == -1:
         return body.rstrip()
     return body[:first_idx].rstrip()
+
+
+def _append_figures(body: str, figures: list[dict[str, Any]]) -> str:
+    """위키 본문 끝에 '## 그림' 섹션으로 figure 삽입 (markdown 이미지 + caption).
+
+    figures 는 retriever 가 우선순위 정렬한 Docling figure 목록 [{file_hash, caption, ...}].
+    URL 은 /files/{file_hash} (첨부 서빙 엔드포인트). LLM 출력이 아니라 코드가 직접
+    구성하므로 URL 이 정확 (이미지 깨짐 없음). figure 없으면 body 그대로.
+    """
+    if not figures:
+        return body
+    lines = ["", "", "## 그림", ""]
+    n = 0
+    for f in figures:
+        fh = f.get("file_hash")
+        if not fh:
+            continue
+        cap = (f.get("caption") or "").strip()
+        alt = cap.replace("]", " ").replace("[", " ") or "figure"
+        lines.append(f"![{alt}](/files/{fh})")
+        if cap:
+            lines.append("")
+            lines.append(f"*{cap}*")
+        lines.append("")
+        n += 1
+    if n == 0:
+        return body
+    return body.rstrip() + "\n" + "\n".join(lines).rstrip() + "\n"
 
 
 def _parse_keywords_section(body: str) -> list[str]:

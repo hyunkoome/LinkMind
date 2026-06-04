@@ -63,12 +63,48 @@ _FETCH_SOURCES_SQL = text("""
 
 _FETCH_ATTACHMENTS_SQL = text("""
     SELECT
-        a.id, a.item_id, a.file_path, a.mime_type, a.role,
+        a.id, a.item_id, a.file_path, a.file_hash, a.mime_type, a.role,
         a.caption, a.ai_description, a.width, a.height
     FROM attachments a
     WHERE a.item_id = ANY(:item_ids)
     ORDER BY a.created_at ASC
 """)
+
+# 위키 본문에 삽입할 figure — caption 이 제대로 있는 것만 (Docling 추출물). pymupdf
+# 잔재(caption='page N')와 caption 없는 조각/로고는 제외. file_hash 로 /files/{hash}
+# URL 구성. 우선순위 정렬은 Python(_figure_priority)에서 (아키텍처/결과 그림 먼저).
+_FETCH_FIGURES_SQL = text("""
+    SELECT a.file_hash, a.caption, a.width, a.height
+    FROM attachments a
+    WHERE a.item_id = ANY(:item_ids)
+      AND a.role = 'figure'
+      AND a.caption IS NOT NULL
+      AND a.caption <> ''
+      AND a.caption !~* '^page\\s+[0-9]'
+      AND a.file_hash IS NOT NULL
+    ORDER BY a.created_at ASC
+""")
+
+
+# figure caption 우선순위 키워드 (사용자 명시 2026-06-04: 모델/시스템 아키텍처 + 결과
+# 그림 우선). caption 을 보고 0=아키텍처, 1=결과, 2=기타 로 분류해 본문 상위에 배치.
+_FIG_ARCH_KW = (
+    "architecture", "overview", "framework", "pipeline", "model",
+    "system", "network", "diagram", "structure", "schematic",
+)
+_FIG_RESULT_KW = (
+    "result", "qualitative", "quantitative", "comparison", "performance",
+    "ablation", "accuracy", "benchmark", "evaluation", "experiment",
+)
+
+
+def _figure_priority(caption: str) -> int:
+    c = (caption or "").lower()
+    if any(k in c for k in _FIG_ARCH_KW):
+        return 0
+    if any(k in c for k in _FIG_RESULT_KW):
+        return 1
+    return 2
 
 
 # 같은 items 가 다른 wiki_pages 에 link 된 cross-link 후보
@@ -99,6 +135,8 @@ class RetrieverAgent(AgentBase):
 
     # 첨부는 한 item 당 N 개만 (context window 보호)
     MAX_ATTACHMENTS_PER_ITEM = 5
+    # 위키 본문에 삽입할 figure 상한 (너무 많으면 위키가 산만). 우선순위 정렬 후 상위 N.
+    MAX_FIGURES_IN_BODY = 10
 
     async def build_context(self, ctx: AgentContext) -> dict[str, Any]:
         if not ctx.related_wiki_page_id:
@@ -164,6 +202,7 @@ async def _build_wiki_context(
             lst.append({
                 "id": str(a["id"]),
                 "file_path": a["file_path"],
+                "file_hash": a["file_hash"],
                 "mime_type": a["mime_type"],
                 "role": a["role"],
                 "caption": a["caption"],
@@ -172,6 +211,30 @@ async def _build_wiki_context(
                 "height": a["height"],
             })
             attachment_count += 1
+
+    # 위키 본문 삽입용 figure 수집 (attachments 5개 제한과 별개) — caption 있는 Docling
+    # figure 만, 아키텍처/결과 그림 우선 정렬 후 상한. file_hash 로 /files/{hash} URL.
+    figures: list[dict[str, Any]] = []
+    if item_ids:
+        fig_rows = (await session.execute(
+            _FETCH_FIGURES_SQL, {"item_ids": item_ids},
+        )).mappings().all()
+        seen_hashes: set[str] = set()
+        collected: list[dict[str, Any]] = []
+        for f in fig_rows:
+            fh = f["file_hash"]
+            if not fh or fh in seen_hashes:
+                continue
+            seen_hashes.add(fh)
+            collected.append({
+                "file_hash": fh,
+                "caption": (f["caption"] or "").strip(),
+                "width": f["width"],
+                "height": f["height"],
+            })
+        # 아키텍처(0) → 결과(1) → 기타(2) 우선, 원래 순서 보존(stable). 상한 적용.
+        collected.sort(key=lambda x: _figure_priority(x["caption"]))
+        figures = collected[: RetrieverAgent.MAX_FIGURES_IN_BODY]
 
     # cross-link 후보
     cross_links: list[dict[str, Any]] = []
@@ -235,6 +298,7 @@ async def _build_wiki_context(
         },
         "sources": sources,
         "attachment_count": attachment_count,
+        "figures": figures,
         "cross_link_candidates": cross_links,
         "user_notes_combined": "\n\n".join(notes_chunks),
     }
