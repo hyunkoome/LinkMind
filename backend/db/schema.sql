@@ -588,3 +588,51 @@ CREATE TABLE IF NOT EXISTS ask_messages (
     ingested      JSONB DEFAULT '[]'::jsonb
 );
 CREATE INDEX IF NOT EXISTS idx_ask_messages_session ON ask_messages(session_id, ord);
+
+-- ============================================================================
+-- collection_keywords : 키워드 기반 arxiv 수집용 "관심/구독 키워드" (2026-06-05).
+-- wiki_pages.keywords(콘텐츠 키워드) 와 별개 — 이건 "무엇을 수집할지" 의 입력.
+-- per-user 등록 + space 전역 종합(admin 이 취사선택). 멀티테넌트 격리는 space_id.
+-- enabled: 주기 자동 수집(Phase 2)에서 켜진 키워드만 도는 훅. manual MVP 에선 표시용.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS collection_keywords (
+    id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    space_id   UUID NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
+    user_id    UUID NOT NULL REFERENCES users(id)  ON DELETE CASCADE,  -- 등록자
+    keyword    TEXT NOT NULL,
+    enabled    BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (space_id, keyword)                      -- space 내 키워드 중복 방지
+);
+CREATE INDEX IF NOT EXISTS idx_collection_keywords_space ON collection_keywords(space_id);
+
+-- ============================================================================
+-- arxiv_papers : 전체 arXiv 메타데이터 로컬 캐시 (2026-06-05, rate limit 근본 해결).
+-- arxiv API 직접 검색은 IP rate limit(429)에 막혀서, 메타를 우리 DB 에 적재해두고
+-- 등록 키워드를 로컬 FTS 로 검색한다(제한 0, 즉시). Kaggle bulk(초기) + OAI-PMH(증분)
+-- 로 채운다. items 와 무관 — "수집 후보" 검색 인덱스(읽기전용). arxiv_id 가 자연 PK
+-- (버전 suffix 제거된 base id). FTS 는 items 와 동일 패턴(title A + abstract B).
+-- 적재 watermark 는 app_settings('arxiv_oai_last_from') 재사용.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS arxiv_papers (
+    arxiv_id    TEXT PRIMARY KEY,                  -- base id ('2106.09685', 버전 strip)
+    title       TEXT NOT NULL,
+    abstract    TEXT NOT NULL DEFAULT '',
+    authors     TEXT[] NOT NULL DEFAULT '{}',
+    categories  TEXT[] NOT NULL DEFAULT '{}',      -- ['cs.CV','cs.LG'] (공백구분 → 배열)
+    version     TEXT,                               -- 최신 버전 ('v2')
+    published   TIMESTAMPTZ,                        -- 최초 제출
+    updated     TIMESTAMPTZ,                        -- 최종 갱신
+    doi         TEXT,
+    journal_ref TEXT,
+    source      TEXT NOT NULL DEFAULT 'kaggle',     -- 'kaggle' | 'oai' | 'html'
+    fetched_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    fts_vector tsvector GENERATED ALWAYS AS (
+        setweight(to_tsvector('simple', coalesce(title,    '')), 'A') ||
+        setweight(to_tsvector('simple', coalesce(abstract, '')), 'B')
+    ) STORED
+);
+CREATE INDEX IF NOT EXISTS idx_arxiv_papers_fts        ON arxiv_papers USING GIN (fts_vector);
+CREATE INDEX IF NOT EXISTS idx_arxiv_papers_categories ON arxiv_papers USING GIN (categories);
+CREATE INDEX IF NOT EXISTS idx_arxiv_papers_published  ON arxiv_papers (published DESC);

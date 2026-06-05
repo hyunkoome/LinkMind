@@ -1,0 +1,7 @@
+# arxiv-harvester 키워드 시드 예시 (standalone/CLI 용).
+# LinkMind 는 이 파일을 안 쓰고 DB(collection_keywords)로 관리한다.
+keywords:
+  - gaussian splatting
+  - multi-camera SLAM
+  - LoRA fine-tuning
+  - vision language model

@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "arxiv-harvester"
+version = "0.1.0"
+description = "키워드 기반 arxiv 논문 수집 (검색 + 필터). 독립 라이브러리."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Hyunkoo Kim" }]
+keywords = ["arxiv", "research", "paper", "search", "harvester"]
+dependencies = [
+    "httpx>=0.24",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7", "pytest-asyncio>=0.21"]
+
+[project.urls]
+Homepage = "https://github.com/hyunkoome/arxiv-harvester"
+
+[tool.setuptools]
+packages = ["arxiv_harvester"]
+package-dir = { "arxiv_harvester" = "." }

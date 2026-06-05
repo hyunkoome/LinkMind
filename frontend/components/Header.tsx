@@ -13,8 +13,12 @@ const NAV_HREFS = [
   { href: "/ask", icon: "🤖", key: "ask" as const },
   { href: "/wiki", icon: "📖", key: "wiki" as const },
   { href: "/ingest", icon: "📥", key: "ingest" as const },
+  { href: "/admin/arxiv", icon: "🔭", key: "arxivAdmin" as const },
   { href: "/settings", icon: "⚙️", key: "settings" as const },
 ];
+
+// nav 에서 admin/root 에게만 보이는 항목들 (조직 전역 영향 → 루트 전용).
+const ADMIN_ONLY_NAV = new Set(["settings", "arxivAdmin"]);
 
 export default function Header() {
   const pathname = usePathname();
@@ -32,7 +36,7 @@ export default function Header() {
         {t.app.title}
       </Link>
       <nav className="flex gap-1">
-        {NAV_HREFS.filter((item) => item.key !== "settings" || isAdmin).map((item) => {
+        {NAV_HREFS.filter((item) => !ADMIN_ONLY_NAV.has(item.key) || isAdmin).map((item) => {
           const active =
             item.href === "/"
               ? pathname === "/"

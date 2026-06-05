@@ -1580,3 +1580,164 @@ async def get_user_ask_store_full(
         s["messages"] = [dict(r) for r in mres.mappings().all()]
         out.append(s)
     return out
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# collection_keywords — 키워드 기반 arxiv 수집용 관심 키워드 (admin, space 격리)
+# ────────────────────────────────────────────────────────────────────────────
+
+async def list_collection_keywords(
+    session: AsyncSession, *, space_id: UUID,
+) -> list[dict[str, Any]]:
+    """space 의 수집 키워드 종합 목록 (등록자 display_name 포함)."""
+    res = await session.execute(
+        text("""
+            SELECT ck.id, ck.keyword, ck.enabled, ck.user_id,
+                   u.display_name, u.email, ck.created_at, ck.updated_at
+            FROM collection_keywords ck
+            LEFT JOIN users u ON u.id = ck.user_id
+            WHERE ck.space_id = :s
+            ORDER BY ck.created_at ASC
+        """),
+        {"s": space_id},
+    )
+    return [dict(r) for r in res.mappings().all()]
+
+
+async def add_collection_keyword(
+    session: AsyncSession, *, space_id: UUID, user_id: UUID, keyword: str,
+) -> dict[str, Any] | None:
+    """키워드 등록. 같은 space 에 동일 keyword 있으면 무시(ON CONFLICT). 새로 만든
+    row 를 반환, 이미 있으면 None."""
+    res = await session.execute(
+        text("""
+            INSERT INTO collection_keywords (space_id, user_id, keyword)
+            VALUES (:s, :u, :k)
+            ON CONFLICT (space_id, keyword) DO NOTHING
+            RETURNING id, keyword, enabled, user_id, created_at, updated_at
+        """),
+        {"s": space_id, "u": user_id, "k": keyword},
+    )
+    row = res.mappings().first()
+    return dict(row) if row else None
+
+
+async def delete_collection_keyword(
+    session: AsyncSession, *, space_id: UUID, keyword_id: UUID,
+) -> bool:
+    """키워드 삭제 (space 격리). 삭제됐으면 True."""
+    res = await session.execute(
+        text("DELETE FROM collection_keywords WHERE id = :id AND space_id = :s"),
+        {"id": keyword_id, "s": space_id},
+    )
+    return (res.rowcount or 0) > 0
+
+
+async def set_collection_keyword_enabled(
+    session: AsyncSession, *, space_id: UUID, keyword_id: UUID, enabled: bool,
+) -> bool:
+    """키워드 enabled 토글 (space 격리). 갱신됐으면 True."""
+    res = await session.execute(
+        text("""
+            UPDATE collection_keywords SET enabled = :e, updated_at = now()
+            WHERE id = :id AND space_id = :s
+        """),
+        {"e": enabled, "id": keyword_id, "s": space_id},
+    )
+    return (res.rowcount or 0) > 0
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# arxiv_papers — 전체 arXiv 메타 로컬 캐시 (rate limit 근본 해결). 로컬 FTS 검색.
+# ────────────────────────────────────────────────────────────────────────────
+
+_UPSERT_ARXIV_SQL = text("""
+    INSERT INTO arxiv_papers (
+        arxiv_id, title, abstract, authors, categories, version,
+        published, updated, doi, journal_ref, source
+    ) VALUES (
+        :arxiv_id, :title, :abstract, :authors, :categories, :version,
+        :published, :updated, :doi, :journal_ref, :source
+    )
+    ON CONFLICT (arxiv_id) DO UPDATE SET
+        title       = EXCLUDED.title,
+        abstract    = EXCLUDED.abstract,
+        authors     = EXCLUDED.authors,
+        categories  = EXCLUDED.categories,
+        version     = EXCLUDED.version,
+        published   = EXCLUDED.published,
+        updated     = EXCLUDED.updated,
+        doi         = EXCLUDED.doi,
+        journal_ref = EXCLUDED.journal_ref,
+        source      = EXCLUDED.source,
+        fetched_at  = now()
+    WHERE arxiv_papers.updated IS NULL
+       OR EXCLUDED.updated IS NULL
+       OR arxiv_papers.updated <= EXCLUDED.updated
+""")
+
+
+async def upsert_arxiv_papers(
+    session: AsyncSession, rows: list[dict[str, Any]],
+) -> int:
+    """arxiv_papers 배치 upsert (OAI 증분용; Kaggle 초기 대량은 COPY 별도 job).
+    더 새 버전(updated)만 갱신. rows 각 dict 는 컬럼 키 그대로. 반환 시도 건수."""
+    if not rows:
+        return 0
+    await session.execute(_UPSERT_ARXIV_SQL, rows)   # executemany
+    return len(rows)
+
+
+async def count_arxiv_papers(session: AsyncSession) -> int:
+    res = await session.execute(text("SELECT count(*) FROM arxiv_papers"))
+    return int(res.scalar() or 0)
+
+
+async def search_arxiv_papers(
+    session: AsyncSession,
+    *,
+    keywords: list[str],
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    categories: list[str] | None = None,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """등록 키워드로 로컬 arxiv_papers FTS 검색 (rate limit 0).
+
+    **키워드마다 개별 websearch_to_tsquery 서브쿼리 → UNION ALL → arxiv_id 로 dedup**
+    (사용자 설계: 키워드별 검색 후 합집합). websearch_to_tsquery 가 다단어를 토큰 AND
+    로 처리하므로 'Learned Point Cloud Compression' = 그 단어 모두 포함 논문. published
+    DESC(최신 우선). 날짜/카테고리는 SQL WHERE(인덱스 활용).
+    """
+    kws = [k.strip() for k in keywords if k and k.strip()]
+    if not kws:
+        return []
+    params: dict[str, Any] = {
+        "lim": limit,
+        "cats": categories or None,
+        "date_from": date_from,
+        "date_to": date_to,
+    }
+    subs = []
+    for i, kw in enumerate(kws):
+        params[f"q{i}"] = kw
+        subs.append(f"""
+            SELECT arxiv_id, title, abstract, authors, categories, published, version,
+                   ts_rank(fts_vector, websearch_to_tsquery('simple', :q{i})) AS rank
+            FROM arxiv_papers
+            WHERE fts_vector @@ websearch_to_tsquery('simple', :q{i})
+              AND (CAST(:cats AS TEXT[]) IS NULL OR categories && CAST(:cats AS TEXT[]))
+              AND (CAST(:date_from AS TIMESTAMPTZ) IS NULL OR published >= CAST(:date_from AS TIMESTAMPTZ))
+              AND (CAST(:date_to   AS TIMESTAMPTZ) IS NULL OR published <= CAST(:date_to   AS TIMESTAMPTZ))
+        """)
+    union_sql = " UNION ALL ".join(subs)
+    sql = text(f"""
+        SELECT arxiv_id, title, abstract, authors, categories, published, version,
+               max(rank) AS rank
+        FROM ( {union_sql} ) u
+        GROUP BY arxiv_id, title, abstract, authors, categories, published, version
+        ORDER BY published DESC NULLS LAST, rank DESC
+        LIMIT :lim
+    """)
+    rows = (await session.execute(sql, params)).mappings().all()
+    return [dict(r) for r in rows]

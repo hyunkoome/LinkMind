@@ -19,6 +19,7 @@ import asyncio
 
 from backend import runtime_settings
 from backend.api import (
+    admin_arxiv,
     ask,
     auth as auth_api,
     files,
@@ -177,6 +178,7 @@ app.include_router(items.router, prefix="/items", tags=["items"], dependencies=_
 app.include_router(graph.router, prefix="/graph", tags=["graph"], dependencies=_protected)
 app.include_router(wiki.router, prefix="/wiki", tags=["wiki"], dependencies=_protected)
 app.include_router(sessions_api.router, prefix="/sessions", tags=["sessions"], dependencies=_protected)
+app.include_router(admin_arxiv.router, prefix="/admin/arxiv", tags=["admin"], dependencies=_protected)
 
 
 @app.get("/")

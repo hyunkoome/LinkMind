@@ -533,7 +533,9 @@ export interface WikiPageDetail {
   description: string | null;
   variant: string;
   body: string | null;
-  body_status: "empty" | "generating" | "ready" | "stale";
+  // 백엔드는 DB 값을 그대로 반환 (issues / pending / completed). 옛 표기(empty/generating
+  // /ready/stale)는 실제 응답과 불일치라 2026-06-05 정정.
+  body_status: "issues" | "pending" | "completed";
   body_model: string | null;
   body_prompt_version: string | null;
   body_generated_at: string | null;
@@ -755,4 +757,90 @@ export async function searchWikiKeywords(q: string, limit = 20): Promise<WikiKey
   if (q) params.set("q", q);
   params.set("limit", String(limit));
   return fetchJSON<WikiKeywordSearchResponse>(`/wiki/_keywords/search?${params.toString()}`);
+}
+
+// ── 키워드 기반 arxiv 수집 (admin 전용) ──────────────────────────
+// collection_keywords(수집용 관심 키워드) 관리 + arxiv 검색 미리보기 + 선택 수집.
+// 모든 호출은 admin/root 만(백엔드 require_space_admin). 수집은 arxiv_id → pdf ingest → 위키.
+
+export interface CollectionKeyword {
+  id: string;
+  keyword: string;
+  enabled: boolean;
+  user_id: string | null;
+  display_name: string | null;
+  email: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface ArxivPaper {
+  arxiv_id: string;
+  title: string;
+  summary: string;
+  authors: string[];
+  published: string | null;
+  categories: string[];
+  abs_url: string;
+  pdf_url: string;
+}
+
+export interface ArxivCollectItem {
+  arxiv_id: string;
+  ok: boolean;
+  item_id: string | null;
+  created: boolean | null;
+  title: string | null;
+  error: string | null;
+}
+
+export async function listArxivKeywords(): Promise<{ keywords: CollectionKeyword[] }> {
+  return fetchJSON(`/admin/arxiv/keywords`);
+}
+
+export async function addArxivKeyword(
+  keyword: string,
+): Promise<{ created: boolean; id?: string; keyword: string }> {
+  return fetchJSON(`/admin/arxiv/keywords`, {
+    method: "POST",
+    body: JSON.stringify({ keyword }),
+  });
+}
+
+export async function deleteArxivKeyword(id: string): Promise<{ deleted: boolean }> {
+  return fetchJSON(`/admin/arxiv/keywords/${id}`, { method: "DELETE" });
+}
+
+export async function toggleArxivKeyword(
+  id: string,
+  enabled: boolean,
+): Promise<{ enabled: boolean }> {
+  return fetchJSON(`/admin/arxiv/keywords/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ enabled }),
+  });
+}
+
+export async function searchArxiv(params: {
+  query?: string;
+  keywords?: string[];
+  max_results?: number;
+  sort_by?: string;
+  date_from?: string | null;
+  date_to?: string | null;
+  categories?: string[];
+}): Promise<{ papers: ArxivPaper[]; count: number }> {
+  return fetchJSON(`/admin/arxiv/search`, {
+    method: "POST",
+    body: JSON.stringify(params),
+  });
+}
+
+export async function collectArxiv(
+  arxivIds: string[],
+): Promise<{ collected: number; total: number; results: ArxivCollectItem[] }> {
+  return fetchJSON(`/admin/arxiv/collect`, {
+    method: "POST",
+    body: JSON.stringify({ arxiv_ids: arxivIds }),
+  });
 }
