@@ -29,6 +29,10 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger("arxiv_harvest_oai")
 
 _WATERMARK_KEY = "arxiv_oai_last_from"
+# watermark 를 '오늘'이 아니라 '오늘 - N일'로 겹쳐 저장 — harvest 도중/직후에 등록·개정된
+# 논문이 경계에서 누락되는 미세 가능성을 0 으로. upsert(ON CONFLICT, updated 더 새면만 갱신)
+# 라 다음 실행이 겹친 날을 재수집해도 중복/덮어쓰기 부작용 없음. (검색 캐시 무손실 보강.)
+_WATERMARK_OVERLAP_DAYS = 2
 
 
 async def run(
@@ -70,10 +74,14 @@ async def run(
             logger.info("  [%s] page %d: +%d (누적 %d)", set_spec or "전체", page, n, total)
 
     if update_watermark:
+        # 오늘 - overlap 일로 겹쳐 저장 (경계 누락 0). 다음 실행은 이 날짜부터.
+        watermark_date = (
+            datetime.now(timezone.utc) - timedelta(days=_WATERMARK_OVERLAP_DAYS)
+        ).strftime("%Y-%m-%d")
         async with factory() as s:
-            await repository.set_app_setting(s, _WATERMARK_KEY, today)
+            await repository.set_app_setting(s, _WATERMARK_KEY, watermark_date)
             await s.commit()
-        logger.info("watermark 갱신 → %s", today)
+        logger.info("watermark 갱신 → %s (오늘 -%d일 겹침)", watermark_date, _WATERMARK_OVERLAP_DAYS)
 
     logger.info("✅ OAI 수확 완료 — %d papers upsert", total)
     return total
