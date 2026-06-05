@@ -194,21 +194,25 @@ export default function WikiDetailView({
             <span className="text-[10px] text-zinc-500">v{page.latest_version}</span>
             {!editing && (
               <>
+                {/* pending = daemon/배치가 본문 합성(재합성) 중. 그 동안은 편집·재합성을
+                    막아 합성 결과를 덮어쓰거나 중복 합성하는 것을 방지한다. */}
                 <button
                   type="button"
                   onClick={onStartEdit}
-                  disabled={regenerating || deleting}
-                  className="text-xs px-2 py-1 rounded border border-blue-300 dark:border-blue-700 text-blue-700 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 disabled:opacity-50"
+                  disabled={regenerating || deleting || page.body_status === "pending"}
+                  title={page.body_status === "pending" ? "재합성이 끝난 뒤 편집할 수 있습니다" : undefined}
+                  className="text-xs px-2 py-1 rounded border border-blue-300 dark:border-blue-700 text-blue-700 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   ✏️ 편집
                 </button>
                 <button
                   type="button"
                   onClick={onRegenerate}
-                  disabled={regenerating || deleting}
-                  className="text-xs px-2 py-1 rounded border border-orange-300 dark:border-orange-700 text-orange-700 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20 disabled:opacity-50"
+                  disabled={regenerating || deleting || page.body_status === "pending"}
+                  title={page.body_status === "pending" ? "이미 재합성 중입니다" : undefined}
+                  className="text-xs px-2 py-1 rounded border border-orange-300 dark:border-orange-700 text-orange-700 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {regenerating ? "재합성 중…" : "🔄 재합성"}
+                  {regenerating || page.body_status === "pending" ? "재합성 중…" : "🔄 재합성"}
                 </button>
                 {isPanel && onClose && (
                   <button

@@ -77,6 +77,87 @@ _TRANSLATE_SYSTEM = (
 )
 
 
+# ──────────────────────────────────────────────────────────────────────
+# 토큰 예산 — vLLM Gemma 4 26B-A4B context 16384 안에서 큰 논문도 안정 합성
+# ──────────────────────────────────────────────────────────────────────
+# 큰 논문 raw(예: 43k자 → ~9k+ 토큰)를 단일 호출에 통째로 넣으면 input+output 이
+# 16384 를 넘어 BadRequestError(400)로 합성이 *영구 실패*(pending stuck)한다.
+# 해결: raw 가 단일 호출 예산을 넘으면 **섹션별로 나눠 압축(map)** 한 뒤 그 압축
+# 노트로 위키를 합성(reduce). 원본을 잘라 버리지 않으므로 뒷부분 손실 없음.
+# (raw-first §2 — 발췌 truncate 는 정보 손실, map 압축은 전 구간 반영.)
+_MODEL_CONTEXT_TOKENS = 16384      # vLLM max_model_len (app_settings 와 일치 유지)
+_PAPER_OUTPUT_TOKENS = 7168        # 논문 reduce 출력 (충실도 — 사용자 요구)
+_GENERAL_OUTPUT_TOKENS = 6144      # 개념형 출력
+_PROMPT_SAFETY_MARGIN = 1024       # 라벨/figures/sources/추정오차 흡수
+# 보수적 char→token 비율. markdown 표·수식·특수문자는 토큰 효율이 낮아(토큰이 많아)
+# 영어 평균(~4)보다 작게 잡아 *토큰을 과대추정* → 항상 안전쪽으로 자른다. 실측
+# (MCGS-SLAM: ~20000자 발췌가 ~7000토큰 ≈ 2.85)보다 더 보수적인 2.5.
+_CHARS_PER_TOKEN = 2.5
+# map 단계 — 한 청크에 넣을 raw 입력 토큰 예산 (출력 압축 노트 + 여유 포함해 16384 안).
+_MAP_INPUT_TOKENS = 8000
+_MAP_OUTPUT_TOKENS = 3072
+
+
+def _estimate_tokens(textval: str) -> int:
+    """char 기반 보수적 토큰 추정 (토크나이저 미로딩). 안전쪽(과대)으로 추정."""
+    if not textval:
+        return 0
+    return int(len(textval) / _CHARS_PER_TOKEN) + 1
+
+
+_HEADER_RE = re.compile(r"^#{1,6}\s+\S")
+
+
+def _split_markdown_sections(raw: str) -> list[str]:
+    """markdown 본문을 헤더(#~######) 경계로 섹션 분할. 헤더 앞 prefix(제목/초록)도
+    한 섹션. 헤더가 거의 없는 문서면 통째 1섹션 → 청크 패킹이 길이로 다시 쪼갠다."""
+    if not raw:
+        return []
+    sections: list[str] = []
+    current: list[str] = []
+    for line in raw.split("\n"):
+        if _HEADER_RE.match(line) and current:
+            sections.append("\n".join(current))
+            current = [line]
+        else:
+            current.append(line)
+    if current:
+        sections.append("\n".join(current))
+    return [s for s in sections if s.strip()]
+
+
+def _pack_sections_into_chunks(sections: list[str], budget_chars: int) -> list[str]:
+    """섹션들을 순서 보존하며 budget_chars 까지 묶어 청크 리스트로. 단일 섹션이
+    예산을 넘으면 char 단위로 강제 분할(헤더 없는 거대 본문 방어). 항상 각 청크
+    len <= budget_chars 보장."""
+    budget_chars = max(1, budget_chars)
+    chunks: list[str] = []
+    cur: list[str] = []
+    cur_len = 0
+    for sec in sections:
+        if len(sec) > budget_chars:
+            if cur:
+                chunks.append("\n\n".join(cur))
+                cur, cur_len = [], 0
+            for i in range(0, len(sec), budget_chars):
+                chunks.append(sec[i : i + budget_chars])
+            continue
+        if cur and cur_len + len(sec) + 2 > budget_chars:
+            chunks.append("\n\n".join(cur))
+            cur, cur_len = [], 0
+        cur.append(sec)
+        cur_len += len(sec) + 2
+    if cur:
+        chunks.append("\n\n".join(cur))
+    return chunks
+
+
+# 논문 raw 본문 — writer 가 map-reduce 시 primary item 의 raw 를 직접 fetch.
+# (retriever 는 output_meta JSONB 비대 방지로 짧은 excerpt 만 준다 — map 입력은
+#  전 구간이 필요하므로 writer 가 그때 읽어 처리 후 버린다.)
+_FETCH_ITEM_RAW_SQL = text("SELECT raw_content FROM items WHERE id = :item_id")
+
+
 _UPDATE_BODY_SQL = text("""
     UPDATE wiki_pages
     SET body = :body,
@@ -175,6 +256,88 @@ class WriterAgent(AgentBase):
         except Exception as exc:  # noqa: BLE001
             logger.warning("writer 번역 폴백 LLM 호출 실패 (원본 유지): %s", exc)
             return ""
+
+    async def _map_compress_once(
+        self, provider, raw_text: str, chunk_budget_chars: int,  # noqa: ANN001
+    ) -> tuple[str, int]:
+        """raw_text 를 섹션 청크로 나눠 각 청크를 LLM 으로 한국어 압축 노트화(map).
+        반환 (결합 노트, 청크 수). 청크가 1개뿐이면(더 못 쪼갬) 원문 그대로 반환."""
+        sections = _split_markdown_sections(raw_text) or [raw_text]
+        chunks = _pack_sections_into_chunks(sections, chunk_budget_chars)
+        if len(chunks) <= 1:
+            return raw_text, 1
+        map_prompt = self._load_prompt("writer_paper_map")
+        notes: list[str] = []
+        for idx, chunk in enumerate(chunks, start=1):
+            user = map_prompt["user_template"].format(
+                part_index=idx, part_total=len(chunks), chunk=chunk,
+            )
+            try:
+                resp = await provider.chat(
+                    messages=[
+                        ChatMessage(role="system", content=map_prompt["system"]),
+                        ChatMessage(role="user", content=user),
+                    ],
+                    model=self.llm_model,
+                    temperature=0.3,
+                    max_tokens=_MAP_OUTPUT_TOKENS,
+                )
+                note = resp.text.strip()
+                if note:
+                    notes.append(note)
+            except Exception as exc:  # noqa: BLE001 — 한 청크 실패해도 나머지로 진행
+                logger.warning("paper map 청크 %d/%d 압축 실패 (건너뜀): %s",
+                               idx, len(chunks), exc)
+        combined = "\n\n".join(notes).strip()
+        return (combined or raw_text), len(chunks)
+
+    async def _prepare_paper_body(
+        self, provider, session: AsyncSession,  # noqa: ANN001
+        wiki_context: dict[str, Any], system_msg: str, output_tokens: int,
+    ) -> str:
+        """논문 reduce(최종 위키 합성)에 넣을 paper_body 를 만든다.
+
+        primary 논문 raw 전체를 읽어, vLLM context(16384) 안에 들어오면 통째로(충실),
+        넘으면 **섹션별 map 압축**으로 전 구간을 반영한 노트로 줄인다(뒷부분 손실 없음).
+        map 으로도 한 번에 안 줄면 노트를 재압축(recursive reduce, 상한 3회)."""
+        pr = wiki_context.get("primary_raw") or {}
+        excerpt = pr.get("excerpt") or ""
+        item_id = pr.get("item_id")
+        slug = (wiki_context.get("page") or {}).get("slug", "?")
+
+        raw_full = ""
+        if item_id:
+            row = (await session.execute(
+                _FETCH_ITEM_RAW_SQL, {"item_id": str(item_id)},
+            )).first()
+            raw_full = ((row[0] or "").strip()) if row else ""
+        if not raw_full:
+            return excerpt
+
+        # 단일 호출 입력 예산 (output + system + figures/sources margin 제외)
+        single_budget = (
+            _MODEL_CONTEXT_TOKENS - output_tokens - _PROMPT_SAFETY_MARGIN
+            - _estimate_tokens(system_msg)
+        )
+        if _estimate_tokens(raw_full) <= single_budget:
+            return raw_full   # raw 가 예산 안 — excerpt 컷보다 충실하게 통째 사용
+
+        chunk_budget_chars = int(_MAP_INPUT_TOKENS * _CHARS_PER_TOKEN)
+        body = raw_full
+        for depth in range(3):
+            if _estimate_tokens(body) <= single_budget:
+                break
+            compressed, n_chunks = await self._map_compress_once(
+                provider, body, chunk_budget_chars,
+            )
+            if n_chunks <= 1 or compressed == body:
+                break   # 더 못 줄임 — 최종 _enforce_input_budget 가 truncate
+            body = compressed
+            logger.info(
+                "paper map 압축 depth=%d: %d청크 → %d자 (raw %d자, page=%s)",
+                depth + 1, n_chunks, len(body), len(raw_full), slug,
+            )
+        return body
 
     async def _koreanize_figure_captions(
         self, provider, figures: list[dict[str, Any]],  # noqa: ANN001
@@ -296,22 +459,35 @@ class WriterAgent(AgentBase):
         if use_paper:
             prompt = self._load_prompt("writer_paper")
             system_msg = prompt["system"]
+            max_tokens = _PAPER_OUTPUT_TOKENS
+            # ── 큰 논문 안정화 (2026-06-05) ──
+            # raw 가 단일 호출 예산을 넘으면 섹션별로 나눠 압축(map)해 reduce 입력을
+            # 항상 context(16384) 안으로 들인다. 작은 논문은 raw 통째 사용(빠름).
+            paper_body = await self._prepare_paper_body(
+                provider, session, wiki_context, system_msg, max_tokens,
+            )
             user_msg = _build_paper_user_message(
                 prompt["user_template"], wiki_context, figures_kr,
+                paper_body_override=paper_body,
+            )
+            # 최종 안전 가드 — figures/sources 까지 합쳐도 예산을 넘으면 body truncate.
+            user_msg = _enforce_input_budget(
+                prompt["user_template"], wiki_context, figures_kr,
+                system_msg, user_msg, paper_body, max_tokens,
             )
             prompt_version_label = f"paper-{self.agent_version}"
         else:
             prompt = self._load_prompt("writer")
             system_msg = prompt["system"]
+            max_tokens = _GENERAL_OUTPUT_TOKENS
             user_msg = _build_user_message(prompt["user_template"], wiki_context)
             prompt_version_label = self.agent_version
 
         # LLM 호출 — vLLM Gemma 4 26B-A4B (context 16384, KV fp8, 2026-05-30 Qwen 에서 교체).
         # max_tokens: 논문은 7168(원문 없이 이해될 만큼 충실하게 — 사용자 요구), 일반은 6144.
-        #   raw 발췌(~6000토큰) + system/sources(~2000) + output(7168) ≈ 15000 < 16384 안전.
+        #   큰 논문은 위 _prepare_paper_body 가 raw 를 map 압축해 input 을 예산 안으로 유지.
         # temperature 0.6 — 옛 0.1 은 너무 결정적이라 반복(degenerate) 위험. Gemma 권장
         #   1.0 과 위키 사실성(낮은 temp) 사이 절충. 필요 시 샘플 보고 조정.
-        max_tokens = 7168 if use_paper else 6144
 
         # ── 언어 안전장치 (2026-05-30) ──
         # Qwen2.5-7B 는 중국 모델이라 source 가 중국어/일본어면 본문도 그 언어로
@@ -636,7 +812,29 @@ def _figure_markdown(f: dict[str, Any]) -> str | None:
     return out
 
 
-_FIG_LABEL_RE = re.compile(r"\[FIG(\d+)\]")
+# [FIG2] 표준 + [FIG4a-c] / [FIG4h, 4i] / [FIG 5] 같은 LLM 변형도 매칭(숫자 1개 캡처 +
+# 뒤따르는 알파벳/콤마/공백/하이픈 흡수). 치환 못 한 placeholder 가 평문으로 남지 않게.
+_FIG_LABEL_RE = re.compile(r"\[FIG\s*(\d+)[a-zA-Z0-9,\s\-]*\]")
+
+# LLM 이 본문에 따로 쓴 '그림 N. ...' / 'Figure N: ...' 캡션형 **단독 줄**. 코드가 [FIGN]
+# 치환 시 *그림 N. 캡션* 을 자동 삽입하므로 이런 평문 캡션은 중복(2번 노출)된다.
+# 문장 중간 참조('그림 3에서 보듯 ~')는 숫자 뒤 [.:] 구분자가 없어 매칭 안 됨 → 보존.
+# 우리가 삽입하는 캡션은 '*' 로 시작하므로(^\s*그림 에 안 걸림) 영향 없음.
+_FIG_CAPTION_LINE_RE = re.compile(
+    r"^\s*(?:그림|사진|Figure|Fig\.?)\s*\d+\s*[.:]",
+)
+
+
+def _strip_llm_figure_captions(body: str) -> str:
+    """LLM 이 본문 서술로 쓴 'figure 캡션 평문 줄'을 제거 (figure 캡션 2번 노출 방지).
+
+    코드(_figure_markdown)가 [FIGN] 치환 시 한글 캡션을 *이탤릭* 으로 삽입하는데, LLM
+    이 같은 캡션을 평문으로 한 번 더 쓰면 중복된다. 캡션형 단독 줄만 골라 제거한다."""
+    kept = [
+        line for line in body.split("\n")
+        if not _FIG_CAPTION_LINE_RE.match(line)
+    ]
+    return "\n".join(kept)
 
 
 def _insert_inline_figures(body: str, figures_kr: list[dict[str, Any]]) -> str:
@@ -648,8 +846,15 @@ def _insert_inline_figures(body: str, figures_kr: list[dict[str, Any]]) -> str:
     - LLM 이 안 쓴(배치 안 한) 그림은 끝 '## 그림' 섹션에 보충해 손실 방지.
     figures 없으면 body 그대로.
     """
+    # figure 유무와 무관하게 LLM 이 따로 쓴 캡션 평문 줄 제거 (우리 *이탤릭* 캡션과 중복 방지)
+    body = _strip_llm_figure_captions(body)
+
     if not figures_kr:
-        return body
+        # 쓸 figure 가 없으면(예: pypdf 추출이라 caption 이 'page N' 쓰레기 → retriever 가
+        # 전부 제외) 본문에 남은 [FIGN] placeholder 를 제거한다. 안 그러면 '[FIG2]' 같은
+        # 평문이 위키에 그대로 노출된다. (진짜 그림은 PDF Docling 재처리 후 재합성으로 복구.)
+        body = _FIG_LABEL_RE.sub("", body)
+        return re.sub(r"\n{3,}", "\n\n", body).strip() + "\n"
 
     used: set[int] = set()
 
@@ -861,16 +1066,24 @@ def _figures_block(figures_kr: list[dict[str, Any]]) -> str:
 
 def _build_paper_user_message(
     template: str, wiki_context: dict[str, Any], figures_kr: list[dict[str, Any]],
+    paper_body_override: str | None = None,
 ) -> str:
     """writer_paper_v1.yaml 의 user_template 채우기 (재설계 element B/G).
 
     핵심은 primary 논문의 raw markdown 발췌(<paper_body>) — summary 가 아닌 실제 본문.
     <figures> 에 [FIGN] 라벨+한글캡션을 줘 LLM 이 본문 맥락 속에 그림을 배치하게 한다.
     나머지 source 는 보조 맥락으로 짧은 listing 만 (token 예산 보호 — Gemma 16384).
+
+    paper_body_override: 큰 논문일 때 writer 가 map 압축한 노트(또는 raw 통째)를 넘김.
+    None 이면 retriever 가 준 짧은 excerpt 사용(하위 호환).
     """
     pr = wiki_context.get("primary_raw") or {}
     all_sources = wiki_context["sources"]
     primary_item_id = pr.get("item_id")
+    body_text = (
+        paper_body_override if paper_body_override is not None
+        else (pr.get("excerpt") or "")
+    )
 
     # 보조 source listing (primary 제외, 상위 몇 개 제목·요약만)
     other_lines: list[str] = []
@@ -896,9 +1109,37 @@ def _build_paper_user_message(
         paper_title=pr.get("title") or wiki_context["page"].get("title") or "(제목 미상)",
         paper_source_type=pr.get("source_type") or "paper",
         paper_url=pr.get("source_url") or "(no url)",
-        paper_body=pr.get("excerpt") or "(본문 발췌 없음)",
+        paper_body=body_text or "(본문 발췌 없음)",
         figures_block=_figures_block(figures_kr),
         source_count=len(all_sources),
         sources_block=sources_block,
         user_notes_block=user_notes,
+    )
+
+
+def _enforce_input_budget(
+    template: str, wiki_context: dict[str, Any], figures_kr: list[dict[str, Any]],
+    system_msg: str, user_msg: str, paper_body: str, output_tokens: int,
+) -> str:
+    """최종 안전 가드 — system+user 추정 토큰이 context 예산을 넘으면 paper_body 를
+    잘라 user_msg 를 재조립한다. map 압축으로도 안 줄어든 극단적 논문(수백 페이지)의
+    최후 방어. 정상 경로(map 압축이 예산 안)는 그대로 통과(추가 비용 0)."""
+    budget = _MODEL_CONTEXT_TOKENS - output_tokens - _PROMPT_SAFETY_MARGIN
+    if _estimate_tokens(system_msg) + _estimate_tokens(user_msg) <= budget:
+        return user_msg
+    # user_msg 에서 paper_body 외 고정부 토큰 = 전체 - body
+    fixed_tokens = _estimate_tokens(user_msg) - _estimate_tokens(paper_body)
+    allowed_body_tokens = max(
+        500, budget - _estimate_tokens(system_msg) - fixed_tokens,
+    )
+    allowed_chars = int(allowed_body_tokens * _CHARS_PER_TOKEN)
+    truncated = (
+        paper_body[:allowed_chars].rstrip() + "\n\n[... 길이 제한으로 이하 생략 ...]"
+    )
+    logger.warning(
+        "paper input 예산 초과 — paper_body %d→%d자 truncate (page=%s)",
+        len(paper_body), len(truncated), (wiki_context.get("page") or {}).get("slug", "?"),
+    )
+    return _build_paper_user_message(
+        template, wiki_context, figures_kr, paper_body_override=truncated,
     )

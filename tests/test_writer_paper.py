@@ -248,6 +248,9 @@ def test_insert_inline_figures_appends_unused_at_end():
     assert "/files/h2" in out
 
 
-def test_insert_inline_figures_no_figures_noop():
-    body = "## 방법\n\n본문"
-    assert _insert_inline_figures(body, []) == body
+def test_insert_inline_figures_no_figures_strips_placeholders():
+    # figure 가 없으면 본문은 보존하되 [FIGN] placeholder 는 제거(평문 노출 방지, 2026-06-05).
+    body = "## 방법\n\n본문 [FIG1] 추가 [FIG2a-c] 끝"
+    out = _insert_inline_figures(body, [])
+    assert "[FIG" not in out
+    assert "## 방법" in out and "본문" in out and "끝" in out
