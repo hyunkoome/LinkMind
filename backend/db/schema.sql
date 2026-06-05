@@ -603,9 +603,12 @@ CREATE TABLE IF NOT EXISTS collection_keywords (
     enabled    BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    group_label TEXT,                               -- 대표 키워드(계층 그룹). NULL=미분류
     UNIQUE (space_id, keyword)                      -- space 내 키워드 중복 방지
 );
 CREATE INDEX IF NOT EXISTS idx_collection_keywords_space ON collection_keywords(space_id);
+-- 기존 DB 에도 컬럼 추가 (멱등)
+ALTER TABLE collection_keywords ADD COLUMN IF NOT EXISTS group_label TEXT;
 
 -- ============================================================================
 -- arxiv_papers : 전체 arXiv 메타데이터 로컬 캐시 (2026-06-05, rate limit 근본 해결).
@@ -636,3 +639,15 @@ CREATE TABLE IF NOT EXISTS arxiv_papers (
 CREATE INDEX IF NOT EXISTS idx_arxiv_papers_fts        ON arxiv_papers USING GIN (fts_vector);
 CREATE INDEX IF NOT EXISTS idx_arxiv_papers_categories ON arxiv_papers USING GIN (categories);
 CREATE INDEX IF NOT EXISTS idx_arxiv_papers_published  ON arxiv_papers (published DESC);
+
+-- ============================================================================
+-- user_ui_prefs : 유저별 UI 설정 키-값 (2026-06-05). 패널 폭 등 페이지별 레이아웃을
+-- DB 에 저장해 다른 기기/재방문에도 유지. pref_key 에 페이지 prefix(예: 'arxiv:leftW').
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS user_ui_prefs (
+    user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    pref_key   TEXT NOT NULL,
+    pref_value TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, pref_key)
+);

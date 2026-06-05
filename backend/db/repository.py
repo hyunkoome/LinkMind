@@ -1592,12 +1592,12 @@ async def list_collection_keywords(
     """space 의 수집 키워드 종합 목록 (등록자 display_name 포함)."""
     res = await session.execute(
         text("""
-            SELECT ck.id, ck.keyword, ck.enabled, ck.user_id,
+            SELECT ck.id, ck.keyword, ck.enabled, ck.group_label, ck.user_id,
                    u.display_name, u.email, ck.created_at, ck.updated_at
             FROM collection_keywords ck
             LEFT JOIN users u ON u.id = ck.user_id
             WHERE ck.space_id = :s
-            ORDER BY ck.created_at ASC
+            ORDER BY ck.group_label NULLS LAST, ck.created_at ASC
         """),
         {"s": space_id},
     )
@@ -1606,20 +1606,52 @@ async def list_collection_keywords(
 
 async def add_collection_keyword(
     session: AsyncSession, *, space_id: UUID, user_id: UUID, keyword: str,
+    group_label: str | None = None,
 ) -> dict[str, Any] | None:
-    """키워드 등록. 같은 space 에 동일 keyword 있으면 무시(ON CONFLICT). 새로 만든
-    row 를 반환, 이미 있으면 None."""
+    """키워드 등록(그룹 지정 가능). 같은 space 에 동일 keyword 있으면 group_label 만
+    갱신(이미 있는 키워드를 그룹에 넣기). 새로/갱신된 row 반환."""
     res = await session.execute(
         text("""
-            INSERT INTO collection_keywords (space_id, user_id, keyword)
-            VALUES (:s, :u, :k)
-            ON CONFLICT (space_id, keyword) DO NOTHING
-            RETURNING id, keyword, enabled, user_id, created_at, updated_at
+            INSERT INTO collection_keywords (space_id, user_id, keyword, group_label)
+            VALUES (:s, :u, :k, :g)
+            ON CONFLICT (space_id, keyword) DO UPDATE
+                SET group_label = COALESCE(EXCLUDED.group_label, collection_keywords.group_label),
+                    updated_at = now()
+            RETURNING id, keyword, enabled, group_label, user_id, created_at, updated_at
         """),
-        {"s": space_id, "u": user_id, "k": keyword},
+        {"s": space_id, "u": user_id, "k": keyword, "g": group_label},
     )
     row = res.mappings().first()
     return dict(row) if row else None
+
+
+async def rename_keyword_group(
+    session: AsyncSession, *, space_id: UUID, old_label: str, new_label: str,
+) -> int:
+    """대표 키워드(그룹) 이름 변경 — 그 그룹 모든 키워드의 group_label 갱신. 갱신 건수."""
+    res = await session.execute(
+        text("""
+            UPDATE collection_keywords SET group_label = :new, updated_at = now()
+            WHERE space_id = :s AND group_label = :old
+        """),
+        {"s": space_id, "old": old_label, "new": new_label},
+    )
+    return res.rowcount or 0
+
+
+async def clear_keyword_group(
+    session: AsyncSession, *, space_id: UUID, label: str,
+) -> int:
+    """대표 키워드(그룹) 삭제 — 그 그룹 키워드들을 미분류(group_label=NULL)로. 키워드
+    자체는 보존. 갱신 건수."""
+    res = await session.execute(
+        text("""
+            UPDATE collection_keywords SET group_label = NULL, updated_at = now()
+            WHERE space_id = :s AND group_label = :label
+        """),
+        {"s": space_id, "label": label},
+    )
+    return res.rowcount or 0
 
 
 async def delete_collection_keyword(
@@ -1693,6 +1725,108 @@ async def count_arxiv_papers(session: AsyncSession) -> int:
     return int(res.scalar() or 0)
 
 
+async def arxiv_category_counts(session: AsyncSession) -> list[dict[str, Any]]:
+    """arxiv_papers 의 카테고리 **대분류(archive)별** 논문 수. 사용자가 검색 범위를
+    고르도록 (예: cs 60만, eess 5만, math 30만 …). split_part 로 'cs.CV'→'cs'."""
+    res = await session.execute(text("""
+        SELECT split_part(cat, '.', 1) AS major, count(*) AS n
+        FROM arxiv_papers, unnest(categories) AS cat
+        GROUP BY major
+        ORDER BY n DESC
+    """))
+    return [{"major": m, "count": int(n)} for m, n in res.all()]
+
+
+# ── user_ui_prefs — 유저별 UI 설정(패널 폭 등) ──────────────────────────
+
+async def get_user_ui_prefs(
+    session: AsyncSession, *, user_id: UUID,
+) -> dict[str, str]:
+    res = await session.execute(
+        text("SELECT pref_key, pref_value FROM user_ui_prefs WHERE user_id = :u"),
+        {"u": user_id},
+    )
+    return {k: v for k, v in res.all()}
+
+
+async def set_user_ui_pref(
+    session: AsyncSession, *, user_id: UUID, key: str, value: str,
+) -> None:
+    await session.execute(
+        text("""
+            INSERT INTO user_ui_prefs (user_id, pref_key, pref_value)
+            VALUES (:u, :k, :v)
+            ON CONFLICT (user_id, pref_key) DO UPDATE
+                SET pref_value = EXCLUDED.pref_value, updated_at = now()
+        """),
+        {"u": user_id, "k": key, "v": value},
+    )
+
+
+async def find_collected_arxiv(
+    session: AsyncSession, arxiv_ids: list[str],
+) -> dict[str, str]:
+    """arxiv_id(base) → item_id 매핑 (이미 수집된 arxiv 자료). 피드에서 '수집됨/수집'
+    구분용. items.source_url 의 arxiv id 를 parse 해 base 로 정규화 후 매칭."""
+    if not arxiv_ids:
+        return {}
+    from backend.ingest.arxiv import parse_arxiv_id
+
+    wanted = set(arxiv_ids)
+    rows = (await session.execute(text(
+        "SELECT id, source_url FROM items WHERE source_url LIKE '%arxiv.org/%'"
+    ))).all()
+    out: dict[str, str] = {}
+    for iid, url in rows:
+        aid = parse_arxiv_id(url or "")
+        if not aid:
+            continue
+        base = aid.split("v")[0]   # 버전 strip → arxiv_papers base id 와 동일 형식
+        if base in wanted and base not in out:
+            out[base] = str(iid)
+    return out
+
+
+async def all_collected_arxiv_ids(session: AsyncSession) -> list[str]:
+    """이미 수집된(items 에 존재하는) arxiv 자료의 base id 전체. 위키 유/무 필터용 —
+    arxiv_papers 검색을 '수집됨(has wiki)' / '미수집(none)' 으로 나눌 때 SQL 파라미터로 넘김."""
+    from backend.ingest.arxiv import parse_arxiv_id
+
+    rows = (await session.execute(text(
+        "SELECT source_url FROM items WHERE source_url LIKE '%arxiv.org/%'"
+    ))).all()
+    out: set[str] = set()
+    for (url,) in rows:
+        aid = parse_arxiv_id(url or "")
+        if aid:
+            out.add(aid.split("v")[0])   # 버전 strip → arxiv_papers base id 형식
+    return list(out)
+
+
+async def wiki_status_by_items(
+    session: AsyncSession, item_ids: list[str],
+) -> dict[str, str]:
+    """item_id → 위키 body_status (completed/pending/issues). admin/arxiv 중간 패널의
+    '수집 → 생성 중 → 위키' 3-state 버튼용. item 이 여러 위키에 연결됐으면 가장 진행된
+    상태 우선(completed > pending > issues)."""
+    if not item_ids:
+        return {}
+    rows = (await session.execute(text("""
+        SELECT wpi.item_id, wp.body_status
+        FROM wiki_page_items wpi
+        JOIN wiki_pages wp ON wp.id = wpi.wiki_page_id
+        WHERE wpi.item_id = ANY(:ids)
+          AND (wpi.user_action IS NULL OR wpi.user_action != 'removed')
+    """), {"ids": item_ids})).all()
+    rank = {"completed": 3, "pending": 2, "issues": 1}
+    out: dict[str, str] = {}
+    for iid, status in rows:
+        key = str(iid)
+        if key not in out or rank.get(status, 0) > rank.get(out[key], 0):
+            out[key] = status
+    return out
+
+
 async def search_arxiv_papers(
     session: AsyncSession,
     *,
@@ -1700,23 +1834,40 @@ async def search_arxiv_papers(
     date_from: datetime | None = None,
     date_to: datetime | None = None,
     categories: list[str] | None = None,
+    category_prefixes: list[str] | None = None,
+    refine: str | None = None,
+    wiki_mode: str = "all",            # all | has(수집됨) | none(미수집)
+    collected_ids: list[str] | None = None,
     limit: int = 50,
-) -> list[dict[str, Any]]:
-    """등록 키워드로 로컬 arxiv_papers FTS 검색 (rate limit 0).
+    offset: int = 0,
+) -> tuple[list[dict[str, Any]], int]:
+    """등록 키워드로 로컬 arxiv_papers FTS 검색 (rate limit 0). **(papers, total) 반환**.
 
     **키워드마다 개별 websearch_to_tsquery 서브쿼리 → UNION ALL → arxiv_id 로 dedup**
-    (사용자 설계: 키워드별 검색 후 합집합). websearch_to_tsquery 가 다단어를 토큰 AND
-    로 처리하므로 'Learned Point Cloud Compression' = 그 단어 모두 포함 논문. published
-    DESC(최신 우선). 날짜/카테고리는 SQL WHERE(인덱스 활용).
+    (사용자 설계: 키워드별 검색 후 합집합). 관련도(rank) 우선 정렬. total 은 전체 매칭
+    수(count(*) OVER) — 서버 페이지네이션(offset/limit)용.
     """
     kws = [k.strip() for k in keywords if k and k.strip()]
     if not kws:
-        return []
+        return [], 0
+    # category_prefixes = 대분류 리스트(['cs','eess','stat']). split_part 로 정확 매칭
+    # (LIKE 'math%' 가 'math-ph' 까지 잡는 문제 방지). 빈 = 전체.
+    cat_majors = list(category_prefixes) if category_prefixes else None
+    # refine = 결과 내 검색(세분화). 콤마/공백 구분 → 모든 단어 포함(AND). 빈 = 무시.
+    refine_q = " ".join(t.strip() for t in (refine or "").replace(",", " ").split() if t.strip())
+    # 위키 유/무 필터 — 'has' 면 수집된 id 만, 'none' 이면 미수집만, 'all' 이면 무시.
+    # 빈 배열이면 = ANY('{}') → false(has 결과 없음), NOT(...) → true(none 전부). 의미 일치.
+    wmode = wiki_mode if wiki_mode in ("has", "none") else "all"
     params: dict[str, Any] = {
         "lim": limit,
+        "off": offset,
         "cats": categories or None,
+        "cat_majors": cat_majors,
+        "refine": refine_q or None,
         "date_from": date_from,
         "date_to": date_to,
+        "wmode": wmode,
+        "collected": list(collected_ids or []),
     }
     subs = []
     for i, kw in enumerate(kws):
@@ -1727,17 +1878,31 @@ async def search_arxiv_papers(
             FROM arxiv_papers
             WHERE fts_vector @@ websearch_to_tsquery('simple', :q{i})
               AND (CAST(:cats AS TEXT[]) IS NULL OR categories && CAST(:cats AS TEXT[]))
+              AND (CAST(:cat_majors AS TEXT[]) IS NULL OR EXISTS (
+                    SELECT 1 FROM unnest(categories) cc
+                    WHERE split_part(cc, '.', 1) = ANY(CAST(:cat_majors AS TEXT[]))))
+              AND (CAST(:refine AS TEXT) IS NULL OR
+                   fts_vector @@ websearch_to_tsquery('simple', CAST(:refine AS TEXT)))
+              AND (CAST(:wmode AS TEXT) = 'all'
+                   OR (CAST(:wmode AS TEXT) = 'has'  AND arxiv_id = ANY(CAST(:collected AS TEXT[])))
+                   OR (CAST(:wmode AS TEXT) = 'none' AND NOT (arxiv_id = ANY(CAST(:collected AS TEXT[])))))
               AND (CAST(:date_from AS TIMESTAMPTZ) IS NULL OR published >= CAST(:date_from AS TIMESTAMPTZ))
               AND (CAST(:date_to   AS TIMESTAMPTZ) IS NULL OR published <= CAST(:date_to   AS TIMESTAMPTZ))
         """)
     union_sql = " UNION ALL ".join(subs)
+    # 정렬: 관련도(ts_rank) 우선 → 흔한 단어 1개만 걸린 노이즈(예: 'compression' 만 든
+    # 물리 논문)는 rank 가 낮아 밀린다. 동률이면 최신순. (이전 published 우선은 매칭이
+    # 적을 때 옛 노이즈가 상위로 올라오는 문제가 있었음.)
+    # count(*) OVER() = dedup(GROUP BY) 후 전체 매칭 수(LIMIT 전) — 페이지네이션 total.
     sql = text(f"""
         SELECT arxiv_id, title, abstract, authors, categories, published, version,
-               max(rank) AS rank
+               max(rank) AS rank, count(*) OVER() AS total_count
         FROM ( {union_sql} ) u
         GROUP BY arxiv_id, title, abstract, authors, categories, published, version
-        ORDER BY published DESC NULLS LAST, rank DESC
-        LIMIT :lim
+        ORDER BY max(rank) DESC, published DESC NULLS LAST
+        LIMIT :lim OFFSET :off
     """)
     rows = (await session.execute(sql, params)).mappings().all()
-    return [dict(r) for r in rows]
+    total = int(rows[0]["total_count"]) if rows else 0
+    papers = [{k: v for k, v in dict(r).items() if k != "total_count"} for r in rows]
+    return papers, total

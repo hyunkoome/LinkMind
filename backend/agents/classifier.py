@@ -12,7 +12,9 @@ ClassifierAgent — item 1개를 여러 wiki 페이지에 자동 분류 (M:N).
   - DB mutation:
     * matched (confidence ≥ threshold) → wiki_page_items INSERT (ON CONFLICT 시 UPDATE)
     * new_pages → wiki_pages INSERT + wiki_page_items 즉시 link (confidence=1.0)
-    * 매칭된 모든 wiki_pages.body_status = 'pending' (eager 합성 trigger)
+    * body_status='pending'(합성 trigger)은 **이 자료가 만든/소유한 위키만** —
+      new_pages(신규) + self/identity + figure. matched(기존 cross-link)는 link 만 하고
+      재합성 안 함 (2026-06-05: 1건 ingest 가 연관 기존 위키 다발을 재합성하던 문제 차단).
 
 state-centric — agent 내부 상태 X. 매 호출이 fresh.
 
@@ -265,6 +267,12 @@ class ClassifierAgent(AgentBase):
 
         # ──────── DB mutation ────────
         linked_page_ids: list[str] = []
+        # 재합성(stale=pending) 대상 — **이 자료가 만든/소유한 위키만**. 신규 생성(new_pages)
+        # + 자기 self/identity(topics_to_wiki) + figure. matched(기존 개념·타 위키에 의미적
+        # cross-link)는 link 만 하고 재합성 안 함. (2026-06-05 사용자 지시: "만들라고 한 것만
+        # 위키 생성, 연관되는 것까지 합성 금지". 논문 1건 ingest 가 연관 기존 위키 다발을
+        # 재합성하던 문제 — MM3DGS 1건이 6개 위키 pending 화 — 차단.)
+        pages_to_synthesize: list[str] = []
         skipped_low_conf: list[dict[str, Any]] = []
 
         # 1) matched (기존 페이지) — threshold 이상만 link
@@ -318,6 +326,7 @@ class ClassifierAgent(AgentBase):
                 "role": "primary",
             })
             linked_page_ids.append(new_pid)
+            pages_to_synthesize.append(new_pid)   # 신규 생성 위키 — 합성 대상
             created_pages.append({"id": new_pid, "slug": new_slug, "title": title})
             # new_pages 는 LLM 이 제안한 개념(kebab) wiki — 이 item 의 정체성 home.
             # self_wiki 가 별도로 또 생기지 않도록 표시 (중복 예방).
@@ -381,6 +390,7 @@ class ClassifierAgent(AgentBase):
                     })
                     if fig_pid not in linked_page_ids:
                         linked_page_ids.append(fig_pid)
+                    pages_to_synthesize.append(fig_pid)   # figure 추가 → 본문 재합성
                     photo_figure_linked = True
 
         self_wiki_created = False
@@ -419,12 +429,15 @@ class ClassifierAgent(AgentBase):
                     "role": role,
                 })
                 linked_page_ids.append(pid)
+            pages_to_synthesize.append(pid)   # 자기 self/identity 위키 — 합성 대상
             if is_self_fallback:
                 self_wiki_created = True
 
-        # 4) 매칭된 모든 wiki_pages.body_status = 'pending' (eager 합성 trigger)
-        if linked_page_ids:
-            await session.execute(_MARK_STALE_SQL, {"page_ids": linked_page_ids})
+        # 4) **이 자료가 만든/소유한 위키만** body_status='pending' (eager 합성 trigger).
+        # matched(기존 cross-link)는 제외 — 연관 기존 위키를 재합성하지 않는다.
+        synth = list(dict.fromkeys(pages_to_synthesize))   # 순서 유지 dedup
+        if synth:
+            await session.execute(_MARK_STALE_SQL, {"page_ids": synth})
 
         output_meta = {
             "matched_count": len(matched),

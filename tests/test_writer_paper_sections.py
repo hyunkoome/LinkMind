@@ -12,9 +12,13 @@ from backend.agents import writer as w
 # ── _estimate_tokens ──────────────────────────────────────────────────
 
 def test_estimate_tokens_conservative():
-    # char/2.5 보수적 추정 — 0 입력은 0, 비례 증가
+    # char/_CHARS_PER_TOKEN 보수적 추정 — 0 입력은 0, 비례 증가.
+    # 비율은 실측 기반으로 조정될 수 있어 상수를 직접 참조(하드코딩 회피).
     assert w._estimate_tokens("") == 0
-    assert w._estimate_tokens("a" * 2500) == 1001  # 2500/2.5 + 1
+    n = 2500
+    assert w._estimate_tokens("a" * n) == int(n / w._CHARS_PER_TOKEN) + 1
+    # 토큰 과대추정(안전쪽) — markdown 효율 편차로 input 이 예산을 넘지 않도록.
+    assert w._CHARS_PER_TOKEN <= 2.0
 
 
 # ── _split_markdown_sections ──────────────────────────────────────────
@@ -105,6 +109,30 @@ def test_enforce_budget_truncates_when_over():
     # 결과가 실제로 예산 안에 들어옴
     budget = w._MODEL_CONTEXT_TOKENS - 7168 - w._PROMPT_SAFETY_MARGIN
     assert w._estimate_tokens("sys") + w._estimate_tokens(out) <= budget + 50
+
+
+# ── _clamp_output_tokens (output 동적 클램프) ─────────────────────────
+
+def test_clamp_output_passthrough_when_input_small():
+    # input 이 작으면 요청한 output 그대로 (축소 안 함)
+    out = w._clamp_output_tokens("sys", "짧은 입력", 6144)
+    assert out == 6144
+
+
+def test_clamp_output_shrinks_when_input_large():
+    # input 이 context 안이지만 output 을 압박하는 크기 → output 축소되되
+    # input+output+margin ≤ context 보장. (16000자 ≈ 1만 토큰)
+    big = "가" * 16000
+    out = w._clamp_output_tokens("sys", big, 6144)
+    assert out < 6144
+    est_in = w._estimate_tokens("sys") + w._estimate_tokens(big)
+    assert est_in + out + w._PROMPT_SAFETY_MARGIN <= w._MODEL_CONTEXT_TOKENS
+
+
+def test_clamp_output_never_below_floor():
+    # input 이 context 를 거의 채워도 최소 1024 는 보장 (빈 본문 방지)
+    huge = "가" * 500000
+    assert w._clamp_output_tokens("sys", huge, 6144) == 1024
 
 
 # ── figure 캡션 중복 제거 ─────────────────────────────────────────────

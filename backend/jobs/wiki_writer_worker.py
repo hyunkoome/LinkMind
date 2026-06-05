@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from uuid import UUID
 
@@ -40,9 +41,10 @@ logger = logging.getLogger("linkmind.wiki_writer_worker")
 
 
 # 처리 간격
-_CONCURRENCY = 4               # 2026-05-27: daemon = batch (concurrency 4). 사용자
-                               # 통일 요청 — daemon sequential vs batch concurrency
-                               # 분리 의미 X. vLLM continuous batching 활용 ~4배 빠름.
+# 동시 합성 수 — 큰 논문(16k context)을 RTX 4090 단일 vLLM 에 너무 많이 동시에 보내면
+# KV cache 압박으로 preemption(재계산)·불안정. 기본 2 로 낮춤(2026-06-05 사용자 결정,
+# VRAM 97% 상황). env LINKMIND_WIKI_WRITER_CONCURRENCY 로 조절. backfill 도 같은 env 참조.
+_CONCURRENCY = int(os.getenv("LINKMIND_WIKI_WRITER_CONCURRENCY", "2") or "2")
 _INTER_BATCH_SLEEP_S = 0.5     # 4 page batch 처리 후 짧은 sleep
 _IDLE_SLEEP_S = 30.0           # 처리할 page 없을 때 polling 간격
 _FAIL_BACKOFF_S = 300.0        # 실패한 page 의 재시도 backoff (5분)

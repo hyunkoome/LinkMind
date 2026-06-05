@@ -86,13 +86,22 @@ _TRANSLATE_SYSTEM = (
 # 노트로 위키를 합성(reduce). 원본을 잘라 버리지 않으므로 뒷부분 손실 없음.
 # (raw-first §2 — 발췌 truncate 는 정보 손실, map 압축은 전 구간 반영.)
 _MODEL_CONTEXT_TOKENS = 16384      # vLLM max_model_len (app_settings 와 일치 유지)
-_PAPER_OUTPUT_TOKENS = 7168        # 논문 reduce 출력 (충실도 — 사용자 요구)
+# 논문 reduce 출력. 6144 = 한글 ~4000자로 충분히 충실하면서, input(map 압축본 +
+# overhead)과 합쳐 16384 안에 여유 있게 들어와 output 이 max_tokens 에 막혀 본문이
+# 중간에 끊기는 일(짤림)을 방지한다. (7168 은 input 여유를 좁혀 경계에서 끊김 위험.)
+_PAPER_OUTPUT_TOKENS = 6144
 _GENERAL_OUTPUT_TOKENS = 6144      # 개념형 출력
-_PROMPT_SAFETY_MARGIN = 1024       # 라벨/figures/sources/추정오차 흡수
-# 보수적 char→token 비율. markdown 표·수식·특수문자는 토큰 효율이 낮아(토큰이 많아)
-# 영어 평균(~4)보다 작게 잡아 *토큰을 과대추정* → 항상 안전쪽으로 자른다. 실측
-# (MCGS-SLAM: ~20000자 발췌가 ~7000토큰 ≈ 2.85)보다 더 보수적인 2.5.
-_CHARS_PER_TOKEN = 2.5
+_PROMPT_SAFETY_MARGIN = 1024       # 추정오차 흡수
+# reduce 단계 user_msg 의 paper_body 외 고정부(prompt template + inline figures markdown
+# + sources 목록) 예약. 이걸 빼고 paper_body 예산을 잡아야 map 압축이 전체 입력을
+# 예산 안으로 들여보내 _enforce truncate(본문 짤림)가 안 일어난다 → 고품질·무손실.
+_PAPER_FIXED_OVERHEAD_RESERVE = 2048
+# 보수적 char→token 비율. markdown 표·수식·특수문자가 많은 논문 raw 는 토큰 효율이
+# 매우 낮다 — 실측(arxiv__2411.06390: 15437자가 9217토큰 ≈ 1.67)에서 2.5 는 토큰을
+# *과소추정*해 truncate 가 불충분 → input 이 16384 를 넘어 합성이 영구 실패했다.
+# 실측보다 더 보수적인 1.6 으로 낮춰(= 토큰 과대추정) 항상 안전쪽으로 자른다.
+# (추정만으론 경계에서 또 터질 수 있어 LLM 호출 직전 output 동적 클램프로 이중 방어.)
+_CHARS_PER_TOKEN = 1.6
 # map 단계 — 한 청크에 넣을 raw 입력 토큰 예산 (출력 압축 노트 + 여유 포함해 16384 안).
 _MAP_INPUT_TOKENS = 8000
 _MAP_OUTPUT_TOKENS = 3072
@@ -103,6 +112,17 @@ def _estimate_tokens(textval: str) -> int:
     if not textval:
         return 0
     return int(len(textval) / _CHARS_PER_TOKEN) + 1
+
+
+def _clamp_output_tokens(system_msg: str, user_msg: str, requested: int) -> int:
+    """LLM 호출 직전 output max_tokens 동적 클램프 — 추정 input + output 이 context
+    (16384)를 절대 넘지 않게 한다. input 이 크면 output 을 줄이되 최소 1024 보장
+    (빈 본문 방지). 토큰 추정이 빗나가도 BadRequestError(400)를 원천 차단."""
+    est_input = _estimate_tokens(system_msg) + _estimate_tokens(user_msg)
+    return max(
+        1024,
+        min(requested, _MODEL_CONTEXT_TOKENS - est_input - _PROMPT_SAFETY_MARGIN),
+    )
 
 
 _HEADER_RE = re.compile(r"^#{1,6}\s+\S")
@@ -314,17 +334,22 @@ class WriterAgent(AgentBase):
         if not raw_full:
             return excerpt
 
-        # 단일 호출 입력 예산 (output + system + figures/sources margin 제외)
+        # 단일 호출 입력 예산 (output + system + margin + user 고정부 overhead 제외).
+        # 고정부(template/figures/sources)까지 빼야 paper_body 가 그만큼 더 압축되어
+        # 전체 input 이 예산 안 → _enforce truncate(짤림) 없이 고품질 합성.
         single_budget = (
             _MODEL_CONTEXT_TOKENS - output_tokens - _PROMPT_SAFETY_MARGIN
-            - _estimate_tokens(system_msg)
+            - _estimate_tokens(system_msg) - _PAPER_FIXED_OVERHEAD_RESERVE
         )
         if _estimate_tokens(raw_full) <= single_budget:
             return raw_full   # raw 가 예산 안 — excerpt 컷보다 충실하게 통째 사용
 
-        chunk_budget_chars = int(_MAP_INPUT_TOKENS * _CHARS_PER_TOKEN)
+        # 청크 예산을 single_budget 보다 작게 잡아, body 가 예산을 넘으면 항상 2+ 청크로
+        # 쪼개져 실제로 더 압축되게 한다 (단일 청크 break 로 truncate 가는 것 방지).
+        chunk_budget_tokens = max(2000, min(_MAP_INPUT_TOKENS, int(single_budget * 0.9)))
+        chunk_budget_chars = int(chunk_budget_tokens * _CHARS_PER_TOKEN)
         body = raw_full
-        for depth in range(3):
+        for depth in range(5):   # 큰 논문도 예산까지 줄도록 여유 (각 depth = map 1회)
             if _estimate_tokens(body) <= single_budget:
                 break
             compressed, n_chunks = await self._map_compress_once(
@@ -500,14 +525,19 @@ class WriterAgent(AgentBase):
         llm_resp = None
         extra_warning = ""
         for attempt in range(1 + _MAX_LANG_RETRIES):
+            # output 동적 클램프 — 실제 input 추정으로 max_tokens 를 줄여 input+output 이
+            # 절대 context(16384)를 넘지 않게 한다(BadRequestError 400 원천 차단). 정상
+            # 경로는 map 압축으로 input 이 충분히 작아 max_tokens 그대로 통과(짤림 없음).
+            full_user = user_msg + extra_warning
+            effective_max = _clamp_output_tokens(system_msg, full_user, max_tokens)
             llm_resp = await provider.chat(
                 messages=[
                     ChatMessage(role="system", content=system_msg),
-                    ChatMessage(role="user", content=user_msg + extra_warning),
+                    ChatMessage(role="user", content=full_user),
                 ],
                 model=self.llm_model,
                 temperature=0.6,
-                max_tokens=max_tokens,
+                max_tokens=effective_max,
             )
             raw_body = llm_resp.text.strip()
             body_model = f"{llm_resp.provider}/{llm_resp.model}"

@@ -56,14 +56,18 @@ def test_all_routes_gated_by_space_admin():
 async def test_search_preview_keywords_local_fts_union(monkeypatch):
     captured = {}
 
-    async def _search(session, *, keywords, date_from, date_to, categories, limit):
+    async def _search(session, *, keywords, limit, offset=0, date_from=None, date_to=None, categories=None, category_prefixes=None, refine=None, wiki_mode="all", collected_ids=None):
         captured["keywords"] = keywords
-        return [{
+        return ([{
             "arxiv_id": "2106.09685", "title": "LoRA", "abstract": "x",
             "authors": ["A B"], "categories": ["cs.CL"], "published": None, "version": "v1",
-        }]
+        }], 1)
+
+    async def _collected(session, arxiv_ids):
+        return {}
 
     monkeypatch.setattr(admin_arxiv.repository, "search_arxiv_papers", _search)
+    monkeypatch.setattr(admin_arxiv.repository, "find_collected_arxiv", _collected)
     req = ArxivSearchRequest(keywords=["gaussian splatting", "SLAM"], max_results=10)
     out = await admin_arxiv.search_arxiv_preview(req, _admin=_admin(), session=_session())
 
@@ -71,7 +75,40 @@ async def test_search_preview_keywords_local_fts_union(monkeypatch):
     assert out["papers"][0]["arxiv_id"] == "2106.09685"
     # 로컬 arxiv_papers FTS union — pdf_url 합성
     assert out["papers"][0]["pdf_url"] == "https://arxiv.org/pdf/2106.09685"
+    assert out["papers"][0]["collected"] is False
     assert captured["keywords"] == ["gaussian splatting", "SLAM"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wiki_filter,expect_mode,expect_collected_called", [
+    ("all", "all", False),    # 기본 — 수집 목록 조회 안 함
+    ("has", "has", True),     # 위키 유 — 수집 id 로 필터
+    ("none", "none", True),   # 위키 무
+])
+async def test_search_preview_wiki_filter(monkeypatch, wiki_filter, expect_mode, expect_collected_called):
+    """wiki_filter 가 search_arxiv_papers 에 wiki_mode/collected_ids 로 전달되고,
+    'all' 이 아닐 때만 all_collected_arxiv_ids 를 조회하는지(불필요한 스캔 회피) 검증."""
+    captured: dict = {}
+    collected_called = {"n": 0}
+
+    async def _search(session, *, keywords, limit, offset=0, date_from=None, date_to=None, categories=None, category_prefixes=None, refine=None, wiki_mode="all", collected_ids=None):
+        captured["wiki_mode"] = wiki_mode
+        captured["collected_ids"] = collected_ids
+        return ([], 0)
+
+    async def _collected_all(session):
+        collected_called["n"] += 1
+        return ["2106.09685"]
+
+    monkeypatch.setattr(admin_arxiv.repository, "search_arxiv_papers", _search)
+    monkeypatch.setattr(admin_arxiv.repository, "all_collected_arxiv_ids", _collected_all)
+    req = ArxivSearchRequest(keywords=["lora"], wiki_filter=wiki_filter)
+    await admin_arxiv.search_arxiv_preview(req, _admin=_admin(), session=_session())
+
+    assert captured["wiki_mode"] == expect_mode
+    assert (collected_called["n"] > 0) is expect_collected_called
+    if expect_collected_called:
+        assert captured["collected_ids"] == ["2106.09685"]
 
 
 @pytest.mark.asyncio
@@ -79,7 +116,47 @@ async def test_search_preview_empty_returns_nothing():
     out = await admin_arxiv.search_arxiv_preview(
         ArxivSearchRequest(), _admin=_admin(), session=_session(),
     )
-    assert out == {"papers": [], "count": 0}
+    assert out == {"papers": [], "count": 0, "total": 0}
+
+
+@pytest.mark.asyncio
+async def test_feed_enabled_keywords_and_collected_flag(monkeypatch):
+    async def _list(session, *, space_id):
+        return [
+            {"keyword": "gaussian", "enabled": True},
+            {"keyword": "disabled-kw", "enabled": False},
+        ]
+
+    async def _search(session, *, keywords, limit, offset=0, date_from=None, date_to=None, categories=None, category_prefixes=None, refine=None, wiki_mode="all", collected_ids=None):
+        # enabled 키워드만 넘어와야
+        assert keywords == ["gaussian"]
+        return ([
+            {"arxiv_id": "2401.1", "title": "A", "abstract": "", "authors": [],
+             "categories": [], "published": None, "version": None},
+            {"arxiv_id": "2402.2", "title": "B", "abstract": "", "authors": [],
+             "categories": [], "published": None, "version": None},
+        ], 2)
+
+    async def _collected(session, arxiv_ids):
+        return {"2401.1": "item-1"}   # 첫 논문만 이미 수집됨
+
+    async def _wiki_status(session, item_ids):
+        return {"item-1": "pending"}   # 수집됐지만 위키는 아직 생성 중
+
+    monkeypatch.setattr(admin_arxiv.repository, "list_collection_keywords", _list)
+    monkeypatch.setattr(admin_arxiv.repository, "search_arxiv_papers", _search)
+    monkeypatch.setattr(admin_arxiv.repository, "find_collected_arxiv", _collected)
+    monkeypatch.setattr(admin_arxiv.repository, "wiki_status_by_items", _wiki_status)
+
+    out = await admin_arxiv.arxiv_feed(
+        limit=10, _admin=_admin(), space_id=uuid.uuid4(), session=_session(),
+    )
+    assert out["keywords"] == 1   # enabled 만 카운트
+    by = {p["arxiv_id"]: p for p in out["papers"]}
+    assert by["2401.1"]["collected"] is True and by["2401.1"]["item_id"] == "item-1"
+    assert by["2401.1"]["wiki_status"] == "pending"   # 3-state: 생성 중
+    assert by["2402.2"]["collected"] is False and by["2402.2"]["item_id"] is None
+    assert by["2402.2"]["wiki_status"] is None
 
 
 # ── collect (수집 → pdf ingest) ─────────────────────────────────────────
@@ -135,7 +212,7 @@ async def test_collect_continues_on_one_failure(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_add_keyword(monkeypatch):
-    async def _add(session, *, space_id, user_id, keyword):
+    async def _add(session, *, space_id, user_id, keyword, group_label=None):
         return {"id": uuid.uuid4(), "keyword": keyword, "enabled": True}
 
     monkeypatch.setattr(admin_arxiv.repository, "add_collection_keyword", _add)
@@ -148,7 +225,7 @@ async def test_add_keyword(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_add_keyword_duplicate_is_idempotent(monkeypatch):
-    async def _add(session, *, space_id, user_id, keyword):
+    async def _add(session, *, space_id, user_id, keyword, group_label=None):
         return None  # ON CONFLICT DO NOTHING
 
     monkeypatch.setattr(admin_arxiv.repository, "add_collection_keyword", _add)

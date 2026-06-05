@@ -31,6 +31,7 @@ from backend.api import (
     sessions as sessions_api,
     settings as settings_api,
     topics,
+    ui_prefs,
     wiki,
 )
 from backend.api.deps import get_current_user
@@ -179,6 +180,7 @@ app.include_router(graph.router, prefix="/graph", tags=["graph"], dependencies=_
 app.include_router(wiki.router, prefix="/wiki", tags=["wiki"], dependencies=_protected)
 app.include_router(sessions_api.router, prefix="/sessions", tags=["sessions"], dependencies=_protected)
 app.include_router(admin_arxiv.router, prefix="/admin/arxiv", tags=["admin"], dependencies=_protected)
+app.include_router(ui_prefs.router, prefix="/ui-prefs", tags=["ui"], dependencies=_protected)
 
 
 @app.get("/")

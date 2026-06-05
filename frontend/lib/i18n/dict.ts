@@ -12,7 +12,7 @@ const _raw = {
       ingest: "수집",
       ask: "Ask",
       wiki: "위키",
-      arxivAdmin: "arXiv 수집",
+      arxivAdmin: "arXiv",
       settings: "설정",
     },
     common: {
@@ -148,7 +148,7 @@ const _raw = {
       ingest: "Ingest",
       ask: "Ask",
       wiki: "Wiki",
-      arxivAdmin: "arXiv Harvest",
+      arxivAdmin: "arXiv",
       settings: "Settings",
     },
     common: {

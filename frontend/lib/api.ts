@@ -767,6 +767,7 @@ export interface CollectionKeyword {
   id: string;
   keyword: string;
   enabled: boolean;
+  group_label: string | null;   // 대표 키워드(계층 그룹). null = 미분류
   user_id: string | null;
   display_name: string | null;
   email: string | null;
@@ -783,6 +784,10 @@ export interface ArxivPaper {
   categories: string[];
   abs_url: string;
   pdf_url: string;
+  // 검색/피드 응답에 포함 — 이미 수집됐는지 + item_id(위키 패널 열기용)
+  collected?: boolean;
+  item_id?: string | null;
+  wiki_status?: string | null;   // completed | pending | issues | null — 3-state 버튼
 }
 
 export interface ArxivCollectItem {
@@ -800,10 +805,39 @@ export async function listArxivKeywords(): Promise<{ keywords: CollectionKeyword
 
 export async function addArxivKeyword(
   keyword: string,
+  groupLabel?: string | null,
 ): Promise<{ created: boolean; id?: string; keyword: string }> {
   return fetchJSON(`/admin/arxiv/keywords`, {
     method: "POST",
-    body: JSON.stringify({ keyword }),
+    body: JSON.stringify({ keyword, group_label: groupLabel ?? null }),
+  });
+}
+
+export async function renameArxivGroup(
+  oldLabel: string,
+  newLabel: string,
+): Promise<{ renamed: number }> {
+  return fetchJSON(`/admin/arxiv/keywords/group/rename`, {
+    method: "POST",
+    body: JSON.stringify({ old_label: oldLabel, new_label: newLabel }),
+  });
+}
+
+export async function clearArxivGroup(label: string): Promise<{ cleared: number }> {
+  return fetchJSON(`/admin/arxiv/keywords/group/clear`, {
+    method: "POST",
+    body: JSON.stringify({ label }),
+  });
+}
+
+// ── 유저별 UI 설정(패널 폭 등) — DB 저장, 다른 기기/재방문 유지 ──────────
+export async function getUiPrefs(): Promise<{ prefs: Record<string, string> }> {
+  return fetchJSON(`/ui-prefs`);
+}
+export async function setUiPref(key: string, value: string): Promise<void> {
+  await fetchJSON<{ ok: boolean }>(`/ui-prefs`, {
+    method: "PUT",
+    body: JSON.stringify({ key, value }),
   });
 }
 
@@ -825,15 +859,24 @@ export async function searchArxiv(params: {
   query?: string;
   keywords?: string[];
   max_results?: number;
+  offset?: number;
   sort_by?: string;
   date_from?: string | null;
   date_to?: string | null;
   categories?: string[];
-}): Promise<{ papers: ArxivPaper[]; count: number }> {
+  category_prefixes?: string[];
+  refine?: string;
+  wiki_filter?: string;   // all | has(위키 유) | none(위키 무)
+}): Promise<{ papers: ArxivPaper[]; count: number; total: number }> {
   return fetchJSON(`/admin/arxiv/search`, {
     method: "POST",
     body: JSON.stringify(params),
   });
+}
+
+export interface ArxivCategory { major: string; count: number; }
+export async function getArxivCategories(): Promise<{ categories: ArxivCategory[] }> {
+  return fetchJSON(`/admin/arxiv/categories`);
 }
 
 export async function collectArxiv(
@@ -843,4 +886,25 @@ export async function collectArxiv(
     method: "POST",
     body: JSON.stringify({ arxiv_ids: arxivIds }),
   });
+}
+
+export interface ArxivFeedItem extends ArxivPaper {
+  collected: boolean;
+  item_id: string | null;
+}
+
+// 활성 등록 키워드별 최신 논문 피드 + 수집상태 (로컬 DB, rate limit 0).
+// cats: 대분류 필터(빈 = 전체). 서버 페이지네이션(offset/limit + total).
+export async function getArxivFeed(
+  limit = 20,
+  cats?: string[],
+  offset = 0,
+  refine?: string,
+  wiki?: string,
+): Promise<{ papers: ArxivFeedItem[]; count: number; total: number; keywords: number }> {
+  const q = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  if (cats && cats.length) q.set("cats", cats.join(","));
+  if (refine && refine.trim()) q.set("refine", refine.trim());
+  if (wiki && wiki !== "all") q.set("wiki", wiki);
+  return fetchJSON(`/admin/arxiv/feed?${q.toString()}`);
 }
