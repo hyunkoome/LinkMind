@@ -882,7 +882,41 @@ cleanup_duplicate_wikis/config/WikiBody 수정. cpu 593 PASS.
 ## 🎯 다음 세션 — 여기부터 (간단명료)
 
 > 멀티테넌트 ✅, 멀티턴 /ask ✅, 하이브리드 RAG ✅, 논문 writer 재설계·중복 위키 정리 ✅ (위 2026-06-04).
-> 홈 = `/ask`. **다음 1순위 = arxiv 외부검색 (agentic)**. 이제:
+> 2026-06-05: 큰 논문 위키 안정화(섹션 map-reduce writer — context 초과 영구 fix) ✅ + figure 캡션 중복/배치 fix ✅
+> + 키워드 기반 arxiv 수집 MVP(독립 `arxiv_harvester/` 모듈 + admin 페이지) 진행 중.
+> 홈 = `/ask`. 이제:
+
+**🔥 내일 1순위 (사용자 명시 2026-06-05) — arxiv URL 전 경로 무조건 PDF Docling 위키**
+
+모든 유입 경로(텔레그램 inbox watcher / `/ask` URL-paste / `/ingest` / `/ingest/auto`)에서 arxiv 자료가
+들어오면 **URL 형식과 무관하게 항상 `https://arxiv.org/pdf/{id}` 로 PDF 를 받아 Docling → 논문 위키**로
+처리한다. (지금은 `abs` URL 이 `_classify_url` 에서 `'url'` 로 분류돼 HTML 추출(빈약 raw)→논문 writer 를
+못 타는 불일치가 있음. `pdf` URL 로 들어온 것만 Docling 됨.)
+
+- **인식할 arxiv URL 4종 (+α)** → 전부 arxiv id 추출 → `https://arxiv.org/pdf/{id}`:
+  - `https://arxiv.org/abs/{id}`
+  - `https://arxiv.org/pdf/{id}`
+  - `https://arxiv.org/html/{id}`
+  - `https://doi.org/10.48550/arXiv.{id}`  ← **DOI 형식 — id 추출 정규식 추가 필요**(현 `parse_arxiv_id` 미지원)
+  - (ar5iv 등 기타 변형도 가능한 만큼)
+- **구현 위치**: `backend/api/ingest.py` 의 `_classify_url` (또는 dispatcher) 에 arxiv 감지 분기 추가 →
+  `is_arxiv_url`/`parse_arxiv_id` 로 id 뽑아 `pdf_url` 합성 후 **`ingest_pdf` 경로로 강제 라우팅**.
+  텔레그램(`backend/ingest/telegram/__init__.py` 의 URL 라우팅 루프)도 동일 분기 적용.
+- **재사용**: `backend/ingest/arxiv.parse_arxiv_id`(DOI 케이스 정규식만 보강) 또는 오늘 만든
+  `arxiv_harvester.parse_arxiv_id`. `ingest_pdf`(Docling) → `_wrap_result` classifier 훅 → wiki daemon
+  (= 오늘 고친 섹션 map-reduce 논문 writer)까지 그대로 연결.
+- **검증**: abs/html/doi URL 을 각각 ingest → `items.source_type='pdf'` + raw 가 Docling markdown(긴 본문)
+  → 위키가 `paper-*` 논문 구조로 합성되는지. 기존 pdf URL 회귀 없는지.
+- **테스트**: `parse_arxiv_id` 의 4종 URL→id 매핑(특히 DOI) 단위 테스트 + `_classify_url`→`'pdf'` 라우팅 테스트.
+
+**다음 — 키워드 기반 arxiv 수집 MVP 마저 (2026-06-05 시작분 이어서)**
+- `arxiv_harvester/` 독립 모듈 ✅(검색+필터+yaml+테스트) → `collection_keywords` DB + `admin_arxiv` API
+  (키워드 CRUD/search 미리보기/collect) + frontend `/admin/arxiv` 페이지. 계획: `~/.claude/plans/` 또는 §13.
+
+**1순위 — agentic: arxiv 외부검색** (대화형 /ask 멀티턴·하이브리드 RAG 는 완료)
+- "논문 찾아줘" 의도 감지 → arxiv API 검색 → 결과 제시 → (확장) 자동수집 `/ingest/auto` → 위키.
+- **로컬 Gemma + 무료 arxiv API** (외부 AI 불필요, §14 privacy). `backend/ingest/arxiv` 재사용.
+- 남은 것: 검색/QA/agentic 세 요청 유형 명시 구분, rerank.
 
 **1순위 — agentic: arxiv 외부검색** (대화형 /ask 멀티턴·하이브리드 RAG 는 완료)
 - "논문 찾아줘" 의도 감지 → arxiv API 검색 → 결과 제시 → (확장) 자동수집 `/ingest/auto` → 위키.
