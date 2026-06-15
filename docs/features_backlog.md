@@ -886,37 +886,37 @@ cleanup_duplicate_wikis/config/WikiBody 수정. cpu 593 PASS.
 
 ## 🎯 다음 세션 — 여기부터 (간단명료)
 
-> 멀티테넌트 ✅, 멀티턴 /ask ✅, 하이브리드 RAG ✅, 논문 writer 재설계·중복 위키 정리 ✅ (위 2026-06-04).
-> 2026-06-05: 큰 논문 위키 안정화(섹션 map-reduce writer — context 초과 영구 fix) ✅ + figure 캡션 중복/배치 fix ✅
-> + 키워드 기반 arxiv 수집 MVP(독립 `arxiv_harvester/` 모듈 + admin 페이지) 진행 중.
-> 홈 = `/ask`. 이제:
+> 멀티테넌트 ✅, 멀티턴 /ask ✅, 하이브리드 RAG ✅, 논문 writer 재설계·중복 위키 정리 ✅ (2026-06-04).
+> 2026-06-05: 큰 논문 위키 안정화(섹션 map-reduce writer) ✅ + figure 캡션 fix ✅ + **키워드 기반 arxiv 수집 MVP**
+> (독립 `arxiv_harvester/` + `/admin/arxiv` 3패널 + 로컬 메타 DB FTS + OAI 증분) ✅ + arxiv URL 전 경로 PDF Docling ✅.
+> 2026-06-15: **PDF surrogate ingest 영구 실패 fix ✅** (arxiv 2605.29583 — `utils/text.repair_surrogates` + `_sanitize_text`
+> 통합. Docling/pypdf 가 수학 볼드 astral 문자를 surrogate 로 흘려 utf-8 인코딩에서 ingest 통째로 죽던 것. 텔레그램 msg 재처리
+> →ok=True→자동 삭제 검증. commit `4e45321`). 홈 = `/ask`. **내일 순서 확정 (①→②→③):**
 
-**🔥 내일 1순위 (사용자 명시 2026-06-05) — arxiv URL 전 경로 무조건 PDF Docling 위키**
+**① arxiv URL/첨부 중복 방지 — 내일 1순위 (규모 작음, 리스크 낮음)**
 
-모든 유입 경로(텔레그램 inbox watcher / `/ask` URL-paste / `/ingest` / `/ingest/auto`)에서 arxiv 자료가
-들어오면 **URL 형식과 무관하게 항상 `https://arxiv.org/pdf/{id}` 로 PDF 를 받아 Docling → 논문 위키**로
-처리한다. (지금은 `abs` URL 이 `_classify_url` 에서 `'url'` 로 분류돼 HTML 추출(빈약 raw)→논문 writer 를
-못 타는 불일치가 있음. `pdf` URL 로 들어온 것만 Docling 됨.)
+한 텔레그램 메시지에 arxiv URL + 같은 논문 PDF 첨부가 같이 오면 item·wiki 가 2개로 쪼개짐:
+URL→`ingest_pdf`(Docling, `arxiv:<id>`) / 첨부→`ingest_document`(pypdf, 다른 hash → `url:item:<uuid>` self-wiki).
+`UNIQUE(source_type, raw_content_hash)` 는 raw 가 달라 못 막는다.
 
-- **인식할 arxiv URL 4종 (+α)** → 전부 arxiv id 추출 → `https://arxiv.org/pdf/{id}`:
-  - `https://arxiv.org/abs/{id}`
-  - `https://arxiv.org/pdf/{id}`
-  - `https://arxiv.org/html/{id}`
-  - `https://doi.org/10.48550/arXiv.{id}`  ← **DOI 형식 — id 추출 정규식 추가 필요**(현 `parse_arxiv_id` 미지원)
-  - (ar5iv 등 기타 변형도 가능한 만큼)
-- **구현 위치**: `backend/api/ingest.py` 의 `_classify_url` (또는 dispatcher) 에 arxiv 감지 분기 추가 →
-  `is_arxiv_url`/`parse_arxiv_id` 로 id 뽑아 `pdf_url` 합성 후 **`ingest_pdf` 경로로 강제 라우팅**.
-  텔레그램(`backend/ingest/telegram/__init__.py` 의 URL 라우팅 루프)도 동일 분기 적용.
-- **재사용**: `backend/ingest/arxiv.parse_arxiv_id`(DOI 케이스 정규식만 보강) 또는 오늘 만든
-  `arxiv_harvester.parse_arxiv_id`. `ingest_pdf`(Docling) → `_wrap_result` classifier 훅 → wiki daemon
-  (= 오늘 고친 섹션 map-reduce 논문 writer)까지 그대로 연결.
-- **검증**: abs/html/doi URL 을 각각 ingest → `items.source_type='pdf'` + raw 가 Docling markdown(긴 본문)
-  → 위키가 `paper-*` 논문 구조로 합성되는지. 기존 pdf URL 회귀 없는지.
-- **테스트**: `parse_arxiv_id` 의 4종 URL→id 매핑(특히 DOI) 단위 테스트 + `_classify_url`→`'pdf'` 라우팅 테스트.
+- **현실 케이스 단순화**: URL 없는 맨첨부는 ingest 안 됨([telegram:255]) → 첨부는 **항상 같은 메시지 URL 동반** →
+  텔레그램 메시지 단위 dedup 으로 완전 커버. (전역 external_id dedup = 스키마 변경 = over-engineering, 보류.)
+- **설계(MVP, 후보 1)**: `ingest_telegram_message` 에서 URL 정체성(`extract_external_ids(url=...)` arxiv/doi) 수집 →
+  각 첨부 파일명 정체성(`extract_external_ids(text=att.file_name)`)이 URL 정체성과 겹치면 **새 item 생성 스킵 + 그 PDF 는 URL
+  item 에 attachment 로 붙여 raw 무손실(§2)**. 정체성 없는 일반 첨부는 기존대로 ingest(보수적).
+- **테스트(§9)**: telegram mock — (URL arxiv + 같은 id 첨부)→첨부 skip+attachment 붙음 / (URL + 무관 PDF)→둘 다 ingest /
+  파일명 정체성 추출 단위 테스트.
 
-**다음 — 키워드 기반 arxiv 수집 MVP 마저 (2026-06-05 시작분 이어서)**
-- `arxiv_harvester/` 독립 모듈 ✅(검색+필터+yaml+테스트) → `collection_keywords` DB + `admin_arxiv` API
-  (키워드 CRUD/search 미리보기/collect) + frontend `/admin/arxiv` 페이지. 계획: `~/.claude/plans/` 또는 §13.
+**② writer 합성 검증 — 내일 2순위 (규모 중간, 대부분 검증)**
+- 큰 논문 16384 토큰 초과로 위키 합성이 *영구 실패*하던 버그 코드 수정함(보수 추정 `_CHARS_PER_TOKEN` 1.6 + overhead 예약 +
+  `_clamp_output_tokens` + output 6144 + map 압축 depth 5). **실제 합성으로 짤림 없이 고품질 나오는지 미검증** — daemon 현재 OFF
+  (`LINKMIND_WIKI_WRITER_DAEMON=0`). backfill 로 검증 후 daemon 재개.
+- 동시성 env `LINKMIND_WIKI_WRITER_CONCURRENCY`(현재 2) → 고품질이면 합성 무거우니 `1`(순차)로 낮춰 안정성 우선 고려(코드 변경 없이 env).
+
+**③ Docling VRAM 경합 fix — 내일 3순위 (규모 큼, 리스크 높음)**
+- collect 한 PDF 가 item 으로 안 생기는 케이스(예: `2501.11102`). vLLM VRAM 97% 점유라 Docling 이 GPU 못 잡는 의심.
+  **GPU 로 정상 동작하게** — Docling 배치 swap(vLLM 잠깐 내림→Docling→복귀). **CPU 강제 금지**(너무 느림, 사용자 명시).
+- 별건: `arxiv_harvester` DB·데몬 분리(`arxiv_papers` → 별도 `arxiv_meta` DB + 패키지가 DDL/적재/검색/harvest 소유).
 
 **1순위 — agentic: arxiv 외부검색** (대화형 /ask 멀티턴·하이브리드 RAG 는 완료)
 - "논문 찾아줘" 의도 감지 → arxiv API 검색 → 결과 제시 → (확장) 자동수집 `/ingest/auto` → 위키.
