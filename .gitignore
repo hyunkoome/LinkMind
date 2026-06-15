@@ -148,10 +148,11 @@ scratch/
 # ---------- 구현시 디버깅 캡쳐 이미지 폴더 ----------
 debugs/
 
-# ---------- AI 개발 보조 파일 (Claude Code 등) ----------
-# .claude/ 는 로컬 전용. CLAUDE.md 는 저장소에서 추적(2026-06-15) — 공개 전환(Phase 7-B)
-# 전에 계정 이메일·내부 로드맵 등 민감정보 정리 필요.
+# ---------- AI 개발 보조 파일 (Claude Code 등) — 로컬 전용, 공개 저장소엔 X ----------
+# 개발 가이드/에이전트 지침은 개인 PC 로컬에만 둔다. 공개용 문서는 docs/ 로 정리.
 .claude/
+CLAUDE.md
+**/CLAUDE.md
 AGENTS.md
 **/AGENTS.md
 .cursorrules
