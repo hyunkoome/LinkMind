@@ -15,8 +15,15 @@
 #   bash scripts/step5_run_dev.sh --no-telegram          # backend + frontend 만
 #   bash scripts/step5_run_dev.sh --skip-check           # invite 검증 skip (watcher 바로 시작)
 #   bash scripts/step5_run_dev.sh --clean-cache          # frontend .next 캐시 강제 정리 후 시작
-#   bash scripts/step5_run_dev.sh --stop                 # 셋 다 종료
+#   bash scripts/step5_run_dev.sh --stop                 # 셋 다 종료 + vLLM 정지 (GPU VRAM 완전 해제)
 #   bash scripts/step5_run_dev.sh --status               # 셋 다 상태 + 최근 로그 tail
+#
+# vLLM GPU 관리 (2026-06-15):
+#   - 시작하면 vLLM 컨테이너(linkmind-vllm + linkmind-vllm-embed)가 내려가 있을 때
+#     자동으로 올림 (이미 떠 있으면 no-op). backend 는 LLM/임베딩에 vLLM 이 필요.
+#   - --stop 은 vLLM 컨테이너까지 정지해 GPU VRAM 을 완전히 비움 → Docling/학습 등
+#     다른 GPU 작업 가능. (이전엔 backend/frontend/telegram 만 멈춰 23GB 가 그대로였음.)
+#   - vLLM 자동 기동을 끄려면 LINKMIND_SKIP_VLLM=1 (정지는 항상 수행).
 #
 # 인프라 컨테이너 (Postgres/Qdrant/Ollama) 가 떠 있어야 함. 죽었으면
 # `bash scripts/step2_2_setup_infra.sh` 로 재기동.
@@ -86,7 +93,62 @@ _stop_group() {
     rm -f "$f"
 }
 
+# ── vLLM 컨테이너 (GPU VRAM 점유) 관리 ─────────────────────────
+# vLLM 은 docker compose --profile vllm 의 별도 영속 서비스(linkmind-vllm,
+# linkmind-vllm-embed). step5 가 띄우는 backend/frontend/watcher 와 별개라
+# 예전엔 --stop 후에도 GPU 23GB 가 그대로였음. 아래로 라이프사이클을 일원화.
+COMPOSE_FILE="$ROOT/compose/docker-compose.dev.yml"
+ENV_FILE="$ROOT/env/dev.env"
+
+_compose() {
+    docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" --profile vllm "$@"
+}
+
+# 현재 떠 있는 vLLM 컨테이너 수 (0~2).
+_vllm_running_count() {
+    docker ps --format '{{.Names}}' 2>/dev/null \
+        | grep -cE '^linkmind-vllm(-embed)?$' || true
+}
+
+# vLLM 컨테이너 정지 — GPU VRAM 완전 해제. idempotent (없으면 no-op).
+_stop_vllm() {
+    if ! command -v docker > /dev/null 2>&1; then
+        echo "  · docker 없음 — vLLM 정지 skip"
+        return
+    fi
+    if [[ "$(_vllm_running_count)" == "0" ]]; then
+        echo "  · vLLM 컨테이너 이미 정지됨 (GPU VRAM 점유 없음)"
+        return
+    fi
+    echo "  · vLLM 컨테이너 정지 (linkmind-vllm, linkmind-vllm-embed) — GPU VRAM 해제"
+    # embed 가 vllm 에 depends_on → 의존 역순(embed 먼저)으로 정지.
+    _compose stop vllm-embed vllm 2>/dev/null \
+        || docker stop linkmind-vllm-embed linkmind-vllm 2>/dev/null || true
+}
+
+# vLLM 컨테이너 보장 — 내려가 있으면 올림 (이미 둘 다 떠 있으면 no-op).
+# 모델 로드(특히 Gemma AWQ)는 1~2분 걸리므로 up -d 후 기다리지 않고 바로 리턴
+# (backend health check 가 별도로 LLM 준비를 가린다). LINKMIND_SKIP_VLLM=1 로 끔.
+_ensure_vllm() {
+    if [[ "${LINKMIND_SKIP_VLLM:-0}" == "1" ]]; then
+        echo "ℹ️  vLLM 자동 기동 skip (LINKMIND_SKIP_VLLM=1) — LLM/임베딩 비활성"
+        return
+    fi
+    if ! command -v docker > /dev/null 2>&1; then
+        echo "⚠️  docker 없음 — vLLM 자동 기동 skip (LLM/임베딩 불가)"
+        return
+    fi
+    if [[ "$(_vllm_running_count)" == "2" ]]; then
+        echo "✅ vLLM 이미 가동 중 (linkmind-vllm, linkmind-vllm-embed)"
+        return
+    fi
+    echo "▶️  vLLM 컨테이너 기동 (--profile vllm up -d) — 모델 로드까지 1~2분 warm-up"
+    _compose up -d vllm vllm-embed
+}
+
 _start_backend() {
+    # backend 는 LLM/임베딩에 vLLM 이 필요 → 먼저 vLLM 보장.
+    _ensure_vllm
     # idempotent — 이미 가동 중이면 정리 후 새로 띄움 (코드 변경 반영 + cache flush).
     if _pid_alive "$BACKEND_PIDFILE"; then
         echo "ℹ️  기존 backend 정리 후 재기동 (pid=$(cat "$BACKEND_PIDFILE"))"
@@ -264,11 +326,12 @@ set -- "${POS_ARGS[@]+"${POS_ARGS[@]}"}"
 
 case "${1:-}" in
     --stop)
-        echo "🛑 LinkMind 정지"
+        echo "🛑 LinkMind 정지 (vLLM 포함 — GPU VRAM 완전 해제)"
         _stop_one "$BACKEND_PIDFILE" "backend"
         _stop_group "$FRONTEND_PIDFILE" "frontend"
         _stop_telegram
-        echo "완료"
+        _stop_vllm
+        echo "완료 — GPU 가 비었습니다 (nvidia-smi 로 확인). 다시 켜려면: bash scripts/step5_run_dev.sh"
         ;;
     --status)
         echo "== LinkMind 상태 =="
@@ -286,6 +349,13 @@ case "${1:-}" in
             echo "  ✅ telegram pid=$(cat "$TELEGRAM_PIDFILE")  inbox listening"
         else
             echo "  ⛔ telegram 미가동  inbox"
+        fi
+        if command -v docker > /dev/null 2>&1; then
+            case "$(_vllm_running_count)" in
+                2) echo "  ✅ vLLM     linkmind-vllm + linkmind-vllm-embed (GPU 점유 중)" ;;
+                1) echo "  ⚠️  vLLM     1/2 만 가동 — bash scripts/step5_run_dev.sh 로 복구" ;;
+                *) echo "  ⛔ vLLM     미가동  (GPU VRAM 해제 상태)" ;;
+            esac
         fi
         echo
         echo "최근 로그 (마지막 5 줄):"
@@ -314,6 +384,7 @@ case "${1:-}" in
         ;;
     --foreground)
         echo "포어그라운드 모드 — Ctrl+C 로 종료 (telegram + frontend 는 background)"
+        _ensure_vllm
         _start_telegram
         _start_frontend
         trap 'kill 0' SIGINT SIGTERM
