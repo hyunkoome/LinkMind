@@ -26,6 +26,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from backend.utils.text import repair_surrogates
+
 logger = logging.getLogger("linkmind.ingest.docling")
 
 # Docling InputFormat 으로 매핑 가능한 확장자 (guess_format 결과와 정렬).
@@ -89,7 +91,10 @@ def _doc_to_result(doc: Any) -> DoclingDoc:
 
     Docling 객체 의존을 한 곳에 모아 테스트(가짜 doc)도 쉽게. figure 는 PIL → PNG bytes.
     """
-    markdown = doc.export_to_markdown()
+    # Docling 이 수학 볼드/이탤릭(astral) 문자를 split surrogate 로 흘려보내는 경우가
+    # 있어 그대로 두면 sha256_text/asyncpg 의 utf-8 인코딩에서 ingest 가 죽는다.
+    # 추출 경계에서 한 번 복원해 downstream(저장/해싱/임베딩/writer)을 전부 안전하게.
+    markdown = repair_surrogates(doc.export_to_markdown())
     figures: list[DoclingFigure] = []
     for pic in getattr(doc, "pictures", []) or []:
         try:
@@ -103,6 +108,8 @@ def _doc_to_result(doc: Any) -> DoclingDoc:
         caption = None
         try:
             caption = (pic.caption_text(doc) or "").strip() or None
+            if caption is not None:
+                caption = repair_surrogates(caption)
         except Exception:
             caption = None
         figures.append(DoclingFigure(

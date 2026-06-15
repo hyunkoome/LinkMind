@@ -40,6 +40,7 @@ from backend.ingest.url import (
 from backend.storage.local import save_bytes
 from backend.utils.external_ids import extract_external_ids
 from backend.utils.hashing import sha256_text
+from backend.utils.text import repair_surrogates
 
 logger = logging.getLogger(__name__)
 
@@ -99,13 +100,16 @@ _NUL_RE = re.compile(r"\x00")
 
 
 def _sanitize_text(s: str) -> str:
-    """Postgres TEXT 컬럼에 넣기 전 NUL byte 제거.
+    """Postgres TEXT 컬럼에 넣기 전 무효 문자 제거.
 
-    PDF 텍스트 추출 시 가끔 NUL(0x00) 이 섞여 들어옴 — Postgres UTF-8 이 reject.
+    1) split/lone surrogate 복원 — Docling/pypdf 가 수학 볼드 등 astral 문자를
+       surrogate code unit 으로 흘려보내면 sha256_text/asyncpg 의 utf-8 인코딩이
+       터진다 (arxiv 2605.29583). repair_surrogates 가 pair 는 복원, lone 은 replace.
+    2) NUL(0x00) 제거 — PDF 추출 시 섞여 들어오면 Postgres UTF-8 이 reject.
     """
     if not s:
         return ""
-    return _NUL_RE.sub("", s)
+    return _NUL_RE.sub("", repair_surrogates(s))
 
 
 def _extract_pdf_text(data: bytes) -> tuple[str, dict[str, Any]]:
@@ -408,6 +412,10 @@ async def ingest_pdf(
         }
     else:
         body, pdf_meta = _extract_pdf_text(data)
+    # 추출물에 split/lone surrogate(수학 볼드 등)나 NUL 이 섞이면 sha256_text/DB write
+    # 의 utf-8/Postgres 인코딩에서 ingest 가 죽는다 — Docling/pypdf 어느 경로든 여기서
+    # 한 번 정리(idempotent). pypdf 경로는 이미 _extract_pdf_text 안에서 거쳤다.
+    body = _sanitize_text(body)
     if not body or len(body.strip()) < 50:
         raise ValueError(f"PDF 텍스트 추출 실패 또는 본문이 너무 짧습니다: {src}")
 

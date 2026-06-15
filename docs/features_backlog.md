@@ -75,7 +75,12 @@ TodoWrite 는 "현재 세션의 작업 단계" 추적용, 이 문서는 "기능 
 - 검증: microsoft/LoRA → 10 tags (다만 옛 ingest 라 license 우선순위 fix 전 — 재실행 필요)
 
 ### B4. PDF 파일 ingest ✅
-- `backend/ingest/pdf/` — pypdf 우선 → pymupdf fallback, `_sanitize_text` 로 NUL byte 제거
+- `backend/ingest/pdf/` — pypdf 우선 → pymupdf fallback, `_sanitize_text` 로 무효 문자 정제
+  - NUL(0x00) 제거 + **split/lone surrogate 복원**(`backend/utils/text.py:repair_surrogates`).
+    Docling/pypdf 가 수학 볼드 등 astral 문자를 surrogate code unit 으로 흘려보내면
+    `sha256_text`/asyncpg 의 utf-8 인코딩에서 ingest 가 통째로 죽던 버그(arxiv 2605.29583).
+    pair 는 utf-16 surrogatepass 왕복으로 무손실 복원, lone 은 U+FFFD replace. document
+    경로(`extract_text_from_bytes`)와 Docling 경계(`_doc_to_result`) 모두 동일하게 적용.
 - 원본 PDF 는 `volumes/archive/<yyyy>/<mm>/<hash[:2]>/<hash>` 에 loss-less 보존
 - attachments 테이블 등록 (mime=`application/pdf`)
 - abstract 자동 탐지 (PDF 앞 5000자에서 "Abstract" 섹션 regex)
